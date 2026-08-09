@@ -75,7 +75,7 @@ export class Renderer {
     };
   }
 
-  draw(world: World): void {
+  draw(world: World, options: { showVision?: boolean } = {}): void {
     const ctx = this.ctx;
     ctx.save();
     ctx.scale(this.dpr, this.dpr);
@@ -118,6 +118,23 @@ export class Renderer {
       const r = cell.radius * this.camera.zoom;
       if (p.x < -r || p.y < -r || p.x > this.viewportWidth + r || p.y > this.viewportHeight + r) continue;
 
+      // "eyes": the vision cone this cell actually senses through, drawn
+      // behind everything else so it reads as a faint headlight rather than
+      // clutter. Full 360° cells skip this (there's no cone to show).
+      if (options.showVision && cell.genome.visionAngle < 359.9) {
+        const halfFov = ((cell.genome.visionAngle * Math.PI) / 180) * 0.5;
+        const rangePx = cell.genome.senseRadius * this.camera.zoom;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.arc(p.x, p.y, rangePx, cell.heading - halfFov, cell.heading + halfFov);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255, 240, 160, 0.05)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 240, 160, 0.18)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
       const energyFrac = clamp(cell.energy / cell.maxEnergy, 0.15, 1);
       const lightness = 30 + energyFrac * 30;
       ctx.fillStyle = `hsl(${cell.genome.hue}, 65%, ${lightness}%)`;
@@ -138,13 +155,31 @@ export class Renderer {
         ctx.stroke();
       }
 
-      // heading indicator
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-      ctx.lineWidth = Math.max(1, r * 0.15);
+      // "mouth": a notch at the front, sized by genome.mouthSize — this is
+      // the same trait that changes bite size and effective prey range.
+      const mouthHalfAngle = 0.16 + cell.genome.mouthSize * 0.12;
+      const mouthDepth = r * (0.35 + cell.genome.mouthSize * 0.25);
+      const tipX = p.x + Math.cos(cell.heading) * (r + mouthDepth * 0.4);
+      const tipY = p.y + Math.sin(cell.heading) * (r + mouthDepth * 0.4);
+      const baseAX = p.x + Math.cos(cell.heading - mouthHalfAngle) * r;
+      const baseAY = p.y + Math.sin(cell.heading - mouthHalfAngle) * r;
+      const baseBX = p.x + Math.cos(cell.heading + mouthHalfAngle) * r;
+      const baseBY = p.y + Math.sin(cell.heading + mouthHalfAngle) * r;
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x + Math.cos(cell.heading) * (r + 4), p.y + Math.sin(cell.heading) * (r + 4));
-      ctx.stroke();
+      ctx.moveTo(baseAX, baseAY);
+      ctx.lineTo(tipX, tipY);
+      ctx.lineTo(baseBX, baseBY);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(10, 15, 25, 0.75)';
+      ctx.fill();
+
+      // sexual-reproduction marker: a small pale core, roughly a "nucleus"
+      if (cell.genome.reproductionMode === 'sexual') {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(1, r * 0.28), 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fill();
+      }
     }
 
     ctx.restore();

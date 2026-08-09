@@ -67,6 +67,7 @@ html, body {
 .btn.danger { background: #3a1b1b; border-color: #7a2f2f; }
 .btn.danger:hover { background: #472121; }
 .btn.wide { width: 100%; padding: 10px; font-weight: 600; }
+.btn.active { background: var(--accent-2); border-color: var(--accent-2); color: white; }
 
 .speed-group { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .speed-btn {

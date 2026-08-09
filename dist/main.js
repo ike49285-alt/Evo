@@ -68,6 +68,12 @@ el('btn-reset').addEventListener('click', () => {
     world = World.createDefault(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
     renderer.fitToWorld(world);
 });
+let showVision = false;
+const btnVision = el('btn-vision');
+btnVision.addEventListener('click', () => {
+    showVision = !showVision;
+    btnVision.classList.toggle('active', showVision);
+});
 // --- tabs ---------------------------------------------------------------
 document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -81,6 +87,8 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 const fSize = el('f-size');
 const fSpeed = el('f-speed');
 const fSense = el('f-sense');
+const fVision = el('f-vision');
+const fMouth = el('f-mouth');
 const fAge = el('f-age');
 const fHue = el('f-hue');
 const fCount = el('f-count');
@@ -90,21 +98,28 @@ function refreshDesignerLabels() {
     el('v-size').textContent = Number(fSize.value).toFixed(2);
     el('v-speed').textContent = Number(fSpeed.value).toFixed(2);
     el('v-sense').textContent = `${fSense.value} u`;
+    el('v-vision').textContent = `${fVision.value}°`;
+    el('v-mouth').textContent = Number(fMouth.value).toFixed(2);
     el('v-age').textContent = fAge.value;
     el('v-hue').textContent = `${fHue.value}°`;
     el('v-count').textContent = fCount.value;
     hueSwatch.style.background = `hsl(${fHue.value}, 65%, 45%)`;
 }
-[fSize, fSpeed, fSense, fAge, fHue, fCount].forEach((input) => input.addEventListener('input', refreshDesignerLabels));
+[fSize, fSpeed, fSense, fVision, fMouth, fAge, fHue, fCount].forEach((input) => input.addEventListener('input', refreshDesignerLabels));
 refreshDesignerLabels();
 el('btn-release').addEventListener('click', () => {
     const diet = document.querySelector('input[name="diet"]:checked')?.value;
+    const reproductionMode = document.querySelector('input[name="repro"]:checked')
+        ?.value;
     const name = fName.value.trim() || 'Unnamed Species';
     world.addSpecies({
         diet,
+        reproductionMode,
         size: Number(fSize.value),
         maxSpeed: Number(fSpeed.value),
         senseRadius: Number(fSense.value),
+        visionAngle: Number(fVision.value),
+        mouthSize: Number(fMouth.value),
         maxAge: Number(fAge.value),
         hue: Number(fHue.value),
     }, Number(fCount.value), { name, isPlayerDesigned: true });
@@ -119,15 +134,21 @@ const sCarn = el('s-carn');
 const sOmni = el('s-omni');
 const sPlant = el('s-plant');
 const sMeat = el('s-meat');
+const sSexual = el('s-sexual');
+const sAsexual = el('s-asexual');
 const sGen = el('s-gen');
 const chartPop = el('chart-pop');
 const chartSize = el('chart-size');
 const chartSpeed = el('chart-speed');
 const chartSense = el('chart-sense');
+const chartVision = el('chart-vision');
+const chartMouth = el('chart-mouth');
 const cPopVal = el('c-pop-val');
 const cSizeVal = el('c-size-val');
 const cSpeedVal = el('c-speed-val');
 const cSenseVal = el('c-sense-val');
+const cVisionVal = el('c-vision-val');
+const cMouthVal = el('c-mouth-val');
 function updateHudAndStats() {
     const live = world.getLiveStats();
     hudTick.textContent = String(live.tick);
@@ -139,6 +160,8 @@ function updateHudAndStats() {
     sOmni.textContent = String(live.omnivores);
     sPlant.textContent = String(live.plantFood);
     sMeat.textContent = String(live.meatFood);
+    sSexual.textContent = String(live.sexual);
+    sAsexual.textContent = String(live.asexual);
     sGen.textContent = String(live.maxGeneration);
     const history = world.history;
     if (history.length > 1) {
@@ -146,10 +169,14 @@ function updateHudAndStats() {
         drawSparkline(chartSize, history.map((h) => h.avgSize), '#5ad46a');
         drawSparkline(chartSpeed, history.map((h) => h.avgSpeed), '#f5a623');
         drawSparkline(chartSense, history.map((h) => h.avgSense), '#c77dff');
+        drawSparkline(chartVision, history.map((h) => h.avgVisionAngle), '#ffd166');
+        drawSparkline(chartMouth, history.map((h) => h.avgMouthSize), '#ef476f');
         cPopVal.textContent = String(live.population);
         cSizeVal.textContent = live.avgSize.toFixed(2);
         cSpeedVal.textContent = live.avgSpeed.toFixed(2);
         cSenseVal.textContent = live.avgSense.toFixed(0);
+        cVisionVal.textContent = `${live.avgVisionAngle.toFixed(0)}°`;
+        cMouthVal.textContent = live.avgMouthSize.toFixed(2);
     }
 }
 // --- main loop --------------------------------------------------------
@@ -158,7 +185,7 @@ function frame() {
         for (let i = 0; i < speed; i++)
             world.update(1);
     }
-    renderer.draw(world);
+    renderer.draw(world, { showVision });
     updateHudAndStats();
     requestAnimationFrame(frame);
 }

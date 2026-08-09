@@ -76,6 +76,21 @@ export class NeuralNet {
     return out;
   }
 
+  /** Uniform crossover: each weight/bias comes from `a` or `b` with equal
+   * probability. Requires matching topology (always true here — brain shape
+   * is fixed, only weights evolve). */
+  static crossover(a: NeuralNet, b: NeuralNet, rng: Rng): NeuralNet {
+    const child = new NeuralNet(a.topology);
+    const mix = (dst: Float32Array, sa: Float32Array, sb: Float32Array): void => {
+      for (let i = 0; i < dst.length; i++) dst[i] = rng.bool(0.5) ? sa[i] : sb[i];
+    };
+    mix(child.w1, a.w1, b.w1);
+    mix(child.b1, a.b1, b.b1);
+    mix(child.w2, a.w2, b.w2);
+    mix(child.b2, a.b2, b.b2);
+    return child;
+  }
+
   clone(): NeuralNet {
     return new NeuralNet(this.topology, {
       w1: new Float32Array(this.w1),

@@ -1,4 +1,4 @@
-import { Cell } from './cell.js';
+import { Cell, mateCells } from './cell.js';
 import { createFood } from './food.js';
 import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
@@ -16,8 +16,8 @@ export class World {
         this.tick = 0;
         // --- tunables -----------------------------------------------------
         this.maxPopulation = 320;
-        this.maxPlantFood = 700;
-        this.plantSpawnRate = 2.5; // pellets per tick
+        this.maxPlantFood = 900;
+        this.plantSpawnRate = 3.2; // pellets per tick
         this.plantEnergy = 18;
         this.predationSizeRatio = 0.88; // prey must be <= predator.size * this
         this.statsSampleInterval = 10;
@@ -34,8 +34,28 @@ export class World {
         return world;
     }
     seedBaseSpecies() {
-        this.addSpecies({ diet: 'herbivore', size: 1.0, maxSpeed: 1.4, senseRadius: 150, maxAge: 1000, hue: 125 }, 24, { name: 'Wild Grazers', spread: true });
-        this.addSpecies({ diet: 'carnivore', size: 1.35, maxSpeed: 1.8, senseRadius: 190, maxAge: 900, hue: 4 }, 10, { name: 'Wild Hunters', spread: true });
+        this.addSpecies({
+            diet: 'herbivore',
+            reproductionMode: 'asexual',
+            size: 1.0,
+            maxSpeed: 1.4,
+            senseRadius: 150,
+            visionAngle: 360,
+            mouthSize: 1.0,
+            maxAge: 1000,
+            hue: 125,
+        }, 24, { name: 'Wild Grazers', spread: true });
+        this.addSpecies({
+            diet: 'carnivore',
+            reproductionMode: 'asexual',
+            size: 1.35,
+            maxSpeed: 1.8,
+            senseRadius: 190,
+            visionAngle: 360,
+            mouthSize: 1.0,
+            maxAge: 900,
+            hue: 4,
+        }, 10, { name: 'Wild Hunters', spread: true });
         // seed the dish with an initial spread of plant food so grazers don't starve immediately
         for (let i = 0; i < this.maxPlantFood * 0.6; i++) {
             this.plantFood.push(createFood('plant', this.rng.range(20, this.width - 20), this.rng.range(20, this.height - 20), this.plantEnergy));
@@ -56,15 +76,25 @@ export class World {
         });
         const clusterX = this.rng.range(this.width * 0.2, this.width * 0.8);
         const clusterY = this.rng.range(this.height * 0.2, this.height * 0.8);
+        // A little birth-to-birth variation on top of the template — a real
+        // population is never a set of exact body clones. This also spreads
+        // maxAge out so an entire founding cohort doesn't hit old age on the
+        // same tick and cliff the population before their offspring can
+        // establish a buffer (a risk sexual reproduction is more exposed to,
+        // since it produces new cells more slowly than asexual).
+        const jitterPct = (value, pct) => Math.max(0.01, value * (1 + this.rng.gaussian(0, pct)));
         for (let i = 0; i < count; i++) {
             if (this.cells.length >= this.maxPopulation)
                 break;
             const genome = {
                 diet: template.diet,
-                size: template.size,
-                maxSpeed: template.maxSpeed,
-                senseRadius: template.senseRadius,
-                maxAge: template.maxAge,
+                reproductionMode: template.reproductionMode,
+                size: jitterPct(template.size, 0.03),
+                maxSpeed: jitterPct(template.maxSpeed, 0.03),
+                senseRadius: jitterPct(template.senseRadius, 0.03),
+                visionAngle: clamp(jitterPct(template.visionAngle, 0.03), 40, 360),
+                mouthSize: jitterPct(template.mouthSize, 0.03),
+                maxAge: jitterPct(template.maxAge, 0.08),
                 hue: template.hue,
                 brain: NeuralNet.random(BRAIN_TOPOLOGY, this.rng),
             };
@@ -74,10 +104,11 @@ export class World {
             const y = opts.spread
                 ? this.rng.range(20, this.height - 20)
                 : clamp(clusterY + this.rng.gaussian(0, 90), 20, this.height - 20);
-            // Deliberately well below reproduceThreshold (0.42 * maxEnergy) so a
-            // freshly released population has to forage before it can reproduce,
-            // instead of instantly doubling on tick one.
-            const startEnergy = 18 * template.size;
+            // Deliberately well below both reproduceThreshold (0.42 * maxEnergy)
+            // and the lower sexual matingThreshold (0.3 * maxEnergy) so a freshly
+            // released population always has to forage first, instead of
+            // instantly reproducing on tick one.
+            const startEnergy = 12 * template.size;
             this.cells.push(new Cell(genome, x, y, lineageId, 0, startEnergy, !!opts.isPlayerDesigned));
         }
         return lineageId;
@@ -111,9 +142,13 @@ export class World {
         let herbivores = 0;
         let carnivores = 0;
         let omnivores = 0;
+        let sexual = 0;
+        let asexual = 0;
         let sumSize = 0;
         let sumSpeed = 0;
         let sumSense = 0;
+        let sumVisionAngle = 0;
+        let sumMouthSize = 0;
         let sumAge = 0;
         let maxGeneration = 0;
         for (const c of this.cells) {
@@ -123,9 +158,15 @@ export class World {
                 carnivores++;
             else
                 omnivores++;
+            if (c.genome.reproductionMode === 'sexual')
+                sexual++;
+            else
+                asexual++;
             sumSize += c.genome.size;
             sumSpeed += c.genome.maxSpeed;
             sumSense += c.genome.senseRadius;
+            sumVisionAngle += c.genome.visionAngle;
+            sumMouthSize += c.genome.mouthSize;
             sumAge += c.age;
             if (c.generation > maxGeneration)
                 maxGeneration = c.generation;
@@ -137,9 +178,13 @@ export class World {
             herbivores,
             carnivores,
             omnivores,
+            sexual,
+            asexual,
             avgSize: sumSize / n,
             avgSpeed: sumSpeed / n,
             avgSense: sumSense / n,
+            avgVisionAngle: sumVisionAngle / n,
+            avgMouthSize: sumMouthSize / n,
             avgAge: sumAge / n,
             maxGeneration,
             plantFood: this.plantFood.length,
@@ -158,7 +203,21 @@ export class World {
             this.plantFood.push(createFood('plant', this.rng.range(20, this.width - 20), this.rng.range(20, this.height - 20), this.plantEnergy));
         }
     }
-    /** Builds the fixed 11-value sensor vector consumed by Cell/NeuralNet. */
+    /** True if world point (tx, ty) falls inside cell's vision cone — its
+     * genome.visionAngle "eyes" budget, centered on its current heading. */
+    inFOV(cell, tx, ty) {
+        if (cell.genome.visionAngle >= 359.9)
+            return true; // fully omnidirectional, skip the trig
+        const angleToTarget = Math.atan2(ty - cell.y, tx - cell.x);
+        let diff = angleToTarget - cell.heading;
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff)); // wrap to [-pi, pi]
+        const halfFov = ((cell.genome.visionAngle * Math.PI) / 180) * 0.5;
+        return Math.abs(diff) <= halfFov;
+    }
+    /** Builds the fixed sensor vector consumed by Cell/NeuralNet (see
+     * BRAIN_TOPOLOGY.inputs). Food/threat/mate detection all respect the
+     * cell's eyes (senseRadius = range, visionAngle = cone) — a cell has to
+     * actually be facing something to sense it. */
     buildInputs(cell) {
         const sr = cell.genome.senseRadius;
         const wantsPlant = cell.genome.diet !== 'carnivore';
@@ -172,7 +231,7 @@ export class World {
                 const dx = f.x - cell.x;
                 const dy = f.y - cell.y;
                 const d = Math.hypot(dx, dy);
-                if (d < bestFoodD) {
+                if (d < bestFoodD && this.inFOV(cell, f.x, f.y)) {
                     bestFoodD = d;
                     foodDx = dx / sr;
                     foodDy = dy / sr;
@@ -185,7 +244,7 @@ export class World {
                 const dx = f.x - cell.x;
                 const dy = f.y - cell.y;
                 const d = Math.hypot(dx, dy);
-                if (d < bestFoodD) {
+                if (d < bestFoodD && this.inFOV(cell, f.x, f.y)) {
                     bestFoodD = d;
                     foodDx = dx / sr;
                     foodDy = dy / sr;
@@ -195,12 +254,12 @@ export class World {
             for (const other of this.cells) {
                 if (other === cell || !other.alive)
                     continue;
-                if (other.genome.size >= cell.genome.size * this.predationSizeRatio)
+                if (other.genome.size >= cell.genome.size * this.predationSizeRatio * this.mouthReach(cell))
                     continue;
                 const dx = other.x - cell.x;
                 const dy = other.y - cell.y;
                 const d = Math.hypot(dx, dy);
-                if (d < bestFoodD) {
+                if (d < bestFoodD && this.inFOV(cell, other.x, other.y)) {
                     bestFoodD = d;
                     foodDx = dx / sr;
                     foodDy = dy / sr;
@@ -217,16 +276,41 @@ export class World {
                 continue;
             if (other.genome.diet === 'herbivore')
                 continue;
-            if (cell.genome.size >= other.genome.size * this.predationSizeRatio)
+            if (cell.genome.size >= other.genome.size * this.predationSizeRatio * this.mouthReach(other))
                 continue;
             const dx = other.x - cell.x;
             const dy = other.y - cell.y;
             const d = Math.hypot(dx, dy);
-            if (d < bestThreatD) {
+            if (d < bestThreatD && this.inFOV(cell, other.x, other.y)) {
                 bestThreatD = d;
                 threatDx = dx / sr;
                 threatDy = dy / sr;
                 threatDist = d / sr;
+            }
+        }
+        let mateDx = 0;
+        let mateDy = 0;
+        let mateDist = 1;
+        if (cell.genome.reproductionMode === 'sexual') {
+            let bestMateD = sr;
+            for (const other of this.cells) {
+                if (other === cell || !other.alive)
+                    continue;
+                if (other.lineageId !== cell.lineageId)
+                    continue;
+                if (other.genome.reproductionMode !== 'sexual')
+                    continue;
+                if (!other.canMate())
+                    continue;
+                const dx = other.x - cell.x;
+                const dy = other.y - cell.y;
+                const d = Math.hypot(dx, dy);
+                if (d < bestMateD && this.inFOV(cell, other.x, other.y)) {
+                    bestMateD = d;
+                    mateDx = dx / sr;
+                    mateDy = dy / sr;
+                    mateDist = d / sr;
+                }
             }
         }
         const energyNorm = clamp(cell.energy / cell.maxEnergy, 0, 1);
@@ -252,6 +336,9 @@ export class World {
             threatDx,
             threatDy,
             threatDist,
+            mateDx,
+            mateDy,
+            mateDist,
             energyNorm,
             speedNorm,
             wallUrgencyX,
@@ -260,17 +347,25 @@ export class World {
             1, // bias
         ];
     }
+    /** How far a mouthSize=1 predator's max-prey-size threshold gets stretched
+     * (>1) or shrunk (<1) — a big mouth can tackle relatively bigger prey. */
+    mouthReach(predator) {
+        return clamp(predator.genome.mouthSize, 0.7, 1.3);
+    }
     handleEating() {
         for (const cell of this.cells) {
             if (!cell.alive)
                 continue;
-            const rr = cell.radius;
+            // A bigger mouth reaches a little further and gets more out of a bite;
+            // a smaller one is cheaper to run (see Cell.metabolize) but nets less.
+            const reach = cell.radius + (cell.genome.mouthSize - 1) * 4;
+            const yield_ = cell.genome.mouthSize;
             if (cell.genome.diet !== 'carnivore') {
                 for (let i = this.plantFood.length - 1; i >= 0; i--) {
                     const f = this.plantFood[i];
                     const d = Math.hypot(f.x - cell.x, f.y - cell.y);
-                    if (d < rr + f.radius) {
-                        cell.eat(f.energy);
+                    if (d < reach + f.radius) {
+                        cell.eat(f.energy * yield_);
                         this.plantFood.splice(i, 1);
                     }
                 }
@@ -279,8 +374,8 @@ export class World {
                 for (let i = this.meatFood.length - 1; i >= 0; i--) {
                     const f = this.meatFood[i];
                     const d = Math.hypot(f.x - cell.x, f.y - cell.y);
-                    if (d < rr + f.radius) {
-                        cell.eat(f.energy);
+                    if (d < reach + f.radius) {
+                        cell.eat(f.energy * yield_);
                         this.meatFood.splice(i, 1);
                     }
                 }
@@ -294,13 +389,14 @@ export class World {
             for (const prey of this.cells) {
                 if (prey === predator || !prey.alive)
                     continue;
-                if (prey.genome.size >= predator.genome.size * this.predationSizeRatio)
+                if (prey.genome.size >= predator.genome.size * this.predationSizeRatio * this.mouthReach(predator))
                     continue;
                 const d = Math.hypot(prey.x - predator.x, prey.y - predator.y);
-                if (d < predator.radius + prey.radius * 0.6) {
-                    const bite = prey.energy * 0.6;
+                const reach = predator.radius + (predator.genome.mouthSize - 1) * 4;
+                if (d < reach + prey.radius * 0.6) {
+                    const bite = prey.energy * 0.6 * clamp(predator.genome.mouthSize, 0.7, 1.3);
                     predator.eat(bite);
-                    const corpseEnergy = prey.energy * 0.4;
+                    const corpseEnergy = Math.max(0, prey.energy - bite);
                     if (corpseEnergy > 0.5)
                         this.meatFood.push(createFood('meat', prey.x, prey.y, corpseEnergy));
                     prey.alive = false;
@@ -313,6 +409,36 @@ export class World {
         if (this.cells.length >= this.maxPopulation)
             return;
         const newborns = [];
+        const mated = new Set();
+        // Sexual pairing: two same-lineage, mating-ready cells produce one
+        // crossed-over child once they're within sensing range of each other —
+        // the same range/FOV the mate-sensing inputs already use. Tying the
+        // "consummation" check to sensing rather than a much tighter physical
+        // touch means a pair that can perceive each other (and so has a chance
+        // to steer together) can actually act on it, instead of needing exact
+        // body-to-body contact — a bar two independently-moving cells would
+        // rarely clear even with well-evolved courting behavior.
+        for (const a of this.cells) {
+            if (this.cells.length + newborns.length >= this.maxPopulation)
+                break;
+            if (mated.has(a.id) || !a.canMate())
+                continue;
+            for (const b of this.cells) {
+                if (b === a || mated.has(b.id) || !b.canMate())
+                    continue;
+                if (b.lineageId !== a.lineageId)
+                    continue;
+                const d = Math.hypot(b.x - a.x, b.y - a.y);
+                const meetRange = Math.max(a.genome.senseRadius, b.genome.senseRadius);
+                if (d < meetRange && (this.inFOV(a, b.x, b.y) || this.inFOV(b, a.x, a.y))) {
+                    newborns.push(mateCells(a, b, this.rng));
+                    mated.add(a.id);
+                    mated.add(b.id);
+                    break;
+                }
+            }
+        }
+        // Asexual reproduction for everyone else.
         for (const cell of this.cells) {
             if (this.cells.length + newborns.length >= this.maxPopulation)
                 break;

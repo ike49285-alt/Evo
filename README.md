@@ -9,30 +9,47 @@ required.
 ## How it works
 
 - **Body plan (you design this):** diet (herbivore / omnivore / carnivore),
-  size, max speed, sense radius, lifespan, and color. Set in the *Designer*
-  tab and locked in when you hit "Release into Dish".
+  reproduction mode (asexual or sexual), size, max speed, sense radius,
+  vision angle ("eyes"), mouth size, lifespan, and color. Set in the
+  *Designer* tab and locked in when you hit "Release into Dish".
 - **Brain (evolution shapes this):** every cell has a small neural network
-  (11 sensor inputs → 8 hidden neurons → 2 outputs: turn, thrust) that
-  decides how it moves in response to nearby food, threats, its own energy,
-  and dish walls. New cells start with random weights; each offspring's
-  weights are a mutated copy of its parent's. There's no training step — bad
-  brains just fail to find food, starve before reproducing, and their
-  lineage dies out, while brains that happen to steer toward food reproduce
-  more. That selection pressure, repeated over hundreds of generations, is
-  the entire "AI."
+  (15 sensor inputs → 10 hidden neurons → 2 outputs: turn, thrust) that
+  decides how it moves in response to nearby food, threats, potential mates,
+  its own energy, and dish walls. New cells start with random weights; each
+  offspring's weights are a mutated copy of its parent's (or, for sexual
+  reproduction, a shuffled mix of both parents'). There's no training step —
+  bad brains just fail to find food, starve before reproducing, and their
+  lineage dies out, while brains that happen to steer toward food (or mates)
+  reproduce more. That selection pressure, repeated over hundreds of
+  generations, is the entire "AI."
+- **Reproduction — asexual or sexual:** asexual cells reproduce solo once
+  they cross an energy threshold; the child is a mutated clone. Sexual cells
+  need to find another mating-ready cell of the same lineage — once they do,
+  the child's traits and brain weights are each independently drawn from one
+  parent or the other (crossover), then mutated on top. Sexual reproduction
+  is slower and needs a healthier founding population (mates have to
+  actually meet), but mixes two lineages' genes together rather than just
+  drifting one lineage's — a real trade-off, not strictly better or worse.
+- **Eyes and mouth:** `visionAngle` is a genuine field-of-view cone, not
+  omnidirectional radar — a cell only senses food/threats/mates inside that
+  cone, so narrow-eyed cells have to actually turn to look. Wider vision
+  costs more upkeep. `mouthSize` scales how much energy a bite yields, how
+  far a cell's effective reach is, and how large a prey item it can tackle
+  relative to its own body — also at an upkeep cost. Turn on the **👁
+  Vision** toggle in the top bar to see every cell's vision cone live.
 - **Ecosystem:** herbivores eat plant food that regrows over time; carnivores
   and omnivores can also eat smaller cells (and the carrion left behind by
-  any death). Energy drives movement, aging, and reproduction — cross a
-  threshold and a cell splits off a mutated child. Diet itself can rarely
-  mutate too, so you may see a herbivore lineage spontaneously go omnivore.
-- **Ecosystem tab:** live counts by diet, food levels, highest generation
-  reached, and rolling charts of population and average traits (size, speed,
-  sense radius) so you can actually see the population's genome drifting
-  over time.
+  any death). Energy drives movement, aging, and reproduction. Diet itself
+  can rarely mutate too, so you may see a herbivore lineage spontaneously go
+  omnivore.
+- **Ecosystem tab:** live counts by diet and reproduction mode, food levels,
+  highest generation reached, and rolling charts of population and average
+  traits (size, speed, sense radius, vision angle, mouth size) so you can
+  actually see the population's genome drifting over time.
 
-The dish is pre-seeded with a wild herbivore and carnivore population so
-there's already an ecosystem before you add your own design — your species
-competes, gets hunted, or hunts alongside them.
+The dish is pre-seeded with a wild (asexual) herbivore and carnivore
+population so there's already an ecosystem before you add your own design —
+your species competes, gets hunted, or hunts alongside them.
 
 ## Running it locally
 
@@ -51,10 +68,13 @@ you iterate.
 
 - **Drag** the dish to pan, **scroll** to zoom.
 - **Play/Pause**, **1×/2×/4×/8×** speed, **+ Food** (sprinkle a burst of
-  plant food), **Fit View** (recenter camera), **Reset Dish** (clear
-  everything and reseed the base ecosystem).
+  plant food), **Fit View** (recenter camera), **👁 Vision** (toggle every
+  cell's vision cone on/off), **Reset Dish** (clear everything and reseed
+  the base ecosystem).
 - Cells you personally release get a thin white outline so you can pick your
-  lineage out of the crowd.
+  lineage out of the crowd. Sexual-mode cells also get a small pale "nucleus"
+  marker at their center; every cell has a small notch at its front — its
+  mouth — sized by `mouthSize`.
 
 ## Project layout
 

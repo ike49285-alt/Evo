@@ -1,4 +1,4 @@
-import { Genome, mutateGenome } from './genome.js';
+import { crossoverGenome, Genome, mutateGenome } from './genome.js';
 import { Rng } from './rng.js';
 
 let nextCellId = 1;
@@ -61,6 +61,15 @@ export class Cell {
     return this.maxEnergy * 0.42;
   }
 
+  /** Sexual mode gets a lower bar than asexual's reproduceThreshold — a
+   * mating event already costs two ready individuals instead of one, so
+   * making each of them individually harder to ready up on top of that
+   * would make sexual reproduction strictly worse than asexual rather than
+   * a genuine alternative with its own trade-offs. */
+  get matingThreshold(): number {
+    return this.maxEnergy * 0.3;
+  }
+
   /** Runs the brain forward pass on a pre-built sensor vector. */
   think(inputs: readonly number[]): number[] {
     return this.genome.brain.forward(inputs);
@@ -102,7 +111,13 @@ export class Cell {
     // Tuned so a completely naive (random-brain) cell can survive to roughly
     // its max age on passive upkeep alone — evolution needs enough runway to
     // improve foraging before generation zero simply runs out the clock.
-    const upkeep = (0.002 + 0.005 * size * size + 0.0008 * (this.genome.senseRadius / 100)) * dt;
+    // Wider eyes (visionAngle) and a bigger mouth are genuine upkeep costs,
+    // not free stat boosts — that's what gives evolution a reason to trade
+    // them off against each other instead of just maxing everything out.
+    const visionCost = 0.0007 * (this.genome.visionAngle / 360);
+    const mouthCost = 0.003 * this.genome.mouthSize * this.genome.mouthSize;
+    const upkeep =
+      (0.002 + 0.005 * size * size + 0.0008 * (this.genome.senseRadius / 100) + visionCost + mouthCost) * dt;
     const moveCost = 0.005 * this.speed * size * dt;
     this.energy -= upkeep + moveCost;
     this.age += dt;
@@ -114,7 +129,23 @@ export class Cell {
   }
 
   canReproduce(): boolean {
-    return this.alive && this.reproCooldown <= 0 && this.energy >= this.reproduceThreshold;
+    return (
+      this.alive &&
+      this.genome.reproductionMode === 'asexual' &&
+      this.reproCooldown <= 0 &&
+      this.energy >= this.reproduceThreshold
+    );
+  }
+
+  /** Ready to mate: same energy/cooldown bar as asexual reproduction, but
+   * gated to sexual-mode cells — actually pairing up is World's job. */
+  canMate(): boolean {
+    return (
+      this.alive &&
+      this.genome.reproductionMode === 'sexual' &&
+      this.reproCooldown <= 0 &&
+      this.energy >= this.matingThreshold
+    );
   }
 
   /** Splits off a mutated child, paying an energy cost from the parent. */
@@ -140,4 +171,41 @@ export class Cell {
   isDead(): boolean {
     return this.energy <= 0 || this.age >= this.genome.maxAge;
   }
+}
+
+/**
+ * Sexual reproduction: crosses over both parents' genomes (traits and brain
+ * weights each independently drawn from one parent or the other), mutates
+ * the result, and splits the energy cost between both parents. Requires the
+ * two cells to already be touching — World is responsible for finding
+ * eligible, nearby pairs.
+ */
+export function mateCells(a: Cell, b: Cell, rng: Rng): Cell {
+  const childGenome = mutateGenome(crossoverGenome(a.genome, b.genome, rng), rng);
+
+  // Each parent pays a quarter of its own energy — together that's half an
+  // "average parent", the same total investment as an asexual split, just
+  // shared two ways instead of paid solo.
+  const shareA = a.energy * 0.25;
+  const shareB = b.energy * 0.25;
+  a.energy -= shareA;
+  b.energy -= shareB;
+  // Same order as the asexual cooldown — finding a mate at all is already
+  // its own tax on throughput, no need to tax it twice.
+  a.reproCooldown = 55;
+  b.reproCooldown = 55;
+
+  const angle = rng.range(0, Math.PI * 2);
+  const dist = (a.radius + b.radius) * 0.6;
+  const midX = (a.x + b.x) / 2;
+  const midY = (a.y + b.y) / 2;
+  return new Cell(
+    childGenome,
+    midX + Math.cos(angle) * dist,
+    midY + Math.sin(angle) * dist,
+    a.lineageId,
+    Math.max(a.generation, b.generation) + 1,
+    shareA + shareB,
+    a.isPlayerDesigned || b.isPlayerDesigned,
+  );
 }
