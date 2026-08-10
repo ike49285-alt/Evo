@@ -1,4 +1,5 @@
 import { Renderer } from './render/renderer.js';
+import { TRAIT_LIMITS } from './sim/genome.js';
 import { World } from './sim/world.js';
 import { drawSparkline } from './ui/chart.js';
 const WORLD_WIDTH = 2400;
@@ -85,43 +86,50 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 });
 // --- designer form --------------------------------------------------------
 const fSize = el('f-size');
-const fSpeed = el('f-speed');
 const fSense = el('f-sense');
-const fVision = el('f-vision');
-const fMouth = el('f-mouth');
 const fAge = el('f-age');
 const fHue = el('f-hue');
 const fCount = el('f-count');
 const fName = el('f-name');
 const hueSwatch = el('hue-swatch');
+const fFlagella = el('f-flagella');
+const fMouths = el('f-mouths');
+const fChloroplasts = el('f-chloroplasts');
+const fEyes = el('f-eyes');
+const fArmor = el('f-armor');
+const fBud = el('f-bud');
+const organelleInputs = [fFlagella, fMouths, fChloroplasts, fEyes, fArmor];
 function refreshDesignerLabels() {
     el('v-size').textContent = Number(fSize.value).toFixed(2);
-    el('v-speed').textContent = Number(fSpeed.value).toFixed(2);
     el('v-sense').textContent = `${fSense.value} u`;
-    el('v-vision').textContent = `${fVision.value}°`;
-    el('v-mouth').textContent = Number(fMouth.value).toFixed(2);
     el('v-age').textContent = fAge.value;
     el('v-hue').textContent = `${fHue.value}°`;
     el('v-count').textContent = fCount.value;
     hueSwatch.style.background = `hsl(${fHue.value}, 65%, 45%)`;
+    const total = organelleInputs.reduce((sum, input) => sum + Number(input.value), 0) + (fBud.checked ? 1 : 0);
+    el('v-organelle-total').textContent = `${total} / ${TRAIT_LIMITS.maxOrganelles}`;
 }
-[fSize, fSpeed, fSense, fVision, fMouth, fAge, fHue, fCount].forEach((input) => input.addEventListener('input', refreshDesignerLabels));
+[fSize, fSense, fAge, fHue, fCount, ...organelleInputs, fBud].forEach((input) => input.addEventListener('input', refreshDesignerLabels));
 refreshDesignerLabels();
 el('btn-release').addEventListener('click', () => {
-    const diet = document.querySelector('input[name="diet"]:checked')?.value;
     const reproductionMode = document.querySelector('input[name="repro"]:checked')
         ?.value;
     const name = fName.value.trim() || 'Unnamed Species';
+    const loadout = {
+        flagella: Number(fFlagella.value),
+        mouths: Number(fMouths.value),
+        chloroplasts: Number(fChloroplasts.value),
+        eyes: Number(fEyes.value),
+        armor: Number(fArmor.value),
+        bud: fBud.checked,
+    };
     world.addSpecies({
-        diet,
         reproductionMode,
         size: Number(fSize.value),
-        maxSpeed: Number(fSpeed.value),
         senseRadius: Number(fSense.value),
-        visionAngle: Number(fVision.value),
-        mouthSize: Number(fMouth.value),
         maxAge: Number(fAge.value),
         hue: Number(fHue.value),
+        loadout,
     }, Number(fCount.value), { name, isPlayerDesigned: true });
 });
 // --- HUD + stats panel ----------------------------------------------------
@@ -129,54 +137,58 @@ const hudTick = el('hud-tick');
 const hudPop = el('hud-pop');
 const hudGen = el('hud-gen');
 const sPop = el('s-pop');
-const sHerb = el('s-herb');
-const sCarn = el('s-carn');
-const sOmni = el('s-omni');
+const sGen = el('s-gen');
+const sColonies = el('s-colonies');
+const sColonySize = el('s-colonysize');
+const sSolo = el('s-solo');
 const sPlant = el('s-plant');
 const sMeat = el('s-meat');
-const sSexual = el('s-sexual');
-const sAsexual = el('s-asexual');
-const sGen = el('s-gen');
+const sRepro = el('s-repro');
+const sMouths = el('s-mouths');
+const sEyes = el('s-eyes');
+const sArmor = el('s-armor');
 const chartPop = el('chart-pop');
 const chartSize = el('chart-size');
 const chartSpeed = el('chart-speed');
 const chartSense = el('chart-sense');
-const chartVision = el('chart-vision');
-const chartMouth = el('chart-mouth');
+const chartFlagella = el('chart-flagella');
+const chartChloro = el('chart-chloro');
 const cPopVal = el('c-pop-val');
 const cSizeVal = el('c-size-val');
 const cSpeedVal = el('c-speed-val');
 const cSenseVal = el('c-sense-val');
-const cVisionVal = el('c-vision-val');
-const cMouthVal = el('c-mouth-val');
+const cFlagellaVal = el('c-flagella-val');
+const cChloroVal = el('c-chloro-val');
 function updateHudAndStats() {
     const live = world.getLiveStats();
     hudTick.textContent = String(live.tick);
     hudPop.textContent = String(live.population);
     hudGen.textContent = String(live.maxGeneration);
     sPop.textContent = String(live.population);
-    sHerb.textContent = String(live.herbivores);
-    sCarn.textContent = String(live.carnivores);
-    sOmni.textContent = String(live.omnivores);
+    sGen.textContent = String(live.maxGeneration);
+    sColonies.textContent = String(live.colonies);
+    sColonySize.textContent = live.avgColonySize.toFixed(1);
+    sSolo.textContent = String(live.soloCells);
     sPlant.textContent = String(live.plantFood);
     sMeat.textContent = String(live.meatFood);
-    sSexual.textContent = String(live.sexual);
-    sAsexual.textContent = String(live.asexual);
-    sGen.textContent = String(live.maxGeneration);
+    sRepro.textContent = `${live.sexual} / ${live.asexual}`;
+    sMouths.textContent = live.avgMouths.toFixed(2);
+    sEyes.textContent = live.avgEyes.toFixed(2);
+    sArmor.textContent = live.avgArmor.toFixed(2);
     const history = world.history;
     if (history.length > 1) {
         drawSparkline(chartPop, history.map((h) => h.population), '#4f8cff');
         drawSparkline(chartSize, history.map((h) => h.avgSize), '#5ad46a');
         drawSparkline(chartSpeed, history.map((h) => h.avgSpeed), '#f5a623');
         drawSparkline(chartSense, history.map((h) => h.avgSense), '#c77dff');
-        drawSparkline(chartVision, history.map((h) => h.avgVisionAngle), '#ffd166');
-        drawSparkline(chartMouth, history.map((h) => h.avgMouthSize), '#ef476f');
+        drawSparkline(chartFlagella, history.map((h) => h.avgFlagella), '#cdd8ee');
+        drawSparkline(chartChloro, history.map((h) => h.avgChloroplasts), '#3fae5a');
         cPopVal.textContent = String(live.population);
         cSizeVal.textContent = live.avgSize.toFixed(2);
         cSpeedVal.textContent = live.avgSpeed.toFixed(2);
         cSenseVal.textContent = live.avgSense.toFixed(0);
-        cVisionVal.textContent = `${live.avgVisionAngle.toFixed(0)}°`;
-        cMouthVal.textContent = live.avgMouthSize.toFixed(2);
+        cFlagellaVal.textContent = live.avgFlagella.toFixed(2);
+        cChloroVal.textContent = live.avgChloroplasts.toFixed(2);
     }
 }
 // --- main loop --------------------------------------------------------

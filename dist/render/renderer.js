@@ -1,10 +1,11 @@
-import { DIET_COLORS } from '../sim/types.js';
+import { ORGANELLE_COLORS } from '../sim/types.js';
 function clamp(v, min, max) {
     return Math.min(max, Math.max(min, v));
 }
 export class Renderer {
     constructor(canvas) {
         this.dpr = 1;
+        this.animT = 0; // free-running frame counter, drives flagella wiggle
         this.camera = { x: 0, y: 0, zoom: 1 };
         this.canvas = canvas;
         const ctx = canvas.getContext('2d');
@@ -57,6 +58,7 @@ export class Renderer {
     }
     draw(world, options = {}) {
         const ctx = this.ctx;
+        this.animT += 1;
         ctx.save();
         ctx.scale(this.dpr, this.dpr);
         ctx.fillStyle = '#0b1220';
@@ -87,69 +89,166 @@ export class Renderer {
             ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
             ctx.fill();
         }
-        // cells
+        // bond membranes — draw first so cell bodies sit on top of the joints
+        ctx.strokeStyle = 'rgba(220, 230, 245, 0.4)';
+        for (const cell of world.cells) {
+            if (!cell.attachedTo)
+                continue;
+            const a = this.worldToScreen(cell.x, cell.y);
+            const b = this.worldToScreen(cell.attachedTo.x, cell.attachedTo.y);
+            ctx.lineWidth = Math.max(1, Math.min(cell.radius, cell.attachedTo.radius) * 0.5 * this.camera.zoom);
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+        }
         for (const cell of world.cells) {
             const p = this.worldToScreen(cell.x, cell.y);
             const r = cell.radius * this.camera.zoom;
             if (p.x < -r || p.y < -r || p.x > this.viewportWidth + r || p.y > this.viewportHeight + r)
                 continue;
-            // "eyes": the vision cone this cell actually senses through, drawn
-            // behind everything else so it reads as a faint headlight rather than
-            // clutter. Full 360° cells skip this (there's no cone to show).
-            if (options.showVision && cell.genome.visionAngle < 359.9) {
-                const halfFov = ((cell.genome.visionAngle * Math.PI) / 180) * 0.5;
+            this.drawCell(cell, p, r, !!options.showVision);
+        }
+        ctx.restore();
+    }
+    drawCell(cell, p, r, showVision) {
+        const ctx = this.ctx;
+        // eyes: each eye's own vision cone, drawn behind the body as a faint
+        // headlight so a cell's actual coverage — not just a label — is visible.
+        if (showVision) {
+            for (const o of cell.genome.organelles) {
+                if (o.kind !== 'eye')
+                    continue;
+                const halfFov = (((50 + o.size * 40) * Math.PI) / 180) * 0.5;
+                const mountAngle = cell.heading + o.angle;
                 const rangePx = cell.genome.senseRadius * this.camera.zoom;
                 ctx.beginPath();
                 ctx.moveTo(p.x, p.y);
-                ctx.arc(p.x, p.y, rangePx, cell.heading - halfFov, cell.heading + halfFov);
+                ctx.arc(p.x, p.y, rangePx, mountAngle - halfFov, mountAngle + halfFov);
                 ctx.closePath();
                 ctx.fillStyle = 'rgba(255, 240, 160, 0.05)';
                 ctx.fill();
-                ctx.strokeStyle = 'rgba(255, 240, 160, 0.18)';
+                ctx.strokeStyle = 'rgba(255, 240, 160, 0.16)';
                 ctx.lineWidth = 1;
                 ctx.stroke();
             }
-            const energyFrac = clamp(cell.energy / cell.maxEnergy, 0.15, 1);
-            const lightness = 30 + energyFrac * 30;
-            ctx.fillStyle = `hsl(${cell.genome.hue}, 65%, ${lightness}%)`;
+        }
+        // flagella: wavy tails trailing the rim, wiggling faster the harder the
+        // cell is currently pushing.
+        const wiggleSpeed = 0.25 + cell.speed * 2.5;
+        for (const o of cell.genome.organelles) {
+            if (o.kind !== 'flagellum')
+                continue;
+            const mountAngle = cell.heading + o.angle;
+            const baseX = p.x + Math.cos(mountAngle) * r;
+            const baseY = p.y + Math.sin(mountAngle) * r;
+            const length = r * (1.1 + o.size * 0.9);
+            const wag = Math.sin(this.animT * wiggleSpeed + o.angle * 3) * (0.25 + o.size * 0.2);
+            const perpAngle = mountAngle + Math.PI / 2;
+            const tipX = baseX + Math.cos(mountAngle) * length + Math.cos(perpAngle) * wag * length * 0.35;
+            const tipY = baseY + Math.sin(mountAngle) * length + Math.sin(perpAngle) * wag * length * 0.35;
+            const midX = baseX + Math.cos(mountAngle) * length * 0.55 + Math.cos(perpAngle) * wag * length * 0.2;
+            const midY = baseY + Math.sin(mountAngle) * length * 0.55 + Math.sin(perpAngle) * wag * length * 0.2;
+            ctx.strokeStyle = ORGANELLE_COLORS.flagellum;
+            ctx.lineWidth = Math.max(0.8, r * 0.12);
             ctx.beginPath();
-            ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.lineWidth = Math.max(1, r * 0.18);
-            ctx.strokeStyle = DIET_COLORS[cell.genome.diet];
+            ctx.moveTo(baseX, baseY);
+            ctx.quadraticCurveTo(midX, midY, tipX, tipY);
             ctx.stroke();
-            if (cell.isPlayerDesigned) {
-                ctx.lineWidth = 1;
-                ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, r + 2, 0, Math.PI * 2);
-                ctx.stroke();
-            }
-            // "mouth": a notch at the front, sized by genome.mouthSize — this is
-            // the same trait that changes bite size and effective prey range.
-            const mouthHalfAngle = 0.16 + cell.genome.mouthSize * 0.12;
-            const mouthDepth = r * (0.35 + cell.genome.mouthSize * 0.25);
-            const tipX = p.x + Math.cos(cell.heading) * (r + mouthDepth * 0.4);
-            const tipY = p.y + Math.sin(cell.heading) * (r + mouthDepth * 0.4);
-            const baseAX = p.x + Math.cos(cell.heading - mouthHalfAngle) * r;
-            const baseAY = p.y + Math.sin(cell.heading - mouthHalfAngle) * r;
-            const baseBX = p.x + Math.cos(cell.heading + mouthHalfAngle) * r;
-            const baseBY = p.y + Math.sin(cell.heading + mouthHalfAngle) * r;
+        }
+        // body
+        const energyFrac = clamp(cell.energy / cell.maxEnergy, 0.15, 1);
+        const lightness = 30 + energyFrac * 30;
+        ctx.fillStyle = `hsl(${cell.genome.hue}, 65%, ${lightness}%)`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.lineWidth = Math.max(1, r * 0.12);
+        ctx.strokeStyle = 'rgba(8, 12, 20, 0.55)';
+        ctx.stroke();
+        if (cell.isPlayerDesigned) {
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, r + 2, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        // armor: a thicker rim segment centered on the organelle's mount angle
+        for (const o of cell.genome.organelles) {
+            if (o.kind !== 'armor')
+                continue;
+            const mountAngle = cell.heading + o.angle;
+            const arcHalf = 0.35 + o.size * 0.15;
+            ctx.strokeStyle = ORGANELLE_COLORS.armor;
+            ctx.lineWidth = Math.max(1.5, r * 0.32 * o.size);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, r * 0.92, mountAngle - arcHalf, mountAngle + arcHalf);
+            ctx.stroke();
+        }
+        // chloroplasts: small green discs embedded near the rim
+        for (const o of cell.genome.organelles) {
+            if (o.kind !== 'chloroplast')
+                continue;
+            const mountAngle = cell.heading + o.angle;
+            const cx = p.x + Math.cos(mountAngle) * r * 0.62;
+            const cy = p.y + Math.sin(mountAngle) * r * 0.62;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, r * 0.28 * o.size, r * 0.18 * o.size, mountAngle, 0, Math.PI * 2);
+            ctx.fillStyle = ORGANELLE_COLORS.chloroplast;
+            ctx.fill();
+        }
+        // eyes: tiny dots at their mount point
+        for (const o of cell.genome.organelles) {
+            if (o.kind !== 'eye')
+                continue;
+            const mountAngle = cell.heading + o.angle;
+            const ex = p.x + Math.cos(mountAngle) * r * 0.75;
+            const ey = p.y + Math.sin(mountAngle) * r * 0.75;
+            ctx.beginPath();
+            ctx.arc(ex, ey, Math.max(0.9, r * 0.14), 0, Math.PI * 2);
+            ctx.fillStyle = ORGANELLE_COLORS.eye;
+            ctx.fill();
+        }
+        // bud gland: small marker showing this lineage can grow attached
+        // offspring — distinct from the sexual-mode "nucleus" marker below.
+        for (const o of cell.genome.organelles) {
+            if (o.kind !== 'bud')
+                continue;
+            const mountAngle = cell.heading + o.angle;
+            const bx = p.x + Math.cos(mountAngle) * r * 0.7;
+            const by = p.y + Math.sin(mountAngle) * r * 0.7;
+            ctx.beginPath();
+            ctx.arc(bx, by, Math.max(1, r * 0.16), 0, Math.PI * 2);
+            ctx.fillStyle = ORGANELLE_COLORS.bud;
+            ctx.fill();
+        }
+        // mouths: a notch bitten into the rim at each mouth's mount angle
+        for (const o of cell.genome.organelles) {
+            if (o.kind !== 'mouth')
+                continue;
+            const mountAngle = cell.heading + o.angle;
+            const halfAngle = 0.16 + o.size * 0.12;
+            const depth = r * (0.35 + o.size * 0.25);
+            const tipX = p.x + Math.cos(mountAngle) * (r + depth * 0.4);
+            const tipY = p.y + Math.sin(mountAngle) * (r + depth * 0.4);
+            const baseAX = p.x + Math.cos(mountAngle - halfAngle) * r;
+            const baseAY = p.y + Math.sin(mountAngle - halfAngle) * r;
+            const baseBX = p.x + Math.cos(mountAngle + halfAngle) * r;
+            const baseBY = p.y + Math.sin(mountAngle + halfAngle) * r;
             ctx.beginPath();
             ctx.moveTo(baseAX, baseAY);
             ctx.lineTo(tipX, tipY);
             ctx.lineTo(baseBX, baseBY);
             ctx.closePath();
-            ctx.fillStyle = 'rgba(10, 15, 25, 0.75)';
+            ctx.fillStyle = ORGANELLE_COLORS.mouth;
             ctx.fill();
-            // sexual-reproduction marker: a small pale core, roughly a "nucleus"
-            if (cell.genome.reproductionMode === 'sexual') {
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, Math.max(1, r * 0.28), 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255,255,255,0.55)';
-                ctx.fill();
-            }
         }
-        ctx.restore();
+        // sexual-reproduction marker: a small pale core, roughly a "nucleus"
+        if (cell.genome.reproductionMode === 'sexual') {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, Math.max(1, r * 0.22), 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.55)';
+            ctx.fill();
+        }
     }
 }

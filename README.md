@@ -1,18 +1,35 @@
 # Evo — Cell Evolution Sandbox
 
 A browser-based sandbox inspired by *Cell Lab: Evolution Simulator*, built to
-focus specifically on **watching evolution happen**: you design a cell's body
-plan, release it into a shared petri dish, and its descendants' *brains*
-evolve by mutation and natural selection over generations — no hand-tuning
-required.
+focus specifically on **watching evolution happen** — physically and
+behaviorally. You design a cell's body from real organelles, release it into
+a shared petri dish, and its descendants' bodies *and* brains evolve by
+mutation and natural selection over generations. No hand-tuning required.
 
 ## How it works
 
-- **Body plan (you design this):** diet (herbivore / omnivore / carnivore),
-  reproduction mode (asexual or sexual), size, max speed, sense radius,
-  vision angle ("eyes"), mouth size, lifespan, and color. Set in the
-  *Designer* tab and locked in when you hit "Release into Dish".
-- **Brain (evolution shapes this):** every cell has a small neural network
+- **Organelles (physical evolution):** a cell's body is a sized chassis with
+  organelles mounted around the rim — **flagella** (speed & agility),
+  **mouths** (eat plant matter, carrion, or smaller cells), **chloroplasts**
+  (passive energy from ambient light — the "plant" path), **eyes** (each one
+  its own vision cone), and **armor** (harder to catch and eat). There's no
+  "diet" label: what a cell eats falls out of what it's physically carrying.
+  A cell can be pure photosynthesizer, pure predator, both, or neither (and
+  starve). Every organelle has a real upkeep cost, so a loadout is a bet, not
+  a free upgrade — mutation adds, removes, resizes, and repositions
+  organelles generation over generation, and natural selection prunes what
+  doesn't pay for itself.
+- **Multicellularity:** give a species a **bud gland** and its offspring stay
+  physically attached instead of drifting off, growing into a simple colony
+  — a tree of bonded cells that moves as one rigid body (every member's brain
+  "votes" on thrust and turning, weighted by its own flagella) and shares
+  energy across bonds by diffusion, so a flagella-heavy propulsion cell can
+  survive on income harvested by a photosynthetic neighbor. Losing a member
+  to a predator splits the colony rather than deleting it — the rest carries
+  on as one or more independent colonies. The default "Wild Grazers" are
+  bud-capable, so colonies form on their own from the moment you open the
+  dish.
+- **Brain (behavioral evolution):** every cell has a small neural network
   (15 sensor inputs → 10 hidden neurons → 2 outputs: turn, thrust) that
   decides how it moves in response to nearby food, threats, potential mates,
   its own energy, and dish walls. New cells start with random weights; each
@@ -20,36 +37,31 @@ required.
   reproduction, a shuffled mix of both parents'). There's no training step —
   bad brains just fail to find food, starve before reproducing, and their
   lineage dies out, while brains that happen to steer toward food (or mates)
-  reproduce more. That selection pressure, repeated over hundreds of
-  generations, is the entire "AI."
-- **Reproduction — asexual or sexual:** asexual cells reproduce solo once
-  they cross an energy threshold; the child is a mutated clone. Sexual cells
-  need to find another mating-ready cell of the same lineage — once they do,
-  the child's traits and brain weights are each independently drawn from one
-  parent or the other (crossover), then mutated on top. Sexual reproduction
-  is slower and needs a healthier founding population (mates have to
-  actually meet), but mixes two lineages' genes together rather than just
-  drifting one lineage's — a real trade-off, not strictly better or worse.
-- **Eyes and mouth:** `visionAngle` is a genuine field-of-view cone, not
-  omnidirectional radar — a cell only senses food/threats/mates inside that
-  cone, so narrow-eyed cells have to actually turn to look. Wider vision
-  costs more upkeep. `mouthSize` scales how much energy a bite yields, how
-  far a cell's effective reach is, and how large a prey item it can tackle
-  relative to its own body — also at an upkeep cost. Turn on the **👁
-  Vision** toggle in the top bar to see every cell's vision cone live.
-- **Ecosystem:** herbivores eat plant food that regrows over time; carnivores
-  and omnivores can also eat smaller cells (and the carrion left behind by
-  any death). Energy drives movement, aging, and reproduction. Diet itself
-  can rarely mutate too, so you may see a herbivore lineage spontaneously go
-  omnivore.
-- **Ecosystem tab:** live counts by diet and reproduction mode, food levels,
-  highest generation reached, and rolling charts of population and average
-  traits (size, speed, sense radius, vision angle, mouth size) so you can
-  actually see the population's genome drifting over time.
+  reproduce more.
+- **Reproduction — asexual, sexual, or budded:** asexual cells reproduce solo
+  once they cross an energy threshold; the child is a mutated clone. Sexual
+  cells need to find another mating-ready cell of the same lineage — once
+  they do, the child's traits, organelles, and brain weights are each
+  independently drawn from one parent or the other (crossover), then
+  mutated. A cell with a bud gland buds an attached child instead of ejecting
+  one — how colonies grow. Sexual and budded reproduction are both slower
+  than solo asexual and need a healthier founding population, but each buys
+  something asexual cloning can't: sexual mixes two lineages' genes;
+  budding builds a cooperating multicellular body.
+- **Ecosystem:** food regrows over time; any cell with a mouth can eat plant
+  matter, carrion, or a smaller cell (including armor and mouth-investment
+  trade-offs on both sides of a predation attempt). Energy drives movement,
+  aging, and reproduction.
+- **Ecosystem tab:** live counts of colonies vs. solo cells, average colony
+  size, reproduction mode split, food levels, highest generation reached, and
+  rolling charts of population and average traits (chassis size, derived max
+  speed, sense radius, flagella, chloroplasts) so you can watch the
+  population's physical genome drifting over time.
 
-The dish is pre-seeded with a wild (asexual) herbivore and carnivore
-population so there's already an ecosystem before you add your own design —
-your species competes, gets hunted, or hunts alongside them.
+The dish is pre-seeded with a colonial, photosynthetic "Wild Grazers"
+population and a solitary, mobile "Wild Hunters" predator population, so
+there's already an ecosystem — plant-like colonies being hunted by mobile
+animal-like cells — before you add your own design.
 
 ## Running it locally
 
@@ -69,28 +81,32 @@ you iterate.
 - **Drag** the dish to pan, **scroll** to zoom.
 - **Play/Pause**, **1×/2×/4×/8×** speed, **+ Food** (sprinkle a burst of
   plant food), **Fit View** (recenter camera), **👁 Vision** (toggle every
-  cell's vision cone on/off), **Reset Dish** (clear everything and reseed
-  the base ecosystem).
+  cell's per-eye vision cones on/off), **Reset Dish** (clear everything and
+  reseed the base ecosystem).
 - Cells you personally release get a thin white outline so you can pick your
-  lineage out of the crowd. Sexual-mode cells also get a small pale "nucleus"
-  marker at their center; every cell has a small notch at its front — its
-  mouth — sized by `mouthSize`.
+  lineage out of the crowd. Sexual-mode cells get a small pale "nucleus"
+  marker; thin lines between cells are bond membranes — that's a colony.
 
 ## Project layout
 
 ```
 src/
-  sim/          engine-agnostic simulation: rng, neural net, genome/mutation,
-                cell, food, world (the tick loop, sensing, eating,
-                predation, reproduction, stats)
-  render/       Canvas2D renderer + camera (pan/zoom)
+  sim/          engine-agnostic simulation: rng, neural net, genome/mutation
+                (organelles + traits), cell (incl. bond-tree state), food,
+                world (the tick loop — sensing, colony movement, eating,
+                predation, reproduction/budding, colony energy diffusion,
+                stats)
+  render/       Canvas2D renderer — draws organelles, bond membranes,
+                vision cones + camera (pan/zoom)
   ui/           sparkline chart helper
-  main.ts       wires DOM controls to the World + Renderer and runs the loop
+  main.ts       wires DOM controls (incl. the organelle loadout builder) to
+                the World + Renderer and runs the loop
 ```
 
 `sim/` has no DOM dependency, so it can be driven headlessly (handy for
 tuning balance — see the constants at the top of `world.ts` and
-`cell.metabolize()` for the energy economy).
+`cell.metabolize()` for the energy economy, and `genome.ts` for organelle
+costs/limits).
 
 ## A note on tech choices
 
