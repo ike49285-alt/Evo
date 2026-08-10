@@ -1,8 +1,8 @@
 import { Renderer } from './render/renderer.js';
 import { ReproductionMode } from './sim/types.js';
-import { StarterLoadout, TRAIT_LIMITS } from './sim/genome.js';
+import { StarterLoadout, TRAIT_LIMITS, deriveMouthPower, deriveChloroplastPower } from './sim/genome.js';
 import { World } from './sim/world.js';
-import { drawSparkline } from './ui/chart.js';
+import { drawSparkline, drawScatter, ScatterPoint } from './ui/chart.js';
 
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 1500;
@@ -175,6 +175,7 @@ const sMouths = el('s-mouths');
 const sEyes = el('s-eyes');
 const sArmor = el('s-armor');
 
+const chartMorphs = el<HTMLCanvasElement>('chart-morphs');
 const chartPop = el<HTMLCanvasElement>('chart-pop');
 const chartSize = el<HTMLCanvasElement>('chart-size');
 const chartSpeed = el<HTMLCanvasElement>('chart-speed');
@@ -206,6 +207,21 @@ function updateHudAndStats(): void {
   sMouths.textContent = live.avgMouths.toFixed(2);
   sEyes.textContent = live.avgEyes.toFixed(2);
   sArmor.textContent = live.avgArmor.toFixed(2);
+
+  // Morph scatter: one dot per virtunism, not an average — shows a
+  // population actually splitting into distinct body plans (e.g. a
+  // plant-leaning cluster vs. a predator-leaning cluster) instead of
+  // hiding the split behind a single blended mean.
+  const morphPoints: ScatterPoint[] = world.cells.map((c) => ({
+    x: c.genome.size,
+    y: deriveMouthPower(c.genome) - deriveChloroplastPower(c.genome),
+    colorHsl: `hsl(${c.genome.hue}, 65%, 55%)`,
+    ring: c.isPlayerDesigned,
+  }));
+  drawScatter(chartMorphs, morphPoints, {
+    xLabel: 'size',
+    yLabel: 'diet: chloroplast ←→ mouth',
+  });
 
   const history = world.history;
   if (history.length > 1) {

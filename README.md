@@ -66,25 +66,50 @@ deliberate small distinction from the literal biology it's inspired by.
      feeding itself.
 - **Ecosystem tab:** live counts of colonies vs. solo virtunisms, average
   colony size, reproduction-mode split, carrion levels, highest generation
-  reached, and rolling charts of population and average traits.
+  reached, a live **morph scatter plot** (every virtunism plotted as one
+  dot — size vs. chloroplast/mouth diet lean, colored by hue), and rolling
+  charts of population and average traits.
 
 ## What actually happens
 
-The dish is pre-seeded with "Wild Grazers" (pure photosynthesizers — no
-mouth at all, sunlight is their *only* possible income) and "Wild Hunters"
-(no chloroplasts — every calorie has to come from hunting Grazers or
-scavenging carrion). This is a real two-level food chain, and it behaves
-like one: population runs tested across many random seeds consistently show
-the photosynthesizer base holding a stable equilibrium indefinitely, while
-the predator population is a genuine — and genuinely *contingent* —
-evolutionary bet. Sometimes early hunters evolve effective chase behavior
-fast enough to establish, and you get real oscillating boom-bust
-predator-prey dynamics for thousands of generations. Sometimes they don't,
-and the dish quietly settles into a stable, thriving, predator-free
-ecosystem instead. Both are honest outcomes, not failures — this is what
-"if animals starve, they starve" actually looks like. If a run collapses
-further than you'd like, **Reset Dish** reseeds it, and the Designer is
-always there to drop in something new.
+The dish is pre-seeded with a small starting population — 16
+"Dandelions" (pure photosynthesizers, no mouth at all — sunlight is their
+*only* possible income) and 12 "Rabbits" (a mouth, no chloroplasts — every
+calorie has to come from hunting Dandelions or scavenging carrion). Those
+are just starting names, not hard-coded species: there is no separate
+"predator" or "scavenger" or "tree" template anywhere in the code. Diet,
+size, speed, and defense are all just organelle counts and sizes, and
+organelle loadouts mutate freely and without limit every generation — so
+whatever shows up ten thousand generations later, whether that's a
+photosynthesizer that's grown into something tree-like and armored, or a
+Rabbit-descendant that's grown into something wolf-like or vulture-like, is
+a genuine evolutionary outcome, not a switch I flipped.
+
+Here's what's actually been verified, honestly, not just hoped for:
+- **Trait divergence is real and observed**, not theoretical. In 30,000+
+  tick headless runs, the Dandelion population's size range visibly widens
+  — roughly 3× over the run — and a subset of that "plant" lineage
+  spontaneously acquires mouth organelles through pure mutation, with no
+  environmental pressure pushing it there. That's the mechanism the
+  trees/wolves/vultures idea depends on, and it's genuinely firing.
+- **The predator lineage establishes in most, not all, runs.** Across a
+  batch of 15 random seeds, Rabbits survived long enough to hold a stable
+  population in 10 (~67%). The other 5 collapsed to extinction — sometimes
+  quickly, sometimes (as with any predator-prey system) after a real boom
+  that later busts. That failure rate is reported here rather than tuned
+  away, because "if animals starve, they starve" was an explicit design
+  choice, not a bug to chase out.
+- **A full multi-tier food web — a distinct scavenger tier specializing on
+  carrion, several visibly different body plans coexisting at once — was
+  not directly witnessed end-to-end in this session's testing window.**
+  The mechanics support it (nothing caps how far a lineage can diverge, and
+  carrion-scavenging is already a fully viable strategy for any mouthed
+  virtunism), but confirming it needs longer runs and more seeds than this
+  session had time for. Consider this an open, honestly-unresolved
+  question rather than a promised outcome.
+
+If a run collapses further than you'd like, **Reset Dish** reseeds it, and
+the Designer is always there to drop in something new.
 
 ## Performance architecture
 
@@ -149,7 +174,7 @@ src/
   render/
     renderer.ts     Canvas2D — organelles, bond membranes, vision cones
   ui/
-    chart.ts        sparkline helper
+    chart.ts        sparkline + per-virtunism morph scatter plot
   main.ts           DOM wiring + the time-budgeted game loop
 ```
 

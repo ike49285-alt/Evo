@@ -158,7 +158,10 @@ export function mutateGenome(parent: Genome, rng: Rng): Genome {
     maxAge: jitter(parent.maxAge, TRAIT_LIMITS.maxAge.min, TRAIT_LIMITS.maxAge.max),
     hue: (parent.hue + (rng.bool(traitMutRate) ? rng.gaussian(0, 8) : 0) + 360) % 360,
     organelles: mutateOrganelles(parent.organelles, rng),
-    brain: parent.brain.mutate(rng, 0.12, 0.35),
+    // Strength scaled down to match the brain's Xavier-init weight range
+    // (roughly ±0.2-0.3) rather than the old flat [-1,1] one — mutation
+    // noise should perturb a weight, not routinely swamp it.
+    brain: parent.brain.mutate(rng, 0.12, 0.15),
   };
 }
 

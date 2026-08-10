@@ -45,12 +45,26 @@ export class NeuralNet {
     }
   }
 
+  /** Xavier-style scaled init: weight range shrinks with fan-in so the
+   * pre-activation sum lands near tanh's responsive middle regardless of
+   * how many inputs/hidden units there are. Without this, growing the
+   * sensor vector (this brain now has 15 inputs, not the original 11)
+   * pushes hidden-neuron sums deep into tanh's flat tails on pure luck —
+   * a "random" brain isn't just unskilled then, it's *saturated*: its
+   * output barely moves no matter how the inputs change, which looks
+   * identical to "ignoring everything it senses" from the outside. That's
+   * a much harder hole to evolve out of than genuine unskilled-but-
+   * responsive randomness, since gradient-free mutation has almost
+   * nothing to select on when the output doesn't react to input changes
+   * in the first place. */
   static random(topology: NNTopology, rng: Rng): NeuralNet {
     const net = new NeuralNet(topology);
-    for (let i = 0; i < net.w1.length; i++) net.w1[i] = rng.range(-1, 1);
-    for (let i = 0; i < net.b1.length; i++) net.b1[i] = rng.range(-0.5, 0.5);
-    for (let i = 0; i < net.w2.length; i++) net.w2[i] = rng.range(-1, 1);
-    for (let i = 0; i < net.b2.length; i++) net.b2[i] = rng.range(-0.5, 0.5);
+    const w1Limit = 1 / Math.sqrt(topology.inputs);
+    const w2Limit = 1 / Math.sqrt(topology.hidden);
+    for (let i = 0; i < net.w1.length; i++) net.w1[i] = rng.range(-w1Limit, w1Limit);
+    for (let i = 0; i < net.b1.length; i++) net.b1[i] = rng.range(-0.2, 0.2);
+    for (let i = 0; i < net.w2.length; i++) net.w2[i] = rng.range(-w2Limit, w2Limit);
+    for (let i = 0; i < net.b2.length; i++) net.b2[i] = rng.range(-0.2, 0.2);
     return net;
   }
 
@@ -116,9 +130,14 @@ function mutateArray(arr: Float32Array, rng: Rng, rate: number, strength: number
     if (rng.next() < rate) {
       arr[i] += rng.gaussian(0, strength);
     }
-    // rare larger jump — keeps some exploration alive even after convergence
+    // rare larger jump — keeps some exploration alive even after
+    // convergence. Scaled to roughly match the Xavier-init weight range,
+    // not the old flat [-1,1] one — a "big jump" that's disproportionately
+    // huge relative to every other weight risks single-handedly
+    // resaturating the neuron it lands on, undoing the point of scaled
+    // initialization in the first place.
     if (rng.next() < rate * 0.05) {
-      arr[i] = rng.range(-1.5, 1.5);
+      arr[i] = rng.range(-0.6, 0.6);
     }
   }
 }

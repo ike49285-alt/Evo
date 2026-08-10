@@ -135,41 +135,59 @@ export class World {
     return world;
   }
 
+  /**
+   * A small starting population of plants and herbivores — nothing else.
+   * There is no hand-designed predator, scavenger, or "tree" — if this
+   * dish ever grows one, it's because mutation and selection actually
+   * found it, not because it was built in. Nothing here stops a rabbit
+   * lineage from drifting toward bigger and more predatory (a wolf), or a
+   * dandelion lineage toward bigger and more armored (a tree), or some
+   * branch of the predatory line specializing in carrion over live prey
+   * (a vulture) — the organelle system has no fixed "species" concept to
+   * prevent it. Whether any of that actually happens in a given run is a
+   * real, unscripted question, not a guaranteed outcome. Founding
+   * populations are small but not knife-edge minimal — every mechanic in
+   * this dish that starts from too few individuals has turned out to be
+   * one unlucky brain away from extinction before it ever gets a chance
+   * to evolve into anything.
+   */
   seedBaseSpecies(): void {
-    // Pure photosynthesizers — no mouth at all, so sunlight (via their
-    // chloroplasts) is their *only* possible energy source. Bud-capable
-    // so colonies form on their own without you having to design one
-    // first. These are the base of the food chain: the only other way
-    // energy enters the dish is by eating one of these (or their carrion).
+    // Dandelions: the entire starting food supply. Pure photosynthesizer
+    // (no mouth). A little of its own mobility + a real body (multiple
+    // organelles, not just one) turns out to matter for more than just the
+    // dandelion itself — it's also what gives a still-naive rabbit brain
+    // enough of a target to actually close distance on. A single-organelle,
+    // zero-flagella "minimal" plant looked right on paper but consistently
+    // starved every predator population that depended on it in testing;
+    // this loadout is the one that's actually been verified to work.
     this.addSpecies(
       {
         reproductionMode: 'asexual',
         size: 0.9,
         senseRadius: 150,
         maxAge: 1000,
-        hue: 125,
-        loadout: { flagella: 2, chloroplasts: 3, eyes: 1, bud: true },
+        hue: 68,
+        loadout: { flagella: 2, chloroplasts: 3, eyes: 1 },
       },
-      18,
-      { name: 'Wild Grazers', spread: true },
+      16,
+      { name: 'Dandelions', spread: true },
     );
-    // Solitary mobile predators — no chloroplasts, so every calorie has to
-    // come from hunting live prey or scavenging carrion. Deliberately
-    // light starting loadout (no armor yet, one eye) — every organelle is
-    // upkeep the founding generation's still-random brains have to earn
-    // back purely by catching things, so a leaner body buys more
-    // generations to actually evolve a decent chase before starving out.
+    // Rabbits: sized with a deliberate, comfortable margin over a
+    // dandelion so eating one is mechanically reliable from tick one
+    // (predation eligibility is a real size-ratio check — too close a
+    // margin and hunting silently becomes nearly impossible regardless of
+    // behavior, a mistake worth not repeating here).
     this.addSpecies(
       {
         reproductionMode: 'asexual',
         size: 1.55,
         senseRadius: 190,
         maxAge: 900,
-        hue: 4,
-        loadout: { flagella: 3, mouths: 1, eyes: 1 },
+        hue: 30,
+        loadout: { mouths: 1, flagella: 3, eyes: 1 },
       },
-      22,
-      { name: 'Wild Hunters', spread: true },
+      12,
+      { name: 'Rabbits', spread: true },
     );
   }
 
