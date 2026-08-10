@@ -3,17 +3,17 @@
 export type ReproductionMode = 'asexual' | 'sexual';
 
 /**
- * The physical parts a cell can grow. There's no separate "diet" gene
- * anymore — what a cell eats (or doesn't) falls out of which of these it's
- * carrying: chloroplasts photosynthesize (the "plant" path), mouths let it
- * eat plant matter, carrion, or smaller cells (the "animal" path), and a
- * cell can carry both, either, or neither.
+ * The physical parts a virtunism can grow. There's no separate "diet" gene
+ * — what it eats (or doesn't) falls out of which of these it's carrying:
+ * chloroplasts photosynthesize (the "plant" path), mouths let it eat plant
+ * matter, carrion, or smaller virtunisms (the "animal" path), and a
+ * virtunism can carry both, either, or neither.
  */
 export type OrganelleKind = 'flagellum' | 'mouth' | 'chloroplast' | 'eye' | 'armor' | 'bud';
 
 export interface Organelle {
   kind: OrganelleKind;
-  angle: number; // radians, position around the rim relative to the cell's own heading
+  angle: number; // radians, position around the rim relative to its own heading
   size: number; // 0.5-1.5, evolvable — bigger costs more but does more
 }
 
@@ -22,7 +22,7 @@ export interface Vec2 {
   y: number;
 }
 
-/** Brain input/output layout — keep in sync with World.buildInputs() and Cell.act(). */
+/** Brain input/output layout — keep in sync with World.buildInputs() and Virtunism.act(). */
 export const BRAIN_TOPOLOGY = { inputs: 15, hidden: 10, outputs: 2 } as const;
 
 export const ORGANELLE_COLORS: Record<OrganelleKind, string> = {

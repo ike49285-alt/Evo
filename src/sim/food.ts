@@ -7,11 +7,12 @@ export interface Food {
   y: number;
   energy: number;
   radius: number;
+  bornTick: number; // world.tick at creation — lets carrion decay away
 }
 
 let nextFoodId = 1;
 
-export function createFood(kind: FoodKind, x: number, y: number, energy: number): Food {
+export function createFood(kind: FoodKind, x: number, y: number, energy: number, bornTick = 0): Food {
   return {
     id: nextFoodId++,
     kind,
@@ -19,5 +20,6 @@ export function createFood(kind: FoodKind, x: number, y: number, energy: number)
     y,
     energy,
     radius: kind === 'plant' ? 5 : 7,
+    bornTick,
   };
 }

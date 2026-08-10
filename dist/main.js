@@ -136,6 +136,7 @@ el('btn-release').addEventListener('click', () => {
 const hudTick = el('hud-tick');
 const hudPop = el('hud-pop');
 const hudGen = el('hud-gen');
+const hudPerf = el('hud-perf');
 const sPop = el('s-pop');
 const sGen = el('s-gen');
 const sColonies = el('s-colonies');
@@ -164,6 +165,7 @@ function updateHudAndStats() {
     hudTick.textContent = String(live.tick);
     hudPop.textContent = String(live.population);
     hudGen.textContent = String(live.maxGeneration);
+    hudPerf.textContent = `${world.perf.lastTickMs.toFixed(2)}ms`;
     sPop.textContent = String(live.population);
     sGen.textContent = String(live.maxGeneration);
     sColonies.textContent = String(live.colonies);
@@ -192,10 +194,22 @@ function updateHudAndStats() {
     }
 }
 // --- main loop --------------------------------------------------------
+// A hard time budget for simulation work per animation frame — this is
+// what makes "consistent performance" an actual guarantee rather than a
+// hope. Regardless of population size, colony complexity, or the chosen
+// speed multiplier, a single frame will never spend more than ~18ms
+// running ticks: if it hits the budget partway through the requested
+// `speed` ticks, it just stops early and picks up next frame. A busy tick
+// degrades to a lower effective speed instead of freezing the tab.
+const TICK_TIME_BUDGET_MS = 18;
 function frame() {
     if (!paused) {
-        for (let i = 0; i < speed; i++)
+        const frameStart = performance.now();
+        for (let i = 0; i < speed; i++) {
             world.update(1);
+            if (performance.now() - frameStart > TICK_TIME_BUDGET_MS)
+                break;
+        }
     }
     renderer.draw(world, { showVision });
     updateHudAndStats();

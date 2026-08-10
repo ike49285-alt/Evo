@@ -1,6 +1,6 @@
 import { World } from '../sim/world.js';
 import { ORGANELLE_COLORS } from '../sim/types.js';
-import { Cell } from '../sim/cell.js';
+import { Virtunism } from '../sim/virtunism.js';
 
 interface Camera {
   x: number; // world-space point shown at screen center
@@ -138,7 +138,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawCell(cell: Cell, p: { x: number; y: number }, r: number, showVision: boolean): void {
+  private drawCell(cell: Virtunism, p: { x: number; y: number }, r: number, showVision: boolean): void {
     const ctx = this.ctx;
 
     // eyes: each eye's own vision cone, drawn behind the body as a faint

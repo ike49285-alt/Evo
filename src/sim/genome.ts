@@ -39,7 +39,7 @@ function powerOf(genome: Genome, kind: OrganelleKind): number {
   return sum;
 }
 
-/** Top speed a cell's flagella can push it to. Zero flagella = nearly
+/** Top speed a virtunism's flagella can push it to. Zero flagella = nearly
  * sessile (a real strategy for a photosynthesizer that doesn't need to
  * chase anything), not literally frozen. */
 export function deriveMaxSpeed(genome: Genome): number {
@@ -72,7 +72,7 @@ export function deriveChloroplastPower(genome: Genome): number {
   return powerOf(genome, 'chloroplast');
 }
 
-/** Armor makes a cell read as effectively bigger/tougher to predators
+/** Armor makes a virtunism read as effectively bigger/tougher to predators
  * without paying full chassis-size energy cost for the same protection. */
 export function deriveArmorBonus(genome: Genome): number {
   return 1 + powerOf(genome, 'armor') * 0.15;
@@ -179,8 +179,9 @@ function mutateOrganelles(organelles: readonly Organelle[], rng: Rng): Organelle
     next.splice(rng.int(0, next.length - 1), 1);
   }
 
-  // Rarely grow a new one — a real structural innovation. A cell can only
-  // ever carry one bud gland; it's a capability switch, not a stat to stack.
+  // Rarely grow a new one — a real structural innovation. A virtunism can
+  // only ever carry one bud gland; it's a capability switch, not a stat to
+  // stack.
   if (next.length < TRAIT_LIMITS.maxOrganelles && rng.bool(0.06)) {
     const kind = rng.pick(ORGANELLE_KINDS);
     const alreadyHasBud = next.some((o) => o.kind === 'bud');

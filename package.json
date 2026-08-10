@@ -2,7 +2,7 @@
   "name": "evo",
   "version": "0.1.0",
   "private": true,
-  "description": "Evo — a cell evolution sandbox inspired by Cell Lab: Evolution Simulator",
+  "description": "Evo — a stable virtual ecosystem where virtunisms grow and adapt",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",

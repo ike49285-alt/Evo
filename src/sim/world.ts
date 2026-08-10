@@ -1,4 +1,4 @@
-import { Cell, mateCells } from './cell.js';
+import { Virtunism, mateVirtunisms } from './virtunism.js';
 import { createFood, Food } from './food.js';
 import {
   buildOrganelles,
@@ -13,6 +13,7 @@ import {
 import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
 import { BRAIN_TOPOLOGY, ReproductionMode } from './types.js';
+import { SpatialGrid } from './grid.js';
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
@@ -57,16 +58,25 @@ export interface StatsSnapshot {
   meatFood: number;
 }
 
+/** How long the *last* update() call actually took, in milliseconds — the
+ * game loop uses this to keep a bounded time budget per animation frame
+ * (see main.ts) instead of blindly running a fixed number of ticks
+ * regardless of how expensive each one turns out to be. */
+export interface PerfSnapshot {
+  lastTickMs: number;
+}
+
 export class World {
   readonly width: number;
   readonly height: number;
   readonly rng: Rng;
 
-  cells: Cell[] = [];
+  cells: Virtunism[] = [];
   plantFood: Food[] = [];
   meatFood: Food[] = [];
   lineages = new Map<number, LineageInfo>();
   history: StatsSnapshot[] = [];
+  perf: PerfSnapshot = { lastTickMs: 0 };
 
   tick = 0;
 
@@ -76,9 +86,24 @@ export class World {
   readonly maxPlantFood = 900;
   readonly plantSpawnRate = 3.2; // pellets per tick
   readonly plantEnergy = 18;
+  // Carrion isn't capacity-limited at spawn like plant food (kills happen
+  // whenever they happen), so left alone it accumulates without bound over
+  // a long run — a slow, easy-to-miss performance leak, not just a
+  // realism gap. Decay plus a hard cap keeps the standing amount bounded
+  // regardless of how long the dish has been running.
+  readonly maxMeatFood = 260;
+  readonly meatDecayTicks = 500;
   readonly predationSizeRatio = 0.88; // prey must be <= predator.size * this
   readonly statsSampleInterval = 10;
   readonly maxHistory = 400;
+
+  // Grid cell sizes: virtunismGrid is sized for the typical sensing range
+  // (a few hundred units); foodGrid is much finer since eating/predation
+  // contact is a short-range check. Both are rebuilt fresh each tick (or
+  // twice, for virtunisms — see update()) rather than maintained
+  // incrementally.
+  private readonly virtunismGrid = new SpatialGrid<Virtunism>(110);
+  private readonly foodGrid = new SpatialGrid<Food>(50);
 
   private nextLineageId = 1;
   private plantSpawnAccumulator = 0;
@@ -174,7 +199,7 @@ export class World {
       // and the lower sexual matingThreshold (0.3 * maxEnergy) so a freshly
       // released population always has to forage first.
       const startEnergy = 12 * template.size;
-      this.cells.push(new Cell(genome, x, y, lineageId, 0, startEnergy, !!opts.isPlayerDesigned));
+      this.cells.push(new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned));
     }
     return lineageId;
   }
@@ -189,19 +214,26 @@ export class World {
 
   /** Advances the simulation by one fixed tick. */
   update(dt: number): void {
-    this.spawnFood(dt);
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
-    // Sense + think for every living cell (colony members included) before
-    // anyone moves, so a colony's rigid-body pass can pool every member's
-    // vote from the same instant.
+    this.spawnFood(dt);
+    this.decayMeatFood();
+    this.foodGrid.clear();
+    for (const f of this.plantFood) this.foodGrid.insert(f);
+    for (const f of this.meatFood) this.foodGrid.insert(f);
+
+    // Sense + think using positions from *before* this tick's movement (a
+    // consistent "everyone sees the world as it was a moment ago" model).
+    this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
     for (const cell of this.cells) {
       if (!cell.alive) continue;
       const inputs = this.buildInputs(cell);
       cell.think(inputs);
     }
 
-    // Movement: solo cells act individually; colony roots move the whole
-    // bonded tree as one rigid body and cascade positions to every member.
+    // Movement: solo virtunisms act individually; colony roots move the
+    // whole bonded tree as one rigid body and cascade positions to every
+    // member.
     for (const cell of this.cells) {
       if (!cell.alive || cell.attachedTo !== null) continue;
       if (cell.attachedChildren.length > 0) {
@@ -215,6 +247,9 @@ export class World {
       if (cell.alive) cell.metabolize(dt);
     }
 
+    // Rebuild with post-movement positions for contact-driven systems.
+    this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
+
     this.handleEating();
     this.handlePredation();
     this.diffuseColonyEnergy(dt);
@@ -225,6 +260,9 @@ export class World {
     if (Math.floor(this.tick) % this.statsSampleInterval === 0) {
       this.pushStatsSnapshot();
     }
+
+    const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    this.perf.lastTickMs = t1 - t0;
   }
 
   getLiveStats(): StatsSnapshot {
@@ -297,21 +335,37 @@ export class World {
     if (this.history.length > this.maxHistory) this.history.shift();
   }
 
+  /** Adds a carrion pellet, oldest-first-evicting if that would push the
+   * standing amount over the cap — a predation/death spike (a colony wiped
+   * out at once, say) can't make the meat pile grow without bound. */
+  private spawnMeat(x: number, y: number, energy: number): void {
+    if (this.meatFood.length >= this.maxMeatFood) this.meatFood.shift();
+    this.meatFood.push(createFood('meat', x, y, energy, Math.floor(this.tick)));
+  }
+
+  /** Removes carrion that's been sitting long enough to rot away — the
+   * actual fix for meat food's unbounded growth, not just the cap. */
+  private decayMeatFood(): void {
+    if (this.meatFood.length === 0) return;
+    const cutoff = this.tick - this.meatDecayTicks;
+    this.meatFood = this.meatFood.filter((f) => f.bornTick > cutoff);
+  }
+
   private spawnFood(dt: number): void {
     this.plantSpawnAccumulator += this.plantSpawnRate * dt;
     while (this.plantSpawnAccumulator >= 1 && this.plantFood.length < this.maxPlantFood) {
       this.plantSpawnAccumulator -= 1;
       this.plantFood.push(
-        createFood('plant', this.rng.range(20, this.width - 20), this.rng.range(20, this.height - 20), this.plantEnergy),
+        createFood('plant', this.rng.range(20, this.width - 20), this.rng.range(20, this.height - 20), this.plantEnergy, Math.floor(this.tick)),
       );
     }
   }
 
   /** True if world point (tx, ty) falls inside cell's field of view — a
    * narrow always-on "chemoreception" cone plus the union of whatever eye
-   * organelles it's grown, each mounted at its own angle relative to the
-   * cell's heading with a width set by that eye's size. */
-  private inFOV(cell: Cell, tx: number, ty: number): boolean {
+   * organelles it's grown, each mounted at its own angle relative to its
+   * heading with a width set by that eye's size. */
+  private inFOV(cell: Virtunism, tx: number, ty: number): boolean {
     const angleToTarget = Math.atan2(ty - cell.y, tx - cell.x);
     const within = (mountAngle: number, halfWidth: number): boolean => {
       let diff = angleToTarget - (cell.heading + mountAngle);
@@ -330,15 +384,16 @@ export class World {
 
   /** How far a predator's mouth investment stretches its max-prey-size
    * threshold — a bigger mouth can tackle relatively bigger prey. */
-  private predatorReach(predator: Cell): number {
+  private predatorReach(predator: Virtunism): number {
     return clamp(0.7 + deriveMouthPower(predator.genome) * 0.15, 0.7, 1.4);
   }
 
-  /** Builds the fixed sensor vector consumed by Cell/NeuralNet (see
-   * BRAIN_TOPOLOGY.inputs). Any mouthed cell can eat both plant matter and
-   * meat/prey — there's no separate diet gate, just what you're physically
-   * equipped to catch. */
-  private buildInputs(cell: Cell): number[] {
+  /** Builds the fixed sensor vector consumed by Virtunism/NeuralNet (see
+   * BRAIN_TOPOLOGY.inputs). Any mouthed virtunism can eat both plant matter
+   * and meat/prey — there's no separate diet gate, just what you're
+   * physically equipped to catch. Candidates come from the spatial grid
+   * (only nearby buckets), not the whole population. */
+  private buildInputs(cell: Virtunism): number[] {
     const sr = cell.genome.senseRadius;
     const canEat = cell.canEat;
 
@@ -348,7 +403,8 @@ export class World {
     let bestFoodD = sr;
 
     if (canEat) {
-      for (const f of this.plantFood) {
+      const nearbyFood = this.foodGrid.queryRadius(cell.x, cell.y, sr);
+      for (const f of nearbyFood) {
         const dx = f.x - cell.x;
         const dy = f.y - cell.y;
         const d = Math.hypot(dx, dy);
@@ -359,18 +415,8 @@ export class World {
           foodDist = d / sr;
         }
       }
-      for (const f of this.meatFood) {
-        const dx = f.x - cell.x;
-        const dy = f.y - cell.y;
-        const d = Math.hypot(dx, dy);
-        if (d < bestFoodD && this.inFOV(cell, f.x, f.y)) {
-          bestFoodD = d;
-          foodDx = dx / sr;
-          foodDy = dy / sr;
-          foodDist = d / sr;
-        }
-      }
-      for (const other of this.cells) {
+      const nearbyCells = this.virtunismGrid.queryRadius(cell.x, cell.y, sr);
+      for (const other of nearbyCells) {
         if (other === cell || !other.alive) continue;
         if (other.effectiveDefenseSize >= cell.genome.size * this.predationSizeRatio * this.predatorReach(cell)) continue;
         const dx = other.x - cell.x;
@@ -389,39 +435,43 @@ export class World {
     let threatDy = 0;
     let threatDist = 1;
     let bestThreatD = sr;
-    for (const other of this.cells) {
-      if (other === cell || !other.alive || !other.canEat) continue;
-      if (cell.effectiveDefenseSize >= other.genome.size * this.predationSizeRatio * this.predatorReach(other)) continue;
+    let mateDx = 0;
+    let mateDy = 0;
+    let mateDist = 1;
+    let bestMateD = sr;
+    const wantsMate = cell.genome.reproductionMode === 'sexual';
+
+    const nearbyForThreatAndMate = this.virtunismGrid.queryRadius(cell.x, cell.y, sr);
+    for (const other of nearbyForThreatAndMate) {
+      if (other === cell || !other.alive) continue;
       const dx = other.x - cell.x;
       const dy = other.y - cell.y;
       const d = Math.hypot(dx, dy);
-      if (d < bestThreatD && this.inFOV(cell, other.x, other.y)) {
+
+      if (
+        other.canEat &&
+        cell.effectiveDefenseSize < other.genome.size * this.predationSizeRatio * this.predatorReach(other) &&
+        d < bestThreatD &&
+        this.inFOV(cell, other.x, other.y)
+      ) {
         bestThreatD = d;
         threatDx = dx / sr;
         threatDy = dy / sr;
         threatDist = d / sr;
       }
-    }
 
-    let mateDx = 0;
-    let mateDy = 0;
-    let mateDist = 1;
-    if (cell.genome.reproductionMode === 'sexual') {
-      let bestMateD = sr;
-      for (const other of this.cells) {
-        if (other === cell || !other.alive) continue;
-        if (other.lineageId !== cell.lineageId) continue;
-        if (other.genome.reproductionMode !== 'sexual') continue;
-        if (!other.canMate()) continue;
-        const dx = other.x - cell.x;
-        const dy = other.y - cell.y;
-        const d = Math.hypot(dx, dy);
-        if (d < bestMateD && this.inFOV(cell, other.x, other.y)) {
-          bestMateD = d;
-          mateDx = dx / sr;
-          mateDy = dy / sr;
-          mateDist = d / sr;
-        }
+      if (
+        wantsMate &&
+        other.lineageId === cell.lineageId &&
+        other.genome.reproductionMode === 'sexual' &&
+        other.canMate() &&
+        d < bestMateD &&
+        this.inFOV(cell, other.x, other.y)
+      ) {
+        bestMateD = d;
+        mateDx = dx / sr;
+        mateDy = dy / sr;
+        mateDist = d / sr;
       }
     }
 
@@ -437,9 +487,9 @@ export class World {
     const wallUrgencyY = clamp(1 - marginY / sr, 0, 1) * wallSignY;
 
     // A per-individual oscillator ("run and tumble" drive) — without it a
-    // cell with nothing nearby sees an almost constant input vector and a
-    // random brain settles into a fixed turn output, orbiting a tiny circle
-    // forever. Gives every genome some baseline ability to explore.
+    // virtunism with nothing nearby sees an almost constant input vector
+    // and a random brain settles into a fixed turn output, orbiting a tiny
+    // circle forever. Gives every genome some baseline ability to explore.
     const wander = Math.sin(cell.age * 0.05 + cell.id * 0.7321);
 
     return [
@@ -461,11 +511,11 @@ export class World {
     ];
   }
 
-  private collectColonyMembers(root: Cell): Cell[] {
-    const members: Cell[] = [];
-    const stack: Cell[] = [root];
+  private collectColonyMembers(root: Virtunism): Virtunism[] {
+    const members: Virtunism[] = [];
+    const stack: Virtunism[] = [root];
     while (stack.length) {
-      const cell = stack.pop() as Cell;
+      const cell = stack.pop() as Virtunism;
       members.push(cell);
       for (const child of cell.attachedChildren) stack.push(child);
     }
@@ -475,12 +525,12 @@ export class World {
   /** Moves an entire bonded colony as one rigid body: every member's brain
    * cast a [turn, thrust] vote this tick (cached in lastOutputs); votes are
    * pooled weighted by each member's own flagella investment, so
-   * heavily-flagellated members steer more than a bare passenger cell
-   * would. The colony's top speed comes from its *pooled* flagella power
-   * (with diminishing returns), same shape as a solo cell's but bigger.
+   * heavily-flagellated members steer more than a bare passenger would. The
+   * colony's top speed comes from its *pooled* flagella power (with
+   * diminishing returns), same shape as a solo virtunism's but bigger.
    * After integrating the root, every other member is repositioned from
    * its fixed parent-relative joint. */
-  private moveColonyRigid(root: Cell, dt: number): void {
+  private moveColonyRigid(root: Virtunism, dt: number): void {
     const members = this.collectColonyMembers(root);
     let turnSum = 0;
     let thrustSum = 0;
@@ -509,9 +559,9 @@ export class World {
     root.clampToBounds(this.width, this.height, true);
 
     // Cascade positions from root down through the bond tree.
-    const stack: Cell[] = [root];
+    const stack: Virtunism[] = [root];
     while (stack.length) {
-      const cell = stack.pop() as Cell;
+      const cell = stack.pop() as Virtunism;
       for (const child of cell.attachedChildren) {
         const worldAngle = cell.heading + child.localAngle;
         child.x = cell.x + Math.cos(worldAngle) * child.localDist;
@@ -524,8 +574,9 @@ export class World {
   }
 
   /** Slowly equalizes energy across each bonded parent-child joint — how a
-   * colony shares resources, letting e.g. a flagella-heavy propulsion cell
-   * survive on income harvested by its photosynthetic/mouthed neighbors. */
+   * colony shares resources, letting e.g. a flagella-heavy propulsion
+   * member survive on income harvested by its photosynthetic/mouthed
+   * neighbors. */
   private diffuseColonyEnergy(dt: number): void {
     const rate = 0.08;
     for (const cell of this.cells) {
@@ -542,21 +593,15 @@ export class World {
       if (!cell.alive || !cell.canEat) continue;
       const reach = cell.radius + (deriveMouthPower(cell.genome) - 1) * 4;
       const yieldMult = cell.biteYield;
-      for (let i = this.plantFood.length - 1; i >= 0; i--) {
-        const f = this.plantFood[i];
+      const nearbyFood = this.foodGrid.queryRadius(cell.x, cell.y, reach + 10);
+      for (const f of nearbyFood) {
         const d = Math.hypot(f.x - cell.x, f.y - cell.y);
-        if (d < reach + f.radius) {
-          cell.eat(f.energy * yieldMult);
-          this.plantFood.splice(i, 1);
-        }
-      }
-      for (let i = this.meatFood.length - 1; i >= 0; i--) {
-        const f = this.meatFood[i];
-        const d = Math.hypot(f.x - cell.x, f.y - cell.y);
-        if (d < reach + f.radius) {
-          cell.eat(f.energy * yieldMult);
-          this.meatFood.splice(i, 1);
-        }
+        if (d >= reach + f.radius) continue;
+        const bucket = f.kind === 'plant' ? this.plantFood : this.meatFood;
+        const idx = bucket.indexOf(f);
+        if (idx === -1) continue; // already eaten by someone else this pass
+        cell.eat(f.energy * yieldMult);
+        bucket.splice(idx, 1);
       }
     }
   }
@@ -564,17 +609,18 @@ export class World {
   private handlePredation(): void {
     for (const predator of this.cells) {
       if (!predator.alive || !predator.canEat) continue;
-      for (const prey of this.cells) {
+      const reach = predator.radius + (deriveMouthPower(predator.genome) - 1) * 4;
+      const nearby = this.virtunismGrid.queryRadius(predator.x, predator.y, reach + 30);
+      for (const prey of nearby) {
         if (prey === predator || !prey.alive) continue;
         if (prey.effectiveDefenseSize >= predator.genome.size * this.predationSizeRatio * this.predatorReach(predator)) continue;
         const d = Math.hypot(prey.x - predator.x, prey.y - predator.y);
-        const reach = predator.radius + (deriveMouthPower(predator.genome) - 1) * 4;
         if (d < reach + prey.radius * 0.6) {
           const mitigation = deriveArmorMitigation(prey.genome);
           const bite = prey.energy * 0.6 * clamp(predator.biteYield, 0.4, 1.6) * (1 - mitigation);
           predator.eat(bite);
           const corpseEnergy = Math.max(0, prey.energy - bite);
-          if (corpseEnergy > 0.5) this.meatFood.push(createFood('meat', prey.x, prey.y, corpseEnergy));
+          if (corpseEnergy > 0.5) this.spawnMeat(prey.x, prey.y, corpseEnergy);
           prey.alive = false;
           prey.detachFromColony();
           break; // one successful strike per predator per tick
@@ -583,7 +629,7 @@ export class World {
     }
   }
 
-  private findColonyRoot(cell: Cell): Cell {
+  private findColonyRoot(cell: Virtunism): Virtunism {
     let root = cell;
     while (root.attachedTo) root = root.attachedTo;
     return root;
@@ -591,23 +637,25 @@ export class World {
 
   private handleReproduction(): void {
     if (this.cells.length >= this.maxPopulation) return;
-    const newborns: Cell[] = [];
+    const newborns: Virtunism[] = [];
     const mated = new Set<number>();
 
-    // Sexual pairing: two same-lineage, mating-ready cells produce one
+    // Sexual pairing: two same-lineage, mating-ready virtunisms produce one
     // crossed-over child once they're within sensing range of each other —
-    // always ejected as a free cell (sexual reproduction is the "spread to
-    // a new lineage" path).
+    // always ejected as a free virtunism (sexual reproduction is the
+    // "spread to a new lineage" path).
     for (const a of this.cells) {
       if (this.cells.length + newborns.length >= this.maxPopulation) break;
       if (mated.has(a.id) || !a.canMate()) continue;
-      for (const b of this.cells) {
+      const meetRange = a.genome.senseRadius;
+      const candidates = this.virtunismGrid.queryRadius(a.x, a.y, meetRange);
+      for (const b of candidates) {
         if (b === a || mated.has(b.id) || !b.canMate()) continue;
         if (b.lineageId !== a.lineageId) continue;
         const d = Math.hypot(b.x - a.x, b.y - a.y);
-        const meetRange = Math.max(a.genome.senseRadius, b.genome.senseRadius);
-        if (d < meetRange && (this.inFOV(a, b.x, b.y) || this.inFOV(b, a.x, a.y))) {
-          newborns.push(mateCells(a, b, this.rng));
+        const range = Math.max(a.genome.senseRadius, b.genome.senseRadius);
+        if (d < range && (this.inFOV(a, b.x, b.y) || this.inFOV(b, a.x, a.y))) {
+          newborns.push(mateVirtunisms(a, b, this.rng));
           mated.add(a.id);
           mated.add(b.id);
           break;
@@ -615,8 +663,8 @@ export class World {
       }
     }
 
-    // Asexual: a cell with a bud organelle grows its colony (if there's
-    // room); everyone else ejects a free-floating clone.
+    // Asexual: a virtunism with a bud organelle grows its colony (if
+    // there's room); everyone else ejects a free-floating clone.
     for (const cell of this.cells) {
       if (this.cells.length + newborns.length >= this.maxPopulation) break;
       if (!cell.canReproduce()) continue;
@@ -634,14 +682,14 @@ export class World {
   }
 
   private cleanupDead(): void {
-    const survivors: Cell[] = [];
+    const survivors: Virtunism[] = [];
     for (const cell of this.cells) {
       if (!cell.alive) {
         cell.detachFromColony(); // already corpsed by handlePredation
         continue;
       }
       if (cell.isDead()) {
-        this.meatFood.push(createFood('meat', cell.x, cell.y, Math.max(4, cell.genome.size * 8)));
+        this.spawnMeat(cell.x, cell.y, Math.max(4, cell.genome.size * 8));
         cell.detachFromColony();
         continue;
       }

@@ -1,5 +1,5 @@
 let nextFoodId = 1;
-export function createFood(kind, x, y, energy) {
+export function createFood(kind, x, y, energy, bornTick = 0) {
     return {
         id: nextFoodId++,
         kind,
@@ -7,5 +7,6 @@ export function createFood(kind, x, y, energy) {
         y,
         energy,
         radius: kind === 'plant' ? 5 : 7,
+        bornTick,
     };
 }
