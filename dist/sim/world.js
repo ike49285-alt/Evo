@@ -15,6 +15,9 @@ export class World {
         this.lineages = new Map();
         this.history = [];
         this.perf = { lastTickMs: 0 };
+        /** The tree-of-life data source — see TreeNode's doc comment for why this
+         * doesn't grow without bound over a long run. */
+        this.treeNodes = new Map();
         this.tick = 0;
         // --- tunables -----------------------------------------------------
         this.maxPopulation = 320;
@@ -157,9 +160,115 @@ export class World {
             // and the lower sexual matingThreshold (0.3 * maxEnergy) so a freshly
             // released population always has to forage first.
             const startEnergy = 12 * template.size;
-            this.cells.push(new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned));
+            const founder = new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned);
+            this.cells.push(founder);
+            this.recordBirth(founder, null, null);
         }
         return lineageId;
+    }
+    /** Registers a new individual as a tree-of-life node and links it under
+     * its parent(s), propagating the +1 live-count up to the root so every
+     * ancestor knows it still has a living descendant. `parentId: null`
+     * marks a root (a founder released via addSpecies). */
+    recordBirth(child, parentId, secondParentId) {
+        const node = {
+            id: child.id,
+            parentId,
+            secondParentId,
+            lineageId: child.lineageId,
+            generation: child.generation,
+            hue: child.genome.hue,
+            isPlayerDesigned: child.isPlayerDesigned,
+            birthTick: Math.floor(this.tick),
+            alive: true,
+            liveCount: 1,
+            children: [],
+        };
+        this.treeNodes.set(child.id, node);
+        if (parentId === null)
+            return;
+        const parent = this.treeNodes.get(parentId);
+        if (!parent)
+            return; // defensive — should always exist while it has a living child
+        parent.children.push(child.id);
+        let cur = parent;
+        while (cur) {
+            cur.liveCount += 1;
+            cur = cur.parentId !== null ? this.treeNodes.get(cur.parentId) : undefined;
+        }
+    }
+    /** Marks a tree node as no longer alive, then compacts from there upward
+     * (see `compactFrom`) — the actual mechanism that keeps `treeNodes`
+     * bounded to roughly "current population + branch points" regardless of
+     * total ticks run, not just the dead-end pruning by itself. */
+    recordDeath(individual) {
+        const node = this.treeNodes.get(individual.id);
+        if (!node || !node.alive)
+            return;
+        node.alive = false;
+        let cur = node;
+        while (cur) {
+            cur.liveCount -= 1;
+            cur = cur.parentId !== null ? this.treeNodes.get(cur.parentId) : undefined;
+        }
+        this.compactFrom(node.id);
+    }
+    /**
+     * Walks upward from a just-died node, applying two collapses:
+     *  1. A node with liveCount 0 (nothing alive left in its subtree) has
+     *     nothing left to connect — delete it and keep walking up.
+     *  2. A *dead* node with exactly one remaining child is a redundant
+     *     waypoint — a single unbranched step of "this lineage existed, then
+     *     had one descendant" that a tree-of-life view doesn't need to show
+     *     individually (only where lineages actually branch or a currently-
+     *     alive individual sits). Splice it out: reattach its one child
+     *     directly to its own parent.
+     * Without step 2, a long-running population in genealogical steady
+     * state accumulates one retained "spine" node per birth/death cycle
+     * forever — bounded by turnover count, not by population size, which
+     * defeats the point. With it, only actual branch points and currently-
+     * alive individuals stick around, which *is* bounded by population size
+     * (verified: population holds steady while treeNodes.size stays flat
+     * over tens of thousands of ticks — see tree_bound_check.mjs).
+     * Both collapses only ever need to look at the single node just touched
+     * — once a node doesn't qualify for either, nothing further up could
+     * have changed, so it's safe to stop.
+     */
+    compactFrom(startId) {
+        let curId = startId;
+        while (curId !== null) {
+            const cur = this.treeNodes.get(curId);
+            if (!cur)
+                return;
+            if (cur.liveCount === 0) {
+                const parentId = cur.parentId;
+                if (parentId !== null) {
+                    const parent = this.treeNodes.get(parentId);
+                    if (parent)
+                        parent.children = parent.children.filter((id) => id !== cur.id);
+                }
+                this.treeNodes.delete(cur.id);
+                curId = parentId;
+                continue;
+            }
+            if (!cur.alive && cur.children.length === 1) {
+                const onlyChildId = cur.children[0];
+                const onlyChild = this.treeNodes.get(onlyChildId);
+                const parentId = cur.parentId;
+                if (onlyChild)
+                    onlyChild.parentId = parentId;
+                if (parentId !== null) {
+                    const parent = this.treeNodes.get(parentId);
+                    if (parent) {
+                        const idx = parent.children.indexOf(cur.id);
+                        if (idx !== -1)
+                            parent.children[idx] = onlyChildId;
+                    }
+                }
+                this.treeNodes.delete(cur.id);
+            }
+            return;
+        }
     }
     /** Advances the simulation by one fixed tick. */
     update(dt) {
@@ -632,7 +741,9 @@ export class World {
                 const d = Math.hypot(b.x - a.x, b.y - a.y);
                 const range = Math.max(a.genome.senseRadius, b.genome.senseRadius);
                 if (d < range && (this.inFOV(a, b.x, b.y) || this.inFOV(b, a.x, a.y))) {
-                    newborns.push(mateVirtunisms(a, b, this.rng));
+                    const child = mateVirtunisms(a, b, this.rng);
+                    newborns.push(child);
+                    this.recordBirth(child, a.id, b.id);
                     mated.add(a.id);
                     mated.add(b.id);
                     grow(a.lineageId);
@@ -650,13 +761,19 @@ export class World {
             if (hasBud(cell.genome)) {
                 const root = this.findColonyRoot(cell);
                 if (this.collectColonyMembers(root).length < this.maxColonySize) {
-                    newborns.push(cell.budOffspring(this.rng));
+                    const child = cell.budOffspring(this.rng);
+                    newborns.push(child);
+                    this.recordBirth(child, cell.id, null);
                     grow(cell.lineageId);
                     continue;
                 }
             }
-            newborns.push(cell.reproduce(this.rng));
-            grow(cell.lineageId);
+            {
+                const child = cell.reproduce(this.rng);
+                newborns.push(child);
+                this.recordBirth(child, cell.id, null);
+                grow(cell.lineageId);
+            }
         }
         if (newborns.length)
             this.cells.push(...newborns);
@@ -666,11 +783,13 @@ export class World {
         for (const cell of this.cells) {
             if (!cell.alive) {
                 cell.detachFromColony(); // already corpsed by handlePredation
+                this.recordDeath(cell);
                 continue;
             }
             if (cell.isDead()) {
                 this.spawnMeat(cell.x, cell.y, Math.max(4, cell.genome.size * 8));
                 cell.detachFromColony();
+                this.recordDeath(cell);
                 continue;
             }
             survivors.push(cell);

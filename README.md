@@ -69,6 +69,15 @@ deliberate small distinction from the literal biology it's inspired by.
   reached, a live **morph scatter plot** (every virtunism plotted as one
   dot — size vs. chloroplast/mouth diet lean, colored by hue), and rolling
   charts of population and average traits.
+- **Tree of Life drawer** (bottom of the screen): every virtunism that's
+  ever lived, drawn as a genealogy — dots are individuals, lines trace
+  parent → child, time runs left to right. Click a dot to trace its full
+  ancestry back to a founder and, if it's still alive, find it highlighted
+  in the dish. This isn't a full history log: a branch is only kept around
+  as long as something alive still traces back through it, so the view
+  stays bounded by current population + branch points, not by how long
+  the dish has been running (verified flat over 60,000+ ticks — see
+  "Performance architecture" below).
 
 ## What actually happens
 
@@ -134,6 +143,18 @@ rather than a hope:
 Carrion (dead-virtunism / predation leftovers) decays after ~500 ticks and
 is hard-capped, so a long-running dish can't quietly accumulate an
 unbounded amount of it and slow every downstream cost.
+
+The Tree of Life's ancestry data (`World.treeNodes`) gets the same
+treatment for the same reason: a naive "log every birth forever" design
+would grow linearly with total ticks run, not population — a slow leak
+that wouldn't show up in a short test. Instead a dead individual is
+forgotten the instant nothing alive still traces through it, *and*
+unbranched dead "waypoints" (a dead individual with exactly one surviving
+line of descent) get spliced out of the tree rather than kept forever —
+the same collapsing a real coalescent/pedigree tree does. Verified against
+a 60,000-tick run at a stable population: node count climbs briefly as the
+population's first generations spread out, then plateaus and stays flat
+for the rest of the run instead of climbing with tick count.
 
 ## Running it locally
 

@@ -77,7 +77,7 @@ export class Renderer {
     };
   }
 
-  draw(world: World, options: { showVision?: boolean } = {}): void {
+  draw(world: World, options: { showVision?: boolean; highlightId?: number | null } = {}): void {
     const ctx = this.ctx;
     this.animT += 1;
     ctx.save();
@@ -118,11 +118,25 @@ export class Renderer {
       ctx.stroke();
     }
 
+    let highlighted: { cell: Virtunism; p: { x: number; y: number }; r: number } | null = null;
     for (const cell of world.cells) {
       const p = this.worldToScreen(cell.x, cell.y);
       const r = cell.radius * this.camera.zoom;
+      if (cell.id === options.highlightId) highlighted = { cell, p, r };
       if (p.x < -r || p.y < -r || p.x > this.viewportWidth + r || p.y > this.viewportHeight + r) continue;
       this.drawCell(cell, p, r, !!options.showVision);
+    }
+
+    // Tree-of-life selection marker — drawn last so it's never occluded by
+    // a neighbor, a slowly pulsing ring so it reads as "selected", not
+    // just "player-designed" (which gets its own always-on thin ring).
+    if (highlighted) {
+      const pulse = 3 + Math.sin(this.animT * 0.12) * 1.5;
+      ctx.strokeStyle = 'rgba(255, 220, 90, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(highlighted.p.x, highlighted.p.y, highlighted.r + 7 + pulse, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     ctx.restore();

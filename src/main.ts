@@ -3,6 +3,7 @@ import { ReproductionMode } from './sim/types.js';
 import { StarterLoadout, TRAIT_LIMITS, deriveMouthPower, deriveChloroplastPower } from './sim/genome.js';
 import { World } from './sim/world.js';
 import { drawSparkline, drawScatter, ScatterPoint } from './ui/chart.js';
+import { drawTree, hitTestTree, TreeNodeScreenPos } from './ui/treeview.js';
 
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 1500;
@@ -80,6 +81,7 @@ el<HTMLButtonElement>('btn-fit').addEventListener('click', () => {
 el<HTMLButtonElement>('btn-reset').addEventListener('click', () => {
   world = World.createDefault(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
   renderer.fitToWorld(world);
+  selectedIndividualId = null;
 });
 
 let showVision = false;
@@ -240,6 +242,68 @@ function updateHudAndStats(): void {
   }
 }
 
+// --- tree of life -----------------------------------------------------
+const treeDrawer = el<HTMLDivElement>('tree-drawer');
+const treeTab = el<HTMLButtonElement>('tree-tab');
+const treeCanvas = el<HTMLCanvasElement>('chart-tree');
+const treeInfo = el('tree-info');
+
+let treeDrawerOpen = false;
+let selectedIndividualId: number | null = null;
+let treePositions = new Map<number, TreeNodeScreenPos>();
+
+treeTab.addEventListener('click', () => {
+  treeDrawerOpen = !treeDrawerOpen;
+  treeDrawer.classList.toggle('open', treeDrawerOpen);
+  treeTab.classList.toggle('active', treeDrawerOpen);
+  // The dish canvas shares the remaining vertical space with this drawer,
+  // so its pixel size actually changes when the drawer opens/closes.
+  handleResize();
+});
+
+function describeSelection(): void {
+  if (selectedIndividualId === null) {
+    treeInfo.textContent = '';
+    return;
+  }
+  const node = world.treeNodes.get(selectedIndividualId);
+  if (!node) {
+    treeInfo.textContent = '';
+    selectedIndividualId = null;
+    return;
+  }
+  const lineageName = world.lineages.get(node.lineageId)?.name ?? `Species ${node.lineageId}`;
+  const parents =
+    node.parentId === null
+      ? 'founder'
+      : node.secondParentId !== null
+        ? `of #${node.parentId} & #${node.secondParentId}`
+        : `of #${node.parentId}`;
+  const status = node.alive ? 'alive' : 'extinct branch';
+  treeInfo.textContent = `#${node.id} · ${lineageName} · gen ${node.generation} · born t${node.birthTick} · ${parents} · ${status}`;
+}
+
+treeCanvas.addEventListener('click', (e) => {
+  const rect = treeCanvas.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * treeCanvas.width;
+  const y = ((e.clientY - rect.top) / rect.height) * treeCanvas.height;
+  const hit = hitTestTree(treePositions, x, y);
+  if (hit !== null) {
+    selectedIndividualId = hit;
+    describeSelection();
+  }
+});
+
+el<HTMLButtonElement>('tree-clear').addEventListener('click', () => {
+  selectedIndividualId = null;
+  describeSelection();
+});
+
+function updateTree(): void {
+  if (!treeDrawerOpen) return;
+  treePositions = drawTree(treeCanvas, world.treeNodes, { selectedId: selectedIndividualId });
+}
+
 // --- main loop --------------------------------------------------------
 // A hard time budget for simulation work per animation frame — this is
 // what makes "consistent performance" an actual guarantee rather than a
@@ -258,8 +322,9 @@ function frame(): void {
       if (performance.now() - frameStart > TICK_TIME_BUDGET_MS) break;
     }
   }
-  renderer.draw(world, { showVision });
+  renderer.draw(world, { showVision, highlightId: selectedIndividualId });
   updateHudAndStats();
+  updateTree();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
