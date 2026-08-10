@@ -1,13 +1,18 @@
 # Evo — a stable virtual ecosystem
 
-A browser-based petri dish where **virtunisms** — virtual organisms, not a
-simulation of any specific real biology — grow and adapt. You design a
-virtunism's body from real organelles, release it into a shared dish, and
+A browser-based digital terrarium where **virtunisms** — virtual organisms,
+not a simulation of any specific real biology — grow and adapt. You design
+a virtunism's body from real organelles, release it into a shared dish, and
 its descendants' bodies *and* brains evolve by mutation and natural
-selection over generations. The design priority for this build is **runtime
-stability**: the simulation is built on a spatial grid specifically so tick
-cost stays consistent regardless of population size or how long the dish
-has been running, not just a demo that happens to work for a few minutes.
+selection over generations.
+
+**This is a closed loop.** There is no food dispenser. The only energy this
+dish generates from nothing is sunlight, and the only thing that reaches it
+from outside is you dropping in a new species. Everything else — every
+calorie a mouthed virtunism ever spends — has to come from the dish itself:
+hunting something photosynthetic or smaller, or scavenging what's already
+dead. If a lineage can't make that work, it starves, same as it would in a
+real terrarium. Nothing steps in to save it.
 
 ## Why "virtunism"
 
@@ -17,78 +22,93 @@ deliberate small distinction from the literal biology it's inspired by.
 
 ## How it works
 
+- **Sunlight is the only external input.** Chloroplast organelles draw
+  energy directly from ambient light — no pellets, no puck-dropping. But
+  sunlight is a *shared, finite budget* for the whole dish (see
+  "Carrying capacity" below), not a per-virtunism freebie: it's what gives
+  photosynthesizers an actual population ceiling instead of growing to
+  fill every open slot in the dish.
 - **Organelles (physical evolution):** a virtunism's body is a sized
   chassis with organelles mounted around the rim — **flagella** (speed &
-  agility), **mouths** (eat plant matter, carrion, or smaller virtunisms),
-  **chloroplasts** (passive energy from ambient light — the "plant" path),
-  **eyes** (each one its own vision cone), and **armor** (harder to catch
-  and eat). There's no "diet" label: what a virtunism eats falls out of
-  what it's physically carrying. Every organelle has a real upkeep cost, so
-  a loadout is a bet, not a free upgrade — mutation adds, removes, resizes,
-  and repositions organelles generation over generation, and natural
-  selection prunes what doesn't pay for itself.
-- **Multicellularity:** give a species a **bud gland** and its offspring
-  stay physically attached instead of drifting off, growing into a simple
-  colony — a tree of bonded virtunisms that moves as one rigid body (every
-  member's brain "votes" on thrust and turning, weighted by its own
-  flagella) and shares energy across bonds by diffusion. Losing a member to
-  a predator splits the colony rather than deleting it. The default "Wild
-  Grazers" are bud-capable, so colonies form on their own from the moment
-  you open the dish.
+  agility), **mouths** (eat carrion or smaller/weaker virtunisms —
+  including photosynthesizers), **chloroplasts** (the sunlight path),
+  **eyes** (each one its own vision cone), and **armor** (harder to catch).
+  Every organelle has a real upkeep cost, so a loadout is a bet, not a free
+  upgrade — mutation adds, removes, resizes, and repositions organelles
+  generation over generation, and natural selection prunes what doesn't pay
+  for itself.
+- **Multicellularity:** a **bud gland** makes a lineage's offspring stay
+  physically attached instead of drifting off, growing into a simple colony
+  — a tree of bonded virtunisms that moves as one rigid body and shares
+  energy across bonds by diffusion. The default "Wild Grazers" are
+  bud-capable, so colonies form on their own from the moment you open the
+  dish.
 - **Brain (behavioral evolution):** every virtunism has a small neural
-  network (15 sensor inputs → 10 hidden neurons → 2 outputs: turn, thrust)
-  that decides how it moves in response to nearby food, threats, potential
-  mates, its own energy, and dish walls. New virtunisms start with random
-  weights; each offspring's weights are a mutated copy of its parent's (or,
-  for sexual reproduction, a shuffled mix of both parents'). There's no
-  training step — bad brains just fail to find food and die out, while
-  brains that happen to steer toward food (or mates) reproduce more.
+  network (15 sensor inputs → 10 hidden neurons → 2 outputs: turn, thrust).
+  New virtunisms start with random weights; each offspring's weights are a
+  mutated copy of its parent's (or a shuffled mix of both parents', for
+  sexual reproduction). Bad brains just fail to find food and die out.
 - **Reproduction — asexual, sexual, or budded:** asexual virtunisms
-  reproduce solo once they cross an energy threshold; the child is a
-  mutated clone. Sexual virtunisms need to find another mating-ready
-  virtunism of the same lineage — the child's traits, organelles, and brain
-  weights are each independently drawn from one parent or the other
-  (crossover), then mutated. A virtunism with a bud gland buds an attached
-  child instead — how colonies grow.
-- **Ecosystem:** food regrows over time; carrion decays and is capped so it
-  can't accumulate without bound over a long run. Energy drives movement,
-  aging, and reproduction.
+  reproduce solo past an energy threshold; sexual ones need to find another
+  mating-ready virtunism of the same lineage and cross over; budding grows
+  an attached colony instead of ejecting a child.
+- **Carrying capacity, twice over:**
+  1. *Sunlight budget.* Total photosynthetic demand across the whole dish
+     competes for one shared light budget — over budget, everyone's income
+     scales down together. This is what gives a pure-sunlight species an
+     actual population ceiling well short of "every slot in the dish,"
+     the same way real plants compete for light and nutrients.
+  2. *Per-lineage population share.* No single lineage — however
+     successful — can occupy more than ~65% of the total population cap.
+     Without this, a fast-growing photosynthesizer population would
+     structurally starve a slower-growing predator population of the room
+     to ever reproduce, even when the predator is perfectly capable of
+     feeding itself.
 - **Ecosystem tab:** live counts of colonies vs. solo virtunisms, average
-  colony size, reproduction-mode split, food levels, highest generation
+  colony size, reproduction-mode split, carrion levels, highest generation
   reached, and rolling charts of population and average traits.
 
-The dish is pre-seeded with a colonial, photosynthetic "Wild Grazers"
-population and a solitary, mobile "Wild Hunters" predator population.
+## What actually happens
+
+The dish is pre-seeded with "Wild Grazers" (pure photosynthesizers — no
+mouth at all, sunlight is their *only* possible income) and "Wild Hunters"
+(no chloroplasts — every calorie has to come from hunting Grazers or
+scavenging carrion). This is a real two-level food chain, and it behaves
+like one: population runs tested across many random seeds consistently show
+the photosynthesizer base holding a stable equilibrium indefinitely, while
+the predator population is a genuine — and genuinely *contingent* —
+evolutionary bet. Sometimes early hunters evolve effective chase behavior
+fast enough to establish, and you get real oscillating boom-bust
+predator-prey dynamics for thousands of generations. Sometimes they don't,
+and the dish quietly settles into a stable, thriving, predator-free
+ecosystem instead. Both are honest outcomes, not failures — this is what
+"if animals starve, they starve" actually looks like. If a run collapses
+further than you'd like, **Reset Dish** reseeds it, and the Designer is
+always there to drop in something new.
 
 ## Performance architecture
 
-This build exists specifically to make **consistent performance** — not
-population survival, not feature count — the primary constraint, after an
-earlier iteration of this project got fragile under long runs. Two things
-make that a guarantee rather than a hope:
+Consistent runtime performance — not population survival, not feature
+count — is this build's primary constraint, after an earlier iteration of
+this project got fragile under long runs. Two things make that a guarantee
+rather than a hope:
 
 1. **Spatial grid (`src/sim/grid.ts`).** Every neighbor-style query in the
    sim — nearest food, nearest threat, nearest mate, eating/predation
-   contact, sexual-mating pairing — used to be a linear scan over *every*
-   other entity: O(n) per entity, O(n²) per tick. Entities are now bucketed
-   by position in a uniform grid, rebuilt fresh every tick, so a query only
-   touches the handful of buckets actually nearby. Tick cost tracks local
-   density, not total population — verified to scale sub-quadratically well
-   past the population cap (see `scaling.mjs`-style tests: ~6ms/tick at the
-   320-virtunism cap, ~16ms at 640, not the ~24ms a quadratic system would
-   show).
+   contact, sexual-mating pairing — is bucketed by position and rebuilt
+   fresh every tick, so a query only touches nearby buckets instead of
+   scanning the whole population. Tick cost tracks local density, not total
+   population — verified to scale sub-quadratically well past the
+   population cap.
 2. **Per-frame time budget (`src/main.ts`).** The game loop never spends
    more than ~18ms/frame running ticks, regardless of the chosen speed
-   multiplier. If a frame's simulation work hits that budget partway
-   through, it just stops early and picks up next frame — a busy tick
-   degrades to a lower effective speed instead of freezing the tab. The
-   live "Sim time/tick" HUD readout shows the actual cost so this isn't
-   just a claim.
+   multiplier. A busy tick degrades to a lower effective speed instead of
+   freezing the tab. The live "Sim time/tick" HUD readout shows the actual
+   cost.
 
-A secondary fix in the same spirit: carrion (dead-virtunism / predation
-leftovers) used to have no cap and no decay, so a long-running dish would
-quietly accumulate more and more of it, slowly growing every downstream
-cost. It now decays after ~500 ticks and is hard-capped as a backstop.
+Carrion (dead-virtunism / predation leftovers) decays after ~500 ticks and
+is hard-capped, so a long-running dish can't quietly accumulate an
+unbounded amount of it and slow every downstream cost.
 
 ## Running it locally
 
@@ -106,8 +126,8 @@ you iterate.
 ## Controls
 
 - **Drag** the dish to pan, **scroll** to zoom.
-- **Play/Pause**, **1×/2×/4×/8×** speed, **+ Food**, **Fit View**, **👁
-  Vision** (toggle every virtunism's per-eye vision cones), **Reset Dish**.
+- **Play/Pause**, **1×/2×/4×/8×** speed, **Fit View**, **👁 Vision** (toggle
+  every virtunism's per-eye vision cones), **Reset Dish**.
 - Virtunisms you personally release get a thin white outline. Sexual-mode
   virtunisms get a small pale "nucleus" marker; thin lines between
   virtunisms are bond membranes — that's a colony.
@@ -122,9 +142,10 @@ src/
     nn.ts           the brain (tiny feedforward net, evolves by mutation)
     genome.ts       organelle model, mutation, crossover, derived stats
     virtunism.ts    the entity: movement, metabolism, reproduction, bonds
-    food.ts         plant/meat food items
-    world.ts        the tick loop — grid-backed sensing, colony movement,
-                    eating, predation, reproduction/budding, stats
+    food.ts         carrion — the only discrete food item
+    world.ts        the tick loop — sunlight budget, grid-backed sensing,
+                    colony movement, eating, predation, reproduction,
+                    per-lineage population share, stats
   render/
     renderer.ts     Canvas2D — organelles, bond membranes, vision cones
   ui/
@@ -134,7 +155,8 @@ src/
 
 `sim/` has no DOM dependency, so it can be driven headlessly — useful for
 both balance tuning and perf verification (see the constants at the top of
-`world.ts` and `virtunism.metabolize()` for the energy economy).
+`world.ts` and `virtunism.metabolize()`/`photosynthesize()` for the energy
+economy).
 
 ## A note on tech choices
 

@@ -11,7 +11,6 @@ function clamp(v, min, max) {
 export class World {
     constructor(width, height, seed) {
         this.cells = [];
-        this.plantFood = [];
         this.meatFood = [];
         this.lineages = new Map();
         this.history = [];
@@ -20,28 +19,45 @@ export class World {
         // --- tunables -----------------------------------------------------
         this.maxPopulation = 320;
         this.maxColonySize = 14;
-        this.maxPlantFood = 900;
-        this.plantSpawnRate = 3.2; // pellets per tick
-        this.plantEnergy = 18;
-        // Carrion isn't capacity-limited at spawn like plant food (kills happen
-        // whenever they happen), so left alone it accumulates without bound over
-        // a long run — a slow, easy-to-miss performance leak, not just a
-        // realism gap. Decay plus a hard cap keeps the standing amount bounded
-        // regardless of how long the dish has been running.
+        // There is no ambient "plant food" resource — sunlight (chloroplast
+        // organelles) is the only energy this dish generates from nothing.
+        // Carrion is the only discrete food item left, and even that isn't a
+        // free lunch: it only exists because something died. Left uncapped it
+        // would still accumulate without bound over a long run (a slow,
+        // easy-to-miss performance leak as much as a realism gap), so it decays
+        // and is hard-capped as a backstop.
         this.maxMeatFood = 260;
         this.meatDecayTicks = 500;
+        // Sunlight itself is unlimited, but this dish's *usable* share of it
+        // isn't — real photosynthesizers compete for light and nutrients the
+        // same way animals compete for prey. Without this, chloroplasts have no
+        // carrying capacity at all (unlike animals, which are naturally capped
+        // by how much prey exists) and photosynthesizers just grow to fill the
+        // entire population cap, leaving predators no room to ever reproduce.
+        // When total demand exceeds this budget, every photosynthesizer's
+        // income is scaled down proportionally — a shared-resource ceiling, not
+        // a per-species quota.
+        this.sunlightCapacity = 24;
+        // The shared population cap has the same monopolization problem as
+        // unlimited sunlight would: whichever lineage has the most individuals
+        // wins the most reproduction attempts each tick and structurally starves
+        // everyone else of the *room* to reproduce, even if those others are
+        // metabolically fine. This is a soft territorial ceiling per lineage —
+        // no single one can eat the whole population cap — so a slow-growing
+        // predator population isn't crowded out of existing at all by a fast-
+        // growing photosynthesizer one.
+        this.maxLineageShare = 0.65;
         this.predationSizeRatio = 0.88; // prey must be <= predator.size * this
         this.statsSampleInterval = 10;
         this.maxHistory = 400;
         // Grid cell sizes: virtunismGrid is sized for the typical sensing range
-        // (a few hundred units); foodGrid is much finer since eating/predation
-        // contact is a short-range check. Both are rebuilt fresh each tick (or
-        // twice, for virtunisms — see update()) rather than maintained
+        // (a few hundred units); carrionGrid is much finer since eating/
+        // predation contact is a short-range check. Both are rebuilt fresh each
+        // tick (or twice, for virtunisms — see update()) rather than maintained
         // incrementally.
         this.virtunismGrid = new SpatialGrid(110);
-        this.foodGrid = new SpatialGrid(50);
+        this.carrionGrid = new SpatialGrid(50);
         this.nextLineageId = 1;
-        this.plantSpawnAccumulator = 0;
         this.width = width;
         this.height = height;
         this.rng = new Rng(seed);
@@ -52,28 +68,33 @@ export class World {
         return world;
     }
     seedBaseSpecies() {
-        // Photosynthetic, colonial grazers — bud-capable so colonies form on
-        // their own without you having to design one first.
+        // Pure photosynthesizers — no mouth at all, so sunlight (via their
+        // chloroplasts) is their *only* possible energy source. Bud-capable
+        // so colonies form on their own without you having to design one
+        // first. These are the base of the food chain: the only other way
+        // energy enters the dish is by eating one of these (or their carrion).
         this.addSpecies({
             reproductionMode: 'asexual',
             size: 0.9,
             senseRadius: 150,
             maxAge: 1000,
             hue: 125,
-            loadout: { flagella: 2, mouths: 1, chloroplasts: 2, eyes: 1, bud: true },
+            loadout: { flagella: 2, chloroplasts: 3, eyes: 1, bud: true },
         }, 18, { name: 'Wild Grazers', spread: true });
-        // Solitary mobile predators — no chloroplasts, no bud, built to chase.
+        // Solitary mobile predators — no chloroplasts, so every calorie has to
+        // come from hunting live prey or scavenging carrion. Deliberately
+        // light starting loadout (no armor yet, one eye) — every organelle is
+        // upkeep the founding generation's still-random brains have to earn
+        // back purely by catching things, so a leaner body buys more
+        // generations to actually evolve a decent chase before starving out.
         this.addSpecies({
             reproductionMode: 'asexual',
-            size: 1.3,
+            size: 1.55,
             senseRadius: 190,
             maxAge: 900,
             hue: 4,
-            loadout: { flagella: 3, mouths: 1, eyes: 2, armor: 1 },
-        }, 10, { name: 'Wild Hunters', spread: true });
-        for (let i = 0; i < this.maxPlantFood * 0.6; i++) {
-            this.plantFood.push(createFood('plant', this.rng.range(20, this.width - 20), this.rng.range(20, this.height - 20), this.plantEnergy));
-        }
+            loadout: { flagella: 3, mouths: 1, eyes: 1 },
+        }, 22, { name: 'Wild Hunters', spread: true });
     }
     /** Releases a new population built from a fixed body template (as
      * designed in the editor) with independently-randomized brains and a
@@ -122,21 +143,11 @@ export class World {
         }
         return lineageId;
     }
-    addFoodBurst(count) {
-        for (let i = 0; i < count && this.plantFood.length < this.maxPlantFood; i++) {
-            this.plantFood.push(createFood('plant', this.rng.range(20, this.width - 20), this.rng.range(20, this.height - 20), this.plantEnergy));
-        }
-    }
     /** Advances the simulation by one fixed tick. */
     update(dt) {
         const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        this.spawnFood(dt);
         this.decayMeatFood();
-        this.foodGrid.clear();
-        for (const f of this.plantFood)
-            this.foodGrid.insert(f);
-        for (const f of this.meatFood)
-            this.foodGrid.insert(f);
+        this.carrionGrid.rebuild(this.meatFood);
         // Sense + think using positions from *before* this tick's movement (a
         // consistent "everyone sees the world as it was a moment ago" model).
         this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
@@ -163,6 +174,7 @@ export class World {
             if (cell.alive)
                 cell.metabolize(dt);
         }
+        this.applyPhotosynthesis(dt);
         // Rebuild with post-movement positions for contact-driven systems.
         this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
         this.handleEating();
@@ -245,7 +257,6 @@ export class World {
             avgArmor: sumArmor / n,
             avgAge: sumAge / n,
             maxGeneration,
-            plantFood: this.plantFood.length,
             meatFood: this.meatFood.length,
         };
     }
@@ -260,7 +271,7 @@ export class World {
     spawnMeat(x, y, energy) {
         if (this.meatFood.length >= this.maxMeatFood)
             this.meatFood.shift();
-        this.meatFood.push(createFood('meat', x, y, energy, Math.floor(this.tick)));
+        this.meatFood.push(createFood(x, y, energy, Math.floor(this.tick)));
     }
     /** Removes carrion that's been sitting long enough to rot away — the
      * actual fix for meat food's unbounded growth, not just the cap. */
@@ -269,13 +280,6 @@ export class World {
             return;
         const cutoff = this.tick - this.meatDecayTicks;
         this.meatFood = this.meatFood.filter((f) => f.bornTick > cutoff);
-    }
-    spawnFood(dt) {
-        this.plantSpawnAccumulator += this.plantSpawnRate * dt;
-        while (this.plantSpawnAccumulator >= 1 && this.plantFood.length < this.maxPlantFood) {
-            this.plantSpawnAccumulator -= 1;
-            this.plantFood.push(createFood('plant', this.rng.range(20, this.width - 20), this.rng.range(20, this.height - 20), this.plantEnergy, Math.floor(this.tick)));
-        }
     }
     /** True if world point (tx, ty) falls inside cell's field of view — a
      * narrow always-on "chemoreception" cone plus the union of whatever eye
@@ -306,9 +310,10 @@ export class World {
         return clamp(0.7 + deriveMouthPower(predator.genome) * 0.15, 0.7, 1.4);
     }
     /** Builds the fixed sensor vector consumed by Virtunism/NeuralNet (see
-     * BRAIN_TOPOLOGY.inputs). Any mouthed virtunism can eat both plant matter
-     * and meat/prey — there's no separate diet gate, just what you're
-     * physically equipped to catch. Candidates come from the spatial grid
+     * BRAIN_TOPOLOGY.inputs). A mouthed virtunism's only food sources are
+     * carrion and other virtunisms (predation) — there's no ambient food
+     * resource, so "prey" covers everything from a photosynthesizer smaller
+     * than you to a fresh corpse. Candidates come from the spatial grid
      * (only nearby buckets), not the whole population. */
     buildInputs(cell) {
         const sr = cell.genome.senseRadius;
@@ -318,8 +323,8 @@ export class World {
         let foodDist = 1;
         let bestFoodD = sr;
         if (canEat) {
-            const nearbyFood = this.foodGrid.queryRadius(cell.x, cell.y, sr);
-            for (const f of nearbyFood) {
+            const nearbyCarrion = this.carrionGrid.queryRadius(cell.x, cell.y, sr);
+            for (const f of nearbyCarrion) {
                 const dx = f.x - cell.x;
                 const dy = f.y - cell.y;
                 const d = Math.hypot(dx, dy);
@@ -490,23 +495,45 @@ export class World {
             cell.energy += transfer;
         }
     }
+    /** Grants photosynthesis income, throttled by a dish-wide sunlight
+     * budget shared across every chloroplast-bearing virtunism. If total
+     * demand is under budget everyone gets their full uncontested share
+     * (the common case at low population); once it isn't, income scales
+     * down proportionally for all of them — the mechanism that gives
+     * photosynthesizers an actual carrying capacity instead of growing to
+     * fill the entire population cap. */
+    applyPhotosynthesis(dt) {
+        let totalDemand = 0;
+        for (const cell of this.cells) {
+            if (cell.alive)
+                totalDemand += cell.baseSunlightDemand;
+        }
+        if (totalDemand <= 0)
+            return;
+        const availability = Math.min(1, this.sunlightCapacity / totalDemand);
+        for (const cell of this.cells) {
+            if (cell.alive)
+                cell.photosynthesize(dt, availability);
+        }
+    }
+    /** Carrion is the only discrete food item in the dish — everything else
+     * a mouthed virtunism eats, it has to catch alive (see handlePredation). */
     handleEating() {
         for (const cell of this.cells) {
             if (!cell.alive || !cell.canEat)
                 continue;
             const reach = cell.radius + (deriveMouthPower(cell.genome) - 1) * 4;
             const yieldMult = cell.biteYield;
-            const nearbyFood = this.foodGrid.queryRadius(cell.x, cell.y, reach + 10);
-            for (const f of nearbyFood) {
+            const nearbyCarrion = this.carrionGrid.queryRadius(cell.x, cell.y, reach + 10);
+            for (const f of nearbyCarrion) {
                 const d = Math.hypot(f.x - cell.x, f.y - cell.y);
                 if (d >= reach + f.radius)
                     continue;
-                const bucket = f.kind === 'plant' ? this.plantFood : this.meatFood;
-                const idx = bucket.indexOf(f);
+                const idx = this.meatFood.indexOf(f);
                 if (idx === -1)
                     continue; // already eaten by someone else this pass
                 cell.eat(f.energy * yieldMult);
-                bucket.splice(idx, 1);
+                this.meatFood.splice(idx, 1);
             }
         }
     }
@@ -514,7 +541,14 @@ export class World {
         for (const predator of this.cells) {
             if (!predator.alive || !predator.canEat)
                 continue;
-            const reach = predator.radius + (deriveMouthPower(predator.genome) - 1) * 4;
+            // A flat "lunge" bonus on top of body/mouth reach — without it, a
+            // baseline one-mouth predator has a genuinely tiny catch radius, and
+            // early-generation (still-random-brained) hunters need *some* margin
+            // to survive on lucky catches long enough for real chase behavior to
+            // evolve. Same lesson as foraging and mate-finding before it: a
+            // mechanic that's only winnable once you're already good at it never
+            // gets the chance to be learned at all.
+            const reach = predator.radius + 6 + (deriveMouthPower(predator.genome) - 1) * 4;
             const nearby = this.virtunismGrid.queryRadius(predator.x, predator.y, reach + 30);
             for (const prey of nearby) {
                 if (prey === predator || !prey.alive)
@@ -522,9 +556,15 @@ export class World {
                 if (prey.effectiveDefenseSize >= predator.genome.size * this.predationSizeRatio * this.predatorReach(predator))
                     continue;
                 const d = Math.hypot(prey.x - predator.x, prey.y - predator.y);
-                if (d < reach + prey.radius * 0.6) {
+                if (d < reach + prey.radius * 0.9) {
+                    // A deliberately modest fraction — real trophic pyramids only
+                    // pass roughly a tenth of prey biomass up a level. Too generous
+                    // here and predators can outbreed their own prey base faster
+                    // than it can recover, overshoot, and crash the whole dish (prey
+                    // hunted to extinction, then predators starve with nothing
+                    // left) instead of settling into an oscillating equilibrium.
                     const mitigation = deriveArmorMitigation(prey.genome);
-                    const bite = prey.energy * 0.6 * clamp(predator.biteYield, 0.4, 1.6) * (1 - mitigation);
+                    const bite = prey.energy * 0.35 * clamp(predator.biteYield, 0.4, 1.6) * (1 - mitigation);
                     predator.eat(bite);
                     const corpseEnergy = Math.max(0, prey.energy - bite);
                     if (corpseEnergy > 0.5)
@@ -547,6 +587,14 @@ export class World {
             return;
         const newborns = [];
         const mated = new Set();
+        const lineageCounts = new Map();
+        for (const c of this.cells)
+            lineageCounts.set(c.lineageId, (lineageCounts.get(c.lineageId) ?? 0) + 1);
+        const lineageCap = this.maxPopulation * this.maxLineageShare;
+        const roomFor = (lineageId) => (lineageCounts.get(lineageId) ?? 0) < lineageCap;
+        const grow = (lineageId) => {
+            lineageCounts.set(lineageId, (lineageCounts.get(lineageId) ?? 0) + 1);
+        };
         // Sexual pairing: two same-lineage, mating-ready virtunisms produce one
         // crossed-over child once they're within sensing range of each other —
         // always ejected as a free virtunism (sexual reproduction is the
@@ -554,7 +602,7 @@ export class World {
         for (const a of this.cells) {
             if (this.cells.length + newborns.length >= this.maxPopulation)
                 break;
-            if (mated.has(a.id) || !a.canMate())
+            if (mated.has(a.id) || !a.canMate() || !roomFor(a.lineageId))
                 continue;
             const meetRange = a.genome.senseRadius;
             const candidates = this.virtunismGrid.queryRadius(a.x, a.y, meetRange);
@@ -569,6 +617,7 @@ export class World {
                     newborns.push(mateVirtunisms(a, b, this.rng));
                     mated.add(a.id);
                     mated.add(b.id);
+                    grow(a.lineageId);
                     break;
                 }
             }
@@ -578,16 +627,18 @@ export class World {
         for (const cell of this.cells) {
             if (this.cells.length + newborns.length >= this.maxPopulation)
                 break;
-            if (!cell.canReproduce())
+            if (!cell.canReproduce() || !roomFor(cell.lineageId))
                 continue;
             if (hasBud(cell.genome)) {
                 const root = this.findColonyRoot(cell);
                 if (this.collectColonyMembers(root).length < this.maxColonySize) {
                     newborns.push(cell.budOffspring(this.rng));
+                    grow(cell.lineageId);
                     continue;
                 }
             }
             newborns.push(cell.reproduce(this.rng));
+            grow(cell.lineageId);
         }
         if (newborns.length)
             this.cells.push(...newborns);

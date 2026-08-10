@@ -59,9 +59,6 @@ document.querySelectorAll('.speed-btn').forEach((btn) => {
         speed = Number(btn.dataset.speed) || 1;
     });
 });
-el('btn-food').addEventListener('click', () => {
-    world.addFoodBurst(50);
-});
 el('btn-fit').addEventListener('click', () => {
     renderer.fitToWorld(world);
 });
@@ -142,7 +139,6 @@ const sGen = el('s-gen');
 const sColonies = el('s-colonies');
 const sColonySize = el('s-colonysize');
 const sSolo = el('s-solo');
-const sPlant = el('s-plant');
 const sMeat = el('s-meat');
 const sRepro = el('s-repro');
 const sMouths = el('s-mouths');
@@ -171,7 +167,6 @@ function updateHudAndStats() {
     sColonies.textContent = String(live.colonies);
     sColonySize.textContent = live.avgColonySize.toFixed(1);
     sSolo.textContent = String(live.soloCells);
-    sPlant.textContent = String(live.plantFood);
     sMeat.textContent = String(live.meatFood);
     sRepro.textContent = `${live.sexual} / ${live.asexual}`;
     sMouths.textContent = live.avgMouths.toFixed(2);

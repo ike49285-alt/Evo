@@ -1,8 +1,11 @@
-export type FoodKind = 'plant' | 'meat';
-
+/**
+ * Carrion — the only discrete food item in the dish. There's no ambient
+ * "plant food" resource: chloroplast organelles draw energy directly from
+ * sunlight (see Virtunism.metabolize), and everything else has to be eaten
+ * alive (predation) or scavenged here, from whatever died.
+ */
 export interface Food {
   id: number;
-  kind: FoodKind;
   x: number;
   y: number;
   energy: number;
@@ -12,14 +15,13 @@ export interface Food {
 
 let nextFoodId = 1;
 
-export function createFood(kind: FoodKind, x: number, y: number, energy: number, bornTick = 0): Food {
+export function createFood(x: number, y: number, energy: number, bornTick: number): Food {
   return {
     id: nextFoodId++,
-    kind,
     x,
     y,
     energy,
-    radius: kind === 'plant' ? 5 : 7,
+    radius: 7,
     bornTick,
   };
 }

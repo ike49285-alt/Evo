@@ -104,10 +104,13 @@ export class Virtunism {
                 this.heading = -this.heading;
         }
     }
-    /** Burns upkeep + movement energy, gains photosynthesis income, and ages
-     * by one tick. Every organelle has a real running cost — a bigger
-     * loadout is never free, it's a bet that what it does is worth what it
-     * burns. */
+    /** Burns upkeep + movement energy and ages by one tick. Every organelle
+     * has a real running cost — a bigger loadout is never free, it's a bet
+     * that what it does is worth what it burns. Photosynthesis income is
+     * handled separately by World (see photosynthesize()) since — unlike
+     * upkeep, which is purely a function of this virtunism's own body — it
+     * has to be weighed against every other photosynthesizer competing for
+     * the same finite sunlight. */
     metabolize(dt) {
         const size = this.genome.size;
         const organelles = this.genome.organelles;
@@ -132,10 +135,17 @@ export class Virtunism {
         const organelleUpkeep = 0.0035 * flagellaPower + 0.0025 * mouthPower + 0.0015 * chloroplastPower + 0.0006 * eyeCount + 0.002 * armorPower;
         const moveCost = 0.005 * this.speed * size;
         this.energy -= (baseUpkeep + organelleUpkeep + moveCost) * dt;
-        this.energy += derivePhotosynthesis(this.genome) * dt;
         this.age += dt;
         if (this.reproCooldown > 0)
             this.reproCooldown = Math.max(0, this.reproCooldown - dt);
+    }
+    /** This virtunism's uncontested share of sunlight — World scales this by
+     * a dish-wide availability multiplier before actually granting it. */
+    get baseSunlightDemand() {
+        return derivePhotosynthesis(this.genome);
+    }
+    photosynthesize(dt, availabilityMultiplier) {
+        this.energy += this.baseSunlightDemand * availabilityMultiplier * dt;
     }
     eat(energy) {
         this.energy = Math.min(this.maxEnergy, this.energy + energy);

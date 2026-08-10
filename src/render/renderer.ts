@@ -95,17 +95,7 @@ export class Renderer {
     ctx.lineWidth = 2;
     ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
 
-    // plant food
-    ctx.fillStyle = '#3fae5a';
-    for (const f of world.plantFood) {
-      const p = this.worldToScreen(f.x, f.y);
-      const r = Math.max(1.2, f.radius * this.camera.zoom);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // meat food (corpses / carrion)
+    // carrion — the only discrete food item; there's no ambient plant food
     ctx.fillStyle = '#b5502f';
     for (const f of world.meatFood) {
       const p = this.worldToScreen(f.x, f.y);
