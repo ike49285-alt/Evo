@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Evo — Virtunism Ecosystem</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%235ad46a'/%3E%3Ccircle cx='16' cy='16' r='14' fill='none' stroke='%230b1220' stroke-width='2'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <h1>Evo</h1>
+        <span class="tagline">a stable virtual ecosystem</span>
+      </div>
+      <div class="controls">
+        <button id="btn-play" class="btn primary" title="Play / pause the simulation">Pause</button>
+        <div class="speed-group" role="group" aria-label="Simulation speed">
+          <button class="speed-btn active" data-speed="1">1×</button>
+          <button class="speed-btn" data-speed="2">2×</button>
+          <button class="speed-btn" data-speed="4">4×</button>
+          <button class="speed-btn" data-speed="8">8×</button>
+        </div>
+        <button id="btn-fit" class="btn" title="Recenter the camera on the dish">Fit View</button>
+        <button id="btn-vision" class="btn" title="Show each virtunism's vision cone (eyes)">👁 Vision</button>
+        <button id="btn-reset" class="btn danger" title="Clear the dish and reseed the base ecosystem">Reset Dish</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="canvas-wrap">
+        <canvas id="sim-canvas"></canvas>
+        <div id="hud">
+          <div><span class="hud-label">Tick</span><span id="hud-tick">0</span></div>
+          <div><span class="hud-label">Population</span><span id="hud-pop">0</span></div>
+          <div><span class="hud-label">Highest gen.</span><span id="hud-gen">0</span></div>
+          <div><span class="hud-label">Sim time/tick</span><span id="hud-perf">0.0ms</span></div>
+        </div>
+        <div id="hint">Drag to pan · Scroll to zoom</div>
+      </div>
+
+      <aside id="sidebar">
+        <div class="tabs" role="tablist">
+          <button class="tab-btn active" data-tab="designer" role="tab">Designer</button>
+          <button class="tab-btn" data-tab="ecosystem" role="tab">Ecosystem</button>
+        </div>
+
+        <section id="tab-designer" class="tab-panel active">
+          <p class="panel-hint">
+            Design a virtunism's body plan and release it into the dish. Its
+            brain starts random — evolution (mutation + natural selection)
+            shapes how it actually behaves over the generations that follow.
+          </p>
+
+          <label class="field">
+            <span>Species name</span>
+            <input id="f-name" type="text" maxlength="24" value="My Species" />
+          </label>
+
+          <fieldset class="field">
+            <legend>Reproduction</legend>
+            <div class="segmented">
+              <label><input type="radio" name="repro" value="asexual" checked /> Asexual</label>
+              <label><input type="radio" name="repro" value="sexual" /> Sexual</label>
+            </div>
+          </fieldset>
+          <p class="panel-hint" id="repro-hint">
+            Asexual: reproduces solo, child is a mutated clone. Sexual: two
+            ready adults of this species have to physically meet — their
+            offspring's traits and brain are shuffled from both parents, then
+            mutated. Harder to pull off, more genetic mixing.
+          </p>
+
+          <fieldset class="field">
+            <legend>Organelles <em id="v-organelle-total">0 / 10</em></legend>
+            <div class="organelle-grid">
+              <label class="organelle-row">
+                <span class="organelle-swatch" data-organelle="flagellum"></span>
+                <span class="organelle-name">Flagella<small>speed &amp; agility</small></span>
+                <input id="f-flagella" type="number" min="0" max="6" step="1" value="2" />
+              </label>
+              <label class="organelle-row">
+                <span class="organelle-swatch" data-organelle="mouth"></span>
+                <span class="organelle-name">Mouths<small>eat carrion &amp; smaller virtunisms (incl. photosynthesizers)</small></span>
+                <input id="f-mouths" type="number" min="0" max="6" step="1" value="1" />
+              </label>
+              <label class="organelle-row">
+                <span class="organelle-swatch" data-organelle="chloroplast"></span>
+                <span class="organelle-name">Chloroplasts<small>passive energy from light</small></span>
+                <input id="f-chloroplasts" type="number" min="0" max="6" step="1" value="0" />
+              </label>
+              <label class="organelle-row">
+                <span class="organelle-swatch" data-organelle="eye"></span>
+                <span class="organelle-name">Eyes<small>each adds its own vision cone</small></span>
+                <input id="f-eyes" type="number" min="0" max="6" step="1" value="1" />
+              </label>
+              <label class="organelle-row">
+                <span class="organelle-swatch" data-organelle="armor"></span>
+                <span class="organelle-name">Armor<small>harder to catch &amp; eat</small></span>
+                <input id="f-armor" type="number" min="0" max="6" step="1" value="0" />
+              </label>
+            </div>
+            <label class="organelle-row bud-row">
+              <span class="organelle-swatch" data-organelle="bud"></span>
+              <span class="organelle-name">Bud gland<small>offspring stay attached &amp; grow into a colony</small></span>
+              <input id="f-bud" type="checkbox" />
+            </label>
+          </fieldset>
+          <p class="panel-hint">
+            Every organelle has a running energy cost, so a loadout is a bet,
+            not a free upgrade — evolution will prune what doesn't pay for
+            itself. A virtunism with zero mouths and zero chloroplasts can't
+            feed itself at all.
+          </p>
+
+          <label class="field slider-field">
+            <span>Size <em id="v-size"></em></span>
+            <input id="f-size" type="range" min="0.5" max="3.2" step="0.05" value="1.1" />
+          </label>
+
+          <label class="field slider-field">
+            <span>Sense radius <em id="v-sense"></em></span>
+            <input id="f-sense" type="range" min="40" max="320" step="5" value="170" />
+          </label>
+
+          <label class="field slider-field">
+            <span>Lifespan (ticks) <em id="v-age"></em></span>
+            <input id="f-age" type="range" min="400" max="2400" step="20" value="1100" />
+          </label>
+
+          <label class="field slider-field">
+            <span>Hue <em id="v-hue"></em></span>
+            <input id="f-hue" type="range" min="0" max="360" step="1" value="200" />
+          </label>
+          <div id="hue-swatch"></div>
+
+          <label class="field slider-field">
+            <span>Population to release <em id="v-count"></em></span>
+            <input id="f-count" type="range" min="1" max="40" step="1" value="26" />
+          </label>
+          <p class="panel-hint" id="count-hint">
+            Sexual reproducers in particular need a decent founding
+            population — a mate has to actually be nearby and ready too, so a
+            handful of individuals can struggle against an established rival
+            for the same food.
+          </p>
+
+          <button id="btn-release" class="btn primary wide">Release into Dish</button>
+        </section>
+
+        <section id="tab-ecosystem" class="tab-panel">
+          <div class="stat-grid">
+            <div class="stat"><span class="stat-label">Population</span><span id="s-pop">0</span></div>
+            <div class="stat"><span class="stat-label">Highest generation</span><span id="s-gen">0</span></div>
+            <div class="stat"><span class="stat-label">Colonies</span><span id="s-colonies">0</span></div>
+            <div class="stat"><span class="stat-label">Avg. colony size</span><span id="s-colonysize">0</span></div>
+            <div class="stat"><span class="stat-label">Solo virtunisms</span><span id="s-solo">0</span></div>
+            <div class="stat"><span class="stat-label">Meat / carrion</span><span id="s-meat">0</span></div>
+            <div class="stat"><span class="stat-label">Sexual / asexual</span><span id="s-repro">0 / 0</span></div>
+            <div class="stat"><span class="stat-label">Avg. mouths</span><span id="s-mouths">0</span></div>
+            <div class="stat"><span class="stat-label">Avg. eyes</span><span id="s-eyes">0</span></div>
+            <div class="stat"><span class="stat-label">Avg. armor</span><span id="s-armor">0</span></div>
+          </div>
+
+          <div class="chart-block">
+            <div class="chart-title">Population <em id="c-pop-val"></em></div>
+            <canvas class="chart" id="chart-pop" height="70"></canvas>
+          </div>
+          <div class="chart-block">
+            <div class="chart-title">Morphs — size vs. diet lean (each dot is one virtunism)</div>
+            <canvas class="chart" id="chart-morphs" height="120"></canvas>
+          </div>
+          <div class="chart-block">
+            <div class="chart-title">Avg. size (chassis) <em id="c-size-val"></em></div>
+            <canvas class="chart" id="chart-size" height="60"></canvas>
+          </div>
+          <div class="chart-block">
+            <div class="chart-title">Avg. max speed <em id="c-speed-val"></em></div>
+            <canvas class="chart" id="chart-speed" height="60"></canvas>
+          </div>
+          <div class="chart-block">
+            <div class="chart-title">Avg. sense radius <em id="c-sense-val"></em></div>
+            <canvas class="chart" id="chart-sense" height="60"></canvas>
+          </div>
+          <div class="chart-block">
+            <div class="chart-title">Avg. flagella <em id="c-flagella-val"></em></div>
+            <canvas class="chart" id="chart-flagella" height="60"></canvas>
+          </div>
+          <div class="chart-block">
+            <div class="chart-title">Avg. chloroplasts <em id="c-chloro-val"></em></div>
+            <canvas class="chart" id="chart-chloro" height="60"></canvas>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <div id="tree-drawer">
+      <button id="tree-tab" class="drawer-tab">🌳 Tree of Life</button>
+      <div id="tree-panel" class="drawer-panel">
+        <div class="tree-toolbar">
+          <p class="panel-hint">
+            Every dot is one virtunism that's ever lived; lines trace parent
+            → child. Click a dot to trace its ancestry and find it in the
+            dish (if it's still alive). Dim dots are extinct — kept only
+            because a still-living descendant traces back through them.
+          </p>
+          <span id="tree-info" class="tree-info"></span>
+          <button id="tree-clear" class="btn">Clear</button>
+        </div>
+        <canvas id="chart-tree"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="dist/main.js"></script>
+</body>
+</html>
