@@ -18,6 +18,18 @@ export const ORGANELLE_TYPES: readonly OrganelleType[] = [
   'armor',
 ];
 
+/**
+ * Organelle types genomes can actually express right now. Plants-only
+ * phase: mouths are switched off here — nowhere else. Every mouth-gated
+ * behavior downstream (predation, threat-sensing, carrion-eating in
+ * world.ts) stays fully implemented; it just goes inert on its own once
+ * nothing in the dish can ever have biteRadius > 0. Re-adding 'mouth' to
+ * this list is the entire "bring back animals" step.
+ */
+export const ACTIVE_ORGANELLE_TYPES: readonly OrganelleType[] = ORGANELLE_TYPES.filter(
+  (t) => t !== 'mouth',
+);
+
 /** One organelle mounted on the chassis rim. */
 export interface Organelle {
   type: OrganelleType;
@@ -90,14 +102,14 @@ function randomOrganelle(rng: Rng, bias: Partial<Record<OrganelleType, number>>)
 }
 
 function weightedPickType(rng: Rng, bias: Partial<Record<OrganelleType, number>>): OrganelleType {
-  const weights = ORGANELLE_TYPES.map((t) => Math.max(0.001, bias[t] ?? 1));
+  const weights = ACTIVE_ORGANELLE_TYPES.map((t) => Math.max(0.001, bias[t] ?? 1));
   const total = weights.reduce((a, b) => a + b, 0);
   let r = rng.range(0, total);
-  for (let i = 0; i < ORGANELLE_TYPES.length; i++) {
+  for (let i = 0; i < ACTIVE_ORGANELLE_TYPES.length; i++) {
     r -= weights[i];
-    if (r <= 0) return ORGANELLE_TYPES[i];
+    if (r <= 0) return ACTIVE_ORGANELLE_TYPES[i];
   }
-  return ORGANELLE_TYPES[ORGANELLE_TYPES.length - 1];
+  return ACTIVE_ORGANELLE_TYPES[ACTIVE_ORGANELLE_TYPES.length - 1];
 }
 
 // ---- Mutation -----------------------------------------------------------

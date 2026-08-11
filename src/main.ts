@@ -15,7 +15,10 @@ const canvas = document.getElementById('dish') as HTMLCanvasElement;
 const renderer = new Renderer(canvas);
 
 let world = new World(DISH_WIDTH, DISH_HEIGHT, Date.now() & 0xffffffff);
-world.seed(16, 12);
+// Plants-only phase: mouths are disabled in genome.ts (ACTIVE_ORGANELLE_TYPES),
+// so a "hunter" founder bias wouldn't produce a hunter right now. One plant
+// population until animals come back.
+world.seed(28, 0);
 
 const view: ViewTransform = { offsetX: 0, offsetY: 0, zoom: 1 };
 
@@ -100,7 +103,7 @@ playPauseBtn.addEventListener('click', () => {
 
 resetBtn.addEventListener('click', () => {
   world = new World(DISH_WIDTH, DISH_HEIGHT, Date.now() & 0xffffffff);
-  world.seed(16, 12);
+  world.seed(28, 0);
 });
 
 fitBtn.addEventListener('click', fitView);
