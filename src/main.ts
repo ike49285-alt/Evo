@@ -3,21 +3,22 @@
 
 import { World } from './sim/world.js';
 import { Renderer, ViewTransform } from './render/renderer.js';
-import { randomGenome } from './sim/genome.js';
-import { Rng } from './sim/rng.js';
 
 const DISH_WIDTH = 2400;
 const DISH_HEIGHT = 1600;
 const TICK_DT = 1 / 30; // fixed sim step, seconds
 const FRAME_BUDGET_MS = 18; // never spend more than this per frame on ticks
+const SOUP_BURST_SIZE = 60; // amino acids added by the "+ Soup" button
 
 const canvas = document.getElementById('dish') as HTMLCanvasElement;
 const renderer = new Renderer(canvas);
 
+// No seeded life. The dish starts as pure primordial soup — amino acids
+// drifting, nothing alive — and every organism from here on had to
+// spontaneously condense out of chemistry (see World.tickChemistry /
+// sim/chemistry.ts). A run can go a long time without a single spark. That's
+// not a bug to paper over.
 let world = new World(DISH_WIDTH, DISH_HEIGHT, Date.now() & 0xffffffff);
-// Carnivory's back on (see genome.ts's ACTIVE_ORGANELLE_TYPES) — plant and
-// hunter founder populations again, same split as the original build.
-world.seed(16, 12);
 
 const view: ViewTransform = { offsetX: 0, offsetY: 0, zoom: 1 };
 
@@ -93,7 +94,7 @@ const resetBtn = document.getElementById('reset-dish') as HTMLButtonElement;
 const fitBtn = document.getElementById('fit-view') as HTMLButtonElement;
 const visionBtn = document.getElementById('toggle-vision') as HTMLButtonElement;
 const speedBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-speed]'));
-const addSpeciesBtn = document.getElementById('add-species') as HTMLButtonElement;
+const addSoupBtn = document.getElementById('add-soup') as HTMLButtonElement;
 
 playPauseBtn.addEventListener('click', () => {
   playing = !playing;
@@ -102,7 +103,6 @@ playPauseBtn.addEventListener('click', () => {
 
 resetBtn.addEventListener('click', () => {
   world = new World(DISH_WIDTH, DISH_HEIGHT, Date.now() & 0xffffffff);
-  world.seed(16, 12);
 });
 
 fitBtn.addEventListener('click', fitView);
@@ -119,12 +119,11 @@ for (const btn of speedBtns) {
   });
 }
 
-addSpeciesBtn.addEventListener('click', () => {
-  // A fresh random genome dropped into the dish — the "Designer" entry
-  // point. A real body-plan editor is the natural next step; for now this
-  // is the "release a new species" action the README describes.
-  const rng = new Rng((Date.now() * 2654435761) & 0xffffffff);
-  world.spawnFounder(randomGenome(rng));
+addSoupBtn.addEventListener('click', () => {
+  // No more direct species-dropping — that bypassed abiogenesis entirely.
+  // This just adds raw material; whatever it becomes has to condense on
+  // its own, same as everything else in the dish.
+  world.injectSoup(SOUP_BURST_SIZE);
 });
 
 // ---- HUD -----------------------------------------------------------------
@@ -134,8 +133,10 @@ const hud = document.getElementById('hud') as HTMLDivElement;
 function updateHud(frameMs: number): void {
   const s = world.stats;
   hud.textContent =
-    `pop ${s.population}  |  carrion ${s.carrionCount}  |  ` +
-    `avg mass ${s.avgMass.toFixed(1)}  |  gen ${s.avgGeneration.toFixed(1)} (max ${s.highestGeneration})  |  ` +
+    `pop ${s.population}  |  sparks ${s.sparkCount}  |  ` +
+    `soup ${s.aminoAcidCount} aa / ${s.proteinCount} protein  |  ` +
+    `carrion ${s.carrionCount}  |  avg mass ${s.avgMass.toFixed(1)}  |  ` +
+    `gen ${s.avgGeneration.toFixed(1)} (max ${s.highestGeneration})  |  ` +
     `tick ${Math.floor(s.tick)}  |  frame ${frameMs.toFixed(1)}ms`;
 }
 

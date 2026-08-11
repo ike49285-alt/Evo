@@ -5,7 +5,8 @@
 
 import { World } from '../sim/world.js';
 import { Organism } from '../sim/organism.js';
-import { OrganelleType } from '../sim/genome.js';
+import { OrganelleType, ProteinFunction } from '../sim/genome.js';
+import { AminoAcid, Protein } from '../sim/chemistry.js';
 
 const ORGANELLE_COLOR: Record<OrganelleType, string> = {
   vacuole: '#7ecfc0',
@@ -14,6 +15,28 @@ const ORGANELLE_COLOR: Record<OrganelleType, string> = {
   eye: '#e0d15c',
   armor: '#9a9aa5',
 };
+
+// Same vocabulary as organelles, plus the two chemistry-only functions —
+// so watching a protein's color settle toward, say, chloroplast-green
+// *is* watching it head toward becoming that organelle.
+const FUNCTION_COLOR: Record<ProteinFunction, string> = {
+  ...ORGANELLE_COLOR,
+  structural: '#c9c2a8',
+  regulatory: '#b98ad1',
+};
+
+function dominantFunction(composition: Partial<Record<ProteinFunction, number>>): ProteinFunction {
+  let best: ProteinFunction = 'structural';
+  let bestMass = -1;
+  for (const fn of Object.keys(composition) as ProteinFunction[]) {
+    const m = composition[fn] ?? 0;
+    if (m > bestMass) {
+      bestMass = m;
+      best = fn;
+    }
+  }
+  return best;
+}
 
 export interface ViewTransform {
   offsetX: number;
@@ -43,6 +66,9 @@ export class Renderer {
 
     this.drawDishBounds(world);
 
+    for (const a of world.aminoAcids) this.drawAminoAcid(a);
+    for (const p of world.proteins) this.drawProtein(p);
+
     for (const c of world.carrion) {
       ctx.beginPath();
       ctx.fillStyle = 'rgba(150, 120, 90, 0.6)';
@@ -55,6 +81,27 @@ export class Renderer {
     }
 
     ctx.restore();
+  }
+
+  private drawAminoAcid(a: AminoAcid): void {
+    const ctx = this.ctx;
+    ctx.beginPath();
+    ctx.fillStyle = FUNCTION_COLOR[a.flavor];
+    ctx.globalAlpha = 0.35;
+    ctx.arc(a.x, a.y, 1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  private drawProtein(p: Protein): void {
+    const ctx = this.ctx;
+    const fn = dominantFunction(p.composition);
+    ctx.beginPath();
+    ctx.fillStyle = FUNCTION_COLOR[fn];
+    ctx.globalAlpha = 0.7;
+    ctx.arc(p.x, p.y, 1.2 + p.length * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
   private drawDishBounds(world: World): void {

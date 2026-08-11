@@ -108,6 +108,68 @@ function weightedPickType(rng: Rng, bias: Partial<Record<OrganelleType, number>>
   return ACTIVE_ORGANELLE_TYPES[ACTIVE_ORGANELLE_TYPES.length - 1];
 }
 
+// ---- Abiogenesis: genome condensed from chemistry, not spawned by fiat ----
+
+/**
+ * The two "functions" a protein can express that never become an
+ * organelle: structural material builds the chassis itself, regulatory
+ * material biases the brain's starting wiring. Every other function maps
+ * 1:1 onto an organelle type. See chemistry.ts for the amino
+ * acid/protein/condensation model that produces these mass tallies.
+ */
+export type ProteinFunction = OrganelleType | 'structural' | 'regulatory';
+
+const STRUCTURAL_MASS_TO_RADIUS = 0.7; // monomer-units of structural protein per unit of chassis radius
+const PROTEIN_MASS_TO_ORGANELLE_SIZE = 0.6; // monomer-units per unit of organelle size
+const REGULATORY_SETTLE_SCALE = 8; // monomer-units of regulatory protein to fully "settle" brain weights
+
+/**
+ * Builds a genome directly from a condensed protein cluster's composition —
+ * the abiogenesis origin path, used in place of `randomGenome` when a proto-cell
+ * spontaneously assembles (see World's condensation pass). Deliberately does
+ * *not* check whether the result is viable: a cluster with no chloroplast-
+ * or vacuole-function mass produces a genome with no income and no way to
+ * get any — it starves. Nothing here corrects for that on purpose.
+ */
+export function genomeFromComposition(
+  massByFunction: Partial<Record<ProteinFunction, number>>,
+  rng: Rng,
+): Genome {
+  const structuralMass = massByFunction.structural ?? 0;
+  const radius = clamp(
+    MIN_CHASSIS_RADIUS + structuralMass * STRUCTURAL_MASS_TO_RADIUS,
+    MIN_CHASSIS_RADIUS,
+    MAX_CHASSIS_RADIUS,
+  );
+
+  const organelles: Organelle[] = [];
+  for (const type of ACTIVE_ORGANELLE_TYPES) {
+    const mass = massByFunction[type] ?? 0;
+    if (mass <= 0) continue;
+    organelles.push({
+      type,
+      angle: rng.range(0, Math.PI * 2),
+      distance: rng.range(0.6, 1.1),
+      size: clamp(mass * PROTEIN_MASS_TO_ORGANELLE_SIZE, MIN_ORGANELLE_SIZE, MAX_ORGANELLE_SIZE),
+    });
+  }
+
+  // Regulatory protein doesn't encode specific weights — there's no real
+  // analogue for "this protein means this synapse" — it just nudges the
+  // initial wiring away from pure noise, proportional to how much was
+  // available when the cell condensed.
+  const regulatoryMass = massByFunction.regulatory ?? 0;
+  const settle = clamp(regulatoryMass / REGULATORY_SETTLE_SCALE, 0, 0.85);
+  const weights = randomWeights(rng);
+  for (let i = 0; i < weights.length; i++) weights[i] *= 1 - settle * 0.6;
+
+  return {
+    bodyPlan: { radius, organelles },
+    brain: { weights },
+    hue: rng.range(0, 360),
+  };
+}
+
 // ---- Mutation -----------------------------------------------------------
 
 export interface MutationRates {

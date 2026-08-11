@@ -4,10 +4,21 @@
 
 import { Rng } from './rng.js';
 import { Organism, Perception, SenseTarget } from './organism.js';
-import { Genome, randomGenome, mutateGenome, deriveStats } from './genome.js';
+import { Genome, mutateGenome, deriveStats } from './genome.js';
 import { SpatialGrid } from './grid.js';
 import { Carrion, spawnCarrion, CARRION_DECAY_TICKS, MAX_CARRION } from './food.js';
-import { dist, directionTo, clamp } from './types.js';
+import { dist, directionTo } from './types.js';
+import {
+  AminoAcid,
+  Protein,
+  spawnAminoAcid,
+  supplyAminoAcids,
+  driftChemistry,
+  bondPass,
+  decayProteins,
+  attemptCondensation,
+  MAX_AMINO_ACIDS,
+} from './chemistry.js';
 
 const GRID_CELL_SIZE = 48;
 const LIGHT_BUDGET_PER_AREA = 0.9; // energy/tick per 10,000 sq. units of dish
@@ -18,6 +29,7 @@ const REPRO_ENERGY_MULT = 2.0; // must bank this many x reproCost before reprodu
 const CHILD_ENERGY_SHARE = 0.55; // fraction of reproCost handed to the child
 
 const NO_TARGET: SenseTarget = { dir: { x: 0, y: 0 }, dist01: 1 };
+const CHEMISTRY_GRID_CELL_SIZE = 64; // bigger cells = fewer buckets touched per query at high particle counts
 
 export interface WorldStats {
   population: number;
@@ -25,6 +37,9 @@ export interface WorldStats {
   avgMass: number;
   avgGeneration: number;
   highestGeneration: number;
+  aminoAcidCount: number;
+  proteinCount: number;
+  sparkCount: number;
   tick: number;
 }
 
@@ -35,49 +50,71 @@ export class World {
 
   organisms: Organism[] = [];
   carrion: Carrion[] = [];
+  aminoAcids: AminoAcid[] = [];
+  proteins: Protein[] = [];
   private organismGrid = new SpatialGrid<Organism>(GRID_CELL_SIZE);
   private carrionGrid = new SpatialGrid<Carrion>(GRID_CELL_SIZE);
+  private aminoGrid = new SpatialGrid<AminoAcid>(CHEMISTRY_GRID_CELL_SIZE);
+  private proteinGrid = new SpatialGrid<Protein>(CHEMISTRY_GRID_CELL_SIZE);
+  private aminoCarryover = 0;
 
   tickCount = 0;
   stats: WorldStats;
   private nextLineageId = 1;
+  private sparkCount = 0;
 
   constructor(width: number, height: number, seed: number) {
     this.width = width;
     this.height = height;
     this.rng = new Rng(seed);
-    this.stats = { population: 0, carrionCount: 0, avgMass: 0, avgGeneration: 0, highestGeneration: 0, tick: 0 };
+    this.stats = {
+      population: 0,
+      carrionCount: 0,
+      avgMass: 0,
+      avgGeneration: 0,
+      highestGeneration: 0,
+      aminoAcidCount: 0,
+      proteinCount: 0,
+      sparkCount: 0,
+      tick: 0,
+    };
   }
 
-  /** Seeds the dish. `photoBias`/`hunterBias` are starting points, not species —
-   *  mutation is free to turn either into anything over generations. */
-  seed(photoCount: number, hunterCount: number): void {
-    for (let i = 0; i < photoCount; i++) {
-      this.spawnFounder(randomGenome(this.rng, { chloroplast: 6, vacuole: 0.1, flagellum: 0.6 }));
-    }
-    for (let i = 0; i < hunterCount; i++) {
-      this.spawnFounder(randomGenome(this.rng, { vacuole: 4, chloroplast: 0.1, flagellum: 2, eye: 2 }));
-    }
-  }
-
-  /** Drop in a brand new species (used by the Designer, and by `seed`). */
-  spawnFounder(genome: Genome): Organism {
-    const x = this.rng.range(0, this.width);
-    const y = this.rng.range(0, this.height);
+  /** Drop in a genome at a specific spot (used by the condensation pass), or
+   *  at a random spot if no position is given (manual/debug use). This is
+   *  the only way an organism ever comes to exist — there is no seed()
+   *  anymore. We start from prelife, or not at all. */
+  spawnFounder(genome: Genome, x?: number, y?: number): Organism {
+    const px = x ?? this.rng.range(0, this.width);
+    const py = y ?? this.rng.range(0, this.height);
     const stats = deriveStats(genome);
-    const org = new Organism(genome, x, y, stats.reproCost * 1.2, 0, this.nextLineageId++);
+    const org = new Organism(genome, px, py, stats.reproCost * 1.2, 0, this.nextLineageId++);
     this.organisms.push(org);
     return org;
+  }
+
+  /** Injects a burst of amino acids — the "+ Soup" control. Not a founder
+   *  spawn; just more raw material for chemistry to work with. */
+  injectSoup(count: number): void {
+    for (let i = 0; i < count && this.aminoAcids.length < MAX_AMINO_ACIDS; i++) {
+      this.aminoAcids.push(spawnAminoAcid(this.rng, this.rng.range(0, this.width), this.rng.range(0, this.height)));
+    }
   }
 
   reset(): void {
     this.organisms = [];
     this.carrion = [];
+    this.aminoAcids = [];
+    this.proteins = [];
+    this.aminoCarryover = 0;
     this.tickCount = 0;
     this.nextLineageId = 1;
+    this.sparkCount = 0;
   }
 
   tick(dt: number): void {
+    this.tickChemistry(dt);
+
     this.organismGrid.rebuild(this.organisms);
     this.carrionGrid.rebuild(this.carrion);
 
@@ -99,6 +136,34 @@ export class World {
 
     this.tickCount += dt;
     this.updateStats();
+  }
+
+  /** Amino acids -> proteins -> (sometimes) a spontaneous new founder. */
+  private tickChemistry(dt: number): void {
+    const supplied = supplyAminoAcids(this.aminoAcids, this.aminoCarryover, this.rng, this.width, this.height, dt);
+    this.aminoAcids = supplied.aminoAcids;
+    this.aminoCarryover = supplied.carryover;
+
+    driftChemistry(this.aminoAcids, this.proteins, dt, this.width, this.height, this.rng);
+
+    this.aminoGrid.rebuild(this.aminoAcids);
+    this.proteinGrid.rebuild(this.proteins);
+
+    const bonded = bondPass(this.aminoAcids, this.proteins, this.aminoGrid, this.proteinGrid, dt, this.rng);
+    this.aminoAcids = bonded.aminoAcids;
+    this.proteins = decayProteins(bonded.proteins, dt);
+    this.proteinGrid.rebuild(this.proteins);
+
+    // Population cap applies to abiogenesis too — a cluster that qualifies
+    // while the dish is full still consumes its proteins (the chemistry
+    // happened), it just doesn't get to become anything.
+    const { proteins, sparks } = attemptCondensation(this.proteins, this.proteinGrid, dt, this.rng);
+    this.proteins = proteins;
+    for (const spark of sparks) {
+      if (this.organisms.length >= MAX_POPULATION) break;
+      this.spawnFounder(spark.genome, spark.x, spark.y);
+      this.sparkCount++;
+    }
   }
 
   private wrapPosition(org: Organism): void {
@@ -255,6 +320,9 @@ export class World {
       avgMass: n ? massSum / n : 0,
       avgGeneration: n ? genSum / n : 0,
       highestGeneration: highestGen,
+      aminoAcidCount: this.aminoAcids.length,
+      proteinCount: this.proteins.length,
+      sparkCount: this.sparkCount,
       tick: this.tickCount,
     };
   }
