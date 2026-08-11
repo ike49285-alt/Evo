@@ -1,0 +1,11 @@
+{
+  "name": "evo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A browser-based virtual ecosystem where every organism's genome controls its body plan and behavior.",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "serve": "node scripts/serve.js"
+  }
+}

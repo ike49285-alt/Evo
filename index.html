@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Evo — a stable virtual ecosystem</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="toolbar">
+    <h1>Evo</h1>
+    <button id="play-pause">⏸ Pause</button>
+    <div class="speed-group">
+      <button data-speed="1" class="active">1×</button>
+      <button data-speed="2">2×</button>
+      <button data-speed="4">4×</button>
+      <button data-speed="8">8×</button>
+    </div>
+    <button id="fit-view">Fit View</button>
+    <button id="toggle-vision">👁 Vision</button>
+    <button id="add-species">+ Species</button>
+    <button id="reset-dish">Reset Dish</button>
+  </header>
+
+  <main>
+    <canvas id="dish"></canvas>
+    <div id="hud">…</div>
+  </main>
+
+  <script type="module" src="dist/main.js"></script>
+</body>
+</html>
