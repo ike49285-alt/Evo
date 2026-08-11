@@ -8,7 +8,7 @@ import { Rng } from './rng.js';
 import { clamp } from './types.js';
 import { WEIGHT_COUNT, randomWeights, mutateWeights, crossoverWeights } from './nn.js';
 
-export type OrganelleType = 'vacuole' | 'chloroplast' | 'flagellum' | 'eye' | 'armor';
+export type OrganelleType = 'vacuole' | 'chloroplast' | 'flagellum' | 'eye' | 'armor' | 'bud';
 
 export const ORGANELLE_TYPES: readonly OrganelleType[] = [
   'vacuole',
@@ -16,6 +16,7 @@ export const ORGANELLE_TYPES: readonly OrganelleType[] = [
   'flagellum',
   'eye',
   'armor',
+  'bud',
 ];
 
 /**
@@ -274,6 +275,8 @@ export interface DerivedStats {
   hullRadius: number;
   /** Energy cost to build one offspring (roughly proportional to body cost). */
   reproCost: number;
+  /** Has at least one bud gland — offspring bond into a colony instead of ejecting. */
+  budCapable: boolean;
 }
 
 const UPKEEP_PER_MASS = 0.0025;
@@ -283,6 +286,7 @@ const ORGANELLE_UPKEEP: Record<OrganelleType, number> = {
   flagellum: 0.007,
   eye: 0.004,
   armor: 0.0045,
+  bud: 0.005,
 };
 
 export function deriveStats(genome: Genome): DerivedStats {
@@ -297,6 +301,7 @@ export function deriveStats(genome: Genome): DerivedStats {
   let visionArc = 0;
   let armor = 0;
   let hullRadius = radius;
+  let budCapable = false;
 
   for (const o of organelles) {
     const area = o.size * o.size;
@@ -322,6 +327,9 @@ export function deriveStats(genome: Genome): DerivedStats {
       case 'armor':
         armor += o.size * 0.35;
         break;
+      case 'bud':
+        budCapable = true;
+        break;
     }
   }
 
@@ -342,6 +350,7 @@ export function deriveStats(genome: Genome): DerivedStats {
     armor,
     hullRadius,
     reproCost,
+    budCapable,
   };
 }
 

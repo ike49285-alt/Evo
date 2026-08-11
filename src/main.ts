@@ -135,6 +135,7 @@ function updateHud(frameMs: number): void {
   hud.textContent =
     `pop ${s.population}  |  sparks ${s.sparkCount}  |  ` +
     `soup ${s.aminoAcidCount} aa / ${s.proteinCount} protein  |  ` +
+    `colonies ${s.colonyCount} (largest ${s.largestColony})  |  ` +
     `carrion ${s.carrionCount}  |  avg mass ${s.avgMass.toFixed(1)}  |  ` +
     `gen ${s.avgGeneration.toFixed(1)} (max ${s.highestGeneration})  |  ` +
     `tick ${Math.floor(s.tick)}  |  frame ${frameMs.toFixed(1)}ms`;

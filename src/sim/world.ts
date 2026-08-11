@@ -27,6 +27,11 @@ const ABSORB_RATE = 6; // energy/sec a vacuole can transfer at full contact
 const ABSORB_EFFICIENCY = 0.7; // predator keeps this fraction; rest is lost, not free lunch
 const REPRO_ENERGY_MULT = 2.0; // must bank this many x reproCost before reproducing
 const CHILD_ENERGY_SHARE = 0.55; // fraction of reproCost handed to the child
+const MAX_COLONY_SIZE = 16; // a bud-capable lineage that hits this falls back to ejecting instead
+const BOND_DIFFUSION_RATE = 0.5; // fraction of a bonded pair's energy gap that equalizes per second
+const SEPARATION_STRENGTH = 6; // push per unit of overlap, per second
+const MAX_SEPARATION_PUSH = 40; // world units/sec cap, so a deeply-overlapping pair doesn't launch apart
+const SEPARATION_QUERY_PAD = 80; // generous upper bound on "how big could the other colony be"
 
 const NO_TARGET: SenseTarget = { dir: { x: 0, y: 0 }, dist01: 1 };
 const CHEMISTRY_GRID_CELL_SIZE = 64; // bigger cells = fewer buckets touched per query at high particle counts
@@ -40,6 +45,8 @@ export interface WorldStats {
   aminoAcidCount: number;
   proteinCount: number;
   sparkCount: number;
+  colonyCount: number;
+  largestColony: number;
   tick: number;
 }
 
@@ -76,6 +83,8 @@ export class World {
       aminoAcidCount: 0,
       proteinCount: 0,
       sparkCount: 0,
+      colonyCount: 0,
+      largestColony: 0,
       tick: 0,
     };
   }
@@ -120,15 +129,26 @@ export class World {
 
     const sunlightScale = this.computeSunlightScale();
 
+    // Only a colony's root actually senses/thinks/acts — a bonded member's
+    // position is derived from the root's transform, not simulated
+    // independently (see Organism.propagateColonyTransform). A singleton
+    // organism is trivially its own one-member colony, so this applies to
+    // it too. Metabolism (upkeep/photosynthesis) runs for everyone —
+    // bonded members still have working organelles, they just don't drive.
     for (const org of this.organisms) {
-      const perception = this.perceive(org);
-      const inputs = org.sense(perception);
-      const outputs = org.think(inputs);
-      org.act(outputs, dt);
+      if (org.isRoot) {
+        const perception = this.perceive(org);
+        const inputs = org.sense(perception);
+        const outputs = org.think(inputs);
+        org.act(outputs, dt);
+        this.wrapPosition(org);
+        org.propagateColonyTransform();
+      }
       org.metabolize(dt, sunlightScale);
-      this.wrapPosition(org);
     }
 
+    this.resolveSeparation(dt);
+    this.resolveBondDiffusion(dt);
     this.resolveIngestion(dt);
     this.resolveReproduction();
     this.resolveDeaths();
@@ -179,6 +199,73 @@ export class World {
     const budget = (this.width * this.height) * (LIGHT_BUDGET_PER_AREA / 10000);
     if (demand <= budget || demand === 0) return 1;
     return budget / demand;
+  }
+
+  /** Pushes overlapping, unrelated roots apart. A colony's own members are
+   *  never separated from each other — their positions are derived from the
+   *  root's transform, not free physics — so this only ever compares one
+   *  colony's root against another's, using each colony's full extent
+   *  (`colonyRadius`), not just the root's own hull. Accumulate-then-apply
+   *  so processing order within the pass can't double-push a pair. */
+  private resolveSeparation(dt: number): void {
+    for (const org of this.organisms) {
+      if (org.isRoot) {
+        org.pendingPushX = 0;
+        org.pendingPushY = 0;
+      }
+    }
+
+    for (const org of this.organisms) {
+      if (!org.isRoot) continue;
+      const nearby = this.organismGrid.queryRadius(org, org.colonyRadius + SEPARATION_QUERY_PAD);
+      for (const other of nearby) {
+        if (other === org || !other.isRoot) continue;
+        const dx = org.x - other.x;
+        const dy = org.y - other.y;
+        const minDist = org.colonyRadius + other.colonyRadius;
+        let d = Math.sqrt(dx * dx + dy * dy);
+        if (d >= minDist) continue;
+        if (d < 1e-6) d = 1e-6; // perfectly coincident — pick an arbitrary push direction
+        const overlap = minDist - d;
+        const push = Math.min(overlap * SEPARATION_STRENGTH, MAX_SEPARATION_PUSH) * dt;
+        org.pendingPushX += (dx / d) * push;
+        org.pendingPushY += (dy / d) * push;
+      }
+    }
+
+    for (const org of this.organisms) {
+      if (!org.isRoot || (org.pendingPushX === 0 && org.pendingPushY === 0)) continue;
+      org.x += org.pendingPushX;
+      org.y += org.pendingPushY;
+      this.wrapPosition(org);
+      org.propagateColonyTransform();
+    }
+  }
+
+  /** Energy equalizes across a bond toward whichever side has less —
+   *  a photosynthesizing member can carry a bonded sibling that has no
+   *  income of its own, the whole point of being a colony instead of just
+   *  independent neighbors. */
+  private resolveBondDiffusion(dt: number): void {
+    for (const org of this.organisms) {
+      if (!org.parent) continue;
+      const flow = (org.parent.energy - org.energy) * BOND_DIFFUSION_RATE * dt;
+      org.parent.energy -= flow;
+      org.energy += flow;
+    }
+  }
+
+  private colonySize(org: Organism): number {
+    let root = org;
+    while (root.parent) root = root.parent;
+    let count = 0;
+    const stack: Organism[] = [root];
+    while (stack.length) {
+      const node = stack.pop()!;
+      count++;
+      for (const child of node.children) stack.push(child);
+    }
+    return count;
   }
 
   private perceive(org: Organism): Perception {
@@ -265,6 +352,28 @@ export class World {
       const childEnergy = org.stats.reproCost * CHILD_ENERGY_SHARE;
       org.energy -= childEnergy + org.stats.reproCost * 0.3; // cost of reproducing beyond what the child gets
 
+      // Bud-capable and there's still room in the colony: stay bonded
+      // instead of ejecting. Any member can bud, not just the root — a
+      // colony branches wherever reproduction happens, not just at the top.
+      // (budCapable is the *parent's* trait — it decides whether ITS
+      // offspring bond. The child deciding its own future offspring's fate
+      // is just it reproducing later, off its own stats.)
+      if (org.stats.budCapable && this.colonySize(org) < MAX_COLONY_SIZE) {
+        const childStats = deriveStats(childGenome);
+        const localAngle = this.rng.range(0, Math.PI * 2);
+        const localDistance = org.stats.hullRadius + childStats.hullRadius * 0.8;
+        const child = new Organism(childGenome, org.x, org.y, childEnergy, org.generation + 1, org.lineageId);
+        org.bondChild(child, localAngle, localDistance);
+        // Place it now (not just next tick's propagate pass) so it isn't
+        // misdrawn/miscontacted for the rest of *this* tick.
+        const worldAngle = org.heading + localAngle;
+        child.x = org.x + Math.cos(worldAngle) * localDistance;
+        child.y = org.y + Math.sin(worldAngle) * localDistance;
+        child.heading = org.heading;
+        newborns.push(child);
+        continue;
+      }
+
       const angle = this.rng.range(0, Math.PI * 2);
       const child = new Organism(
         childGenome,
@@ -285,6 +394,14 @@ export class World {
     const survivors: Organism[] = [];
     for (const org of this.organisms) {
       if (org.isDead) {
+        // Direct children each become the root of their own still-intact
+        // sub-colony — a colony fragments on a member's death, it doesn't
+        // vaporize down to individuals.
+        org.dissolveBonds();
+        if (org.parent) {
+          const idx = org.parent.children.indexOf(org);
+          if (idx !== -1) org.parent.children.splice(idx, 1);
+        }
         if (this.carrion.length < MAX_CARRION) {
           this.carrion.push(spawnCarrion(org.x, org.y, org.stats.mass * 1.5));
         }
@@ -309,10 +426,17 @@ export class World {
     let massSum = 0;
     let genSum = 0;
     let highestGen = 0;
+    let colonyCount = 0;
+    let largestColony = 0;
     for (const org of this.organisms) {
       massSum += org.stats.mass;
       genSum += org.generation;
       if (org.generation > highestGen) highestGen = org.generation;
+      if (org.isRoot) {
+        const size = org.children.length > 0 ? this.colonySize(org) : 1;
+        if (org.children.length > 0) colonyCount++;
+        if (size > largestColony) largestColony = size;
+      }
     }
     this.stats = {
       population: n,
@@ -323,6 +447,8 @@ export class World {
       aminoAcidCount: this.aminoAcids.length,
       proteinCount: this.proteins.length,
       sparkCount: this.sparkCount,
+      colonyCount,
+      largestColony,
       tick: this.tickCount,
     };
   }

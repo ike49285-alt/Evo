@@ -44,6 +44,27 @@ export class Organism implements GridEntry {
   alive = true;
   matingReady = false;
 
+  // ---- Colony bonds (budding) --------------------------------------------
+  // A bonded organism doesn't move independently — its position/heading are
+  // derived every tick from its parent's transform + this fixed local
+  // offset (set once, at bud time). Only a root (parent === null) actually
+  // runs sense/think/act; see World.tick(). Bonds are a tree, not just
+  // parent-root, so branching colonies fall out naturally from repeated
+  // budding at any member.
+  parent: Organism | null = null;
+  children: Organism[] = [];
+  localAngle = 0;
+  localDistance = 0;
+  /** Max reach of this organism's colony subtree, in world units — only
+   *  meaningful (and only kept current) on a root; used for colony-vs-colony
+   *  separation so a big colony doesn't just check its root's tiny hull. */
+  colonyRadius = 0;
+  /** Scratch accumulator for World's separation pass — accumulate-then-apply
+   *  so pushes from multiple overlapping neighbors don't stomp each other
+   *  mid-pass. Reset to 0 at the start of each separation pass. */
+  pendingPushX = 0;
+  pendingPushY = 0;
+
   constructor(genome: Genome, x: number, y: number, energy: number, generation: number, lineageId: number) {
     this.id = nextOrganismId++;
     this.genome = genome;
@@ -55,6 +76,50 @@ export class Organism implements GridEntry {
     this.energy = energy;
     this.generation = generation;
     this.lineageId = lineageId;
+    this.colonyRadius = this.stats.hullRadius;
+  }
+
+  get isRoot(): boolean {
+    return this.parent === null;
+  }
+
+  /** Bonds `child` onto this organism at a fixed offset in this organism's
+   *  local frame (set once, at bud time — the child never independently
+   *  drifts from it). */
+  bondChild(child: Organism, angle: number, distance: number): void {
+    child.parent = this;
+    child.localAngle = angle;
+    child.localDistance = distance;
+    this.children.push(child);
+  }
+
+  /** Called when this organism dies. Its direct children each become the
+   *  root of their own (still-intact) sub-colony, rather than the whole
+   *  tree dissolving down to individuals — a colony fragments, it doesn't
+   *  vaporize. */
+  dissolveBonds(): void {
+    for (const child of this.children) child.parent = null;
+    this.children = [];
+  }
+
+  /** Walks this organism's colony subtree, setting every descendant's
+   *  position/heading from this organism's current transform + its fixed
+   *  local offset. Returns the subtree's max reach (world units) from
+   *  *this* node, so a root can cache the whole colony's footprint. Only
+   *  meaningful to call on a root (or as the recursive step below it) —
+   *  a bonded organism's own x/y/heading are never authoritative. */
+  propagateColonyTransform(): number {
+    let maxReach = this.stats.hullRadius;
+    for (const child of this.children) {
+      const worldAngle = this.heading + child.localAngle;
+      child.x = this.x + Math.cos(worldAngle) * child.localDistance;
+      child.y = this.y + Math.sin(worldAngle) * child.localDistance;
+      child.heading = this.heading;
+      const reach = child.localDistance + child.propagateColonyTransform();
+      if (reach > maxReach) maxReach = reach;
+    }
+    if (this.isRoot) this.colonyRadius = maxReach;
+    return maxReach;
   }
 
   /** Re-derive cached physical stats after the genome changes (mutation on birth). */

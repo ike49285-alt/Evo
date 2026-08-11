@@ -14,6 +14,7 @@ const ORGANELLE_COLOR: Record<OrganelleType, string> = {
   flagellum: '#5c9ce0',
   eye: '#e0d15c',
   armor: '#9a9aa5',
+  bud: '#e08fa0',
 };
 
 // Same vocabulary as organelles, plus the two chemistry-only functions —
@@ -76,11 +77,28 @@ export class Renderer {
       ctx.fill();
     }
 
+    this.drawBondMembranes(world);
+
     for (const org of world.organisms) {
       this.drawOrganism(org, showVision);
     }
 
     ctx.restore();
+  }
+
+  /** Thin lines between bonded parent/child — that's a colony. Drawn under
+   *  the organisms themselves so the chassis reads on top. */
+  private drawBondMembranes(world: World): void {
+    const ctx = this.ctx;
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const org of world.organisms) {
+      if (!org.parent) continue;
+      ctx.moveTo(org.x, org.y);
+      ctx.lineTo(org.parent.x, org.parent.y);
+    }
+    ctx.stroke();
   }
 
   private drawAminoAcid(a: AminoAcid): void {
