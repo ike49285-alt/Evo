@@ -19,17 +19,12 @@ export const ORGANELLE_TYPES: readonly OrganelleType[] = [
 ];
 
 /**
- * Organelle types genomes can actually express right now. Plants-only
- * phase: vacuoles are switched off here — nowhere else. Every
- * vacuole-gated behavior downstream (predation, threat-sensing,
- * carrion-eating in world.ts) stays fully implemented; it just goes
- * inert on its own once nothing in the dish can ever have
- * vacuoleRadius > 0. Re-adding 'vacuole' to this list is the entire
- * "bring back animals" step.
+ * Organelle types genomes can actually express right now. Was filtered
+ * down to exclude 'vacuole' for a plants-only phase; carnivory is back on,
+ * so this is the full set again. Toggling animals off in the future is
+ * just re-adding the `.filter((t) => t !== 'vacuole')` this used to have.
  */
-export const ACTIVE_ORGANELLE_TYPES: readonly OrganelleType[] = ORGANELLE_TYPES.filter(
-  (t) => t !== 'vacuole',
-);
+export const ACTIVE_ORGANELLE_TYPES: readonly OrganelleType[] = ORGANELLE_TYPES;
 
 /** One organelle mounted on the chassis rim. */
 export interface Organelle {
