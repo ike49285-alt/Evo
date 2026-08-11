@@ -12,8 +12,8 @@ import { dist, directionTo, clamp } from './types.js';
 const GRID_CELL_SIZE = 48;
 const LIGHT_BUDGET_PER_AREA = 0.9; // energy/tick per 10,000 sq. units of dish
 const MAX_POPULATION = 500;
-const BITE_RATE = 6; // energy/sec a mouth can transfer at full contact
-const BITE_EFFICIENCY = 0.7; // predator keeps this fraction; rest is lost, not free lunch
+const ABSORB_RATE = 6; // energy/sec a vacuole can transfer at full contact
+const ABSORB_EFFICIENCY = 0.7; // predator keeps this fraction; rest is lost, not free lunch
 const REPRO_ENERGY_MULT = 2.0; // must bank this many x reproCost before reproducing
 const CHILD_ENERGY_SHARE = 0.55; // fraction of reproCost handed to the child
 
@@ -53,10 +53,10 @@ export class World {
    *  mutation is free to turn either into anything over generations. */
   seed(photoCount: number, hunterCount: number): void {
     for (let i = 0; i < photoCount; i++) {
-      this.spawnFounder(randomGenome(this.rng, { chloroplast: 6, mouth: 0.1, flagellum: 0.6 }));
+      this.spawnFounder(randomGenome(this.rng, { chloroplast: 6, vacuole: 0.1, flagellum: 0.6 }));
     }
     for (let i = 0; i < hunterCount; i++) {
-      this.spawnFounder(randomGenome(this.rng, { mouth: 4, chloroplast: 0.1, flagellum: 2, eye: 2 }));
+      this.spawnFounder(randomGenome(this.rng, { vacuole: 4, chloroplast: 0.1, flagellum: 2, eye: 2 }));
     }
   }
 
@@ -92,7 +92,7 @@ export class World {
       this.wrapPosition(org);
     }
 
-    this.resolveEating(dt);
+    this.resolveIngestion(dt);
     this.resolveReproduction();
     this.resolveDeaths();
     this.decayCarrion(dt);
@@ -125,7 +125,7 @@ export class World {
     let bestThreat: { d: number; entity: { x: number; y: number } } | null = null;
     let bestMate: { d: number; entity: { x: number; y: number } } | null = null;
 
-    if (org.stats.biteRadius > 0) {
+    if (org.stats.vacuoleRadius > 0) {
       const nearbyCarrion = this.carrionGrid.queryRadius(org, range);
       for (const c of nearbyCarrion) {
         const d = dist(org, c);
@@ -138,10 +138,10 @@ export class World {
       const d = dist(org, other);
       if (d > range) continue;
 
-      if (org.stats.biteRadius > 0 && other.stats.mass <= org.stats.maxPreyMass && (!bestFood || d < bestFood.d)) {
+      if (org.stats.vacuoleRadius > 0 && other.stats.mass <= org.stats.maxIngestMass && (!bestFood || d < bestFood.d)) {
         bestFood = { d, entity: other };
       }
-      if (other.stats.biteRadius > 0 && org.stats.mass <= other.stats.maxPreyMass && (!bestThreat || d < bestThreat.d)) {
+      if (other.stats.vacuoleRadius > 0 && org.stats.mass <= other.stats.maxIngestMass && (!bestThreat || d < bestThreat.d)) {
         bestThreat = { d, entity: other };
       }
       if (other.lineageId === org.lineageId && other.matingReady && (!bestMate || d < bestMate.d)) {
@@ -156,30 +156,34 @@ export class World {
     };
   }
 
-  private resolveEating(dt: number): void {
+  /** Vacuole-based ingestion: a slow, continuous engulf-and-digest while in
+   *  contact — not a bite/kill. Carrion is free calories; live prey has to
+   *  be small enough to engulf and armor slows the rate, but there's no
+   *  single decisive "attack". */
+  private resolveIngestion(dt: number): void {
     for (const org of this.organisms) {
-      if (!org.alive || org.stats.biteRadius <= 0) continue;
+      if (!org.alive || org.stats.vacuoleRadius <= 0) continue;
 
-      // Carrion first — free calories, no fight.
-      const nearCarrion = this.carrionGrid.queryRadius(org, org.stats.biteRadius);
+      // Carrion first — free calories, no resistance.
+      const nearCarrion = this.carrionGrid.queryRadius(org, org.stats.vacuoleRadius);
       for (const c of nearCarrion) {
         if (c.energy <= 0) continue;
-        if (dist(org, c) > org.stats.biteRadius) continue;
-        const take = Math.min(c.energy, BITE_RATE * dt);
+        if (dist(org, c) > org.stats.vacuoleRadius) continue;
+        const take = Math.min(c.energy, ABSORB_RATE * dt);
         c.energy -= take;
-        org.energy += take * BITE_EFFICIENCY;
+        org.energy += take * ABSORB_EFFICIENCY;
       }
 
-      // Live prey.
-      const nearOrgs = this.organismGrid.queryRadius(org, org.stats.biteRadius);
+      // Live prey — must be small enough to engulf.
+      const nearOrgs = this.organismGrid.queryRadius(org, org.stats.vacuoleRadius);
       for (const prey of nearOrgs) {
         if (prey === org || !prey.alive) continue;
-        if (prey.stats.mass > org.stats.maxPreyMass) continue;
-        if (dist(org, prey) > org.stats.biteRadius) continue;
+        if (prey.stats.mass > org.stats.maxIngestMass) continue;
+        if (dist(org, prey) > org.stats.vacuoleRadius) continue;
         const armorFactor = 1 / (1 + prey.stats.armor);
-        const damage = BITE_RATE * dt * armorFactor;
-        prey.energy -= damage;
-        org.energy += damage * BITE_EFFICIENCY;
+        const drained = ABSORB_RATE * dt * armorFactor;
+        prey.energy -= drained;
+        org.energy += drained * ABSORB_EFFICIENCY;
       }
     }
   }

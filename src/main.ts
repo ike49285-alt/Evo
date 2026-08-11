@@ -15,7 +15,7 @@ const canvas = document.getElementById('dish') as HTMLCanvasElement;
 const renderer = new Renderer(canvas);
 
 let world = new World(DISH_WIDTH, DISH_HEIGHT, Date.now() & 0xffffffff);
-// Plants-only phase: mouths are disabled in genome.ts (ACTIVE_ORGANELLE_TYPES),
+// Plants-only phase: vacuoles are disabled in genome.ts (ACTIVE_ORGANELLE_TYPES),
 // so a "hunter" founder bias wouldn't produce a hunter right now. One plant
 // population until animals come back.
 world.seed(28, 0);

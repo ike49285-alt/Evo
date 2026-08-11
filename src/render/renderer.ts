@@ -8,7 +8,7 @@ import { Organism } from '../sim/organism.js';
 import { OrganelleType } from '../sim/genome.js';
 
 const ORGANELLE_COLOR: Record<OrganelleType, string> = {
-  mouth: '#e05c5c',
+  vacuole: '#7ecfc0',
   chloroplast: '#4caf6e',
   flagellum: '#5c9ce0',
   eye: '#e0d15c',

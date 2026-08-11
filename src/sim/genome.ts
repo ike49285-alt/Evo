@@ -8,10 +8,10 @@ import { Rng } from './rng.js';
 import { clamp } from './types.js';
 import { WEIGHT_COUNT, randomWeights, mutateWeights, crossoverWeights } from './nn.js';
 
-export type OrganelleType = 'mouth' | 'chloroplast' | 'flagellum' | 'eye' | 'armor';
+export type OrganelleType = 'vacuole' | 'chloroplast' | 'flagellum' | 'eye' | 'armor';
 
 export const ORGANELLE_TYPES: readonly OrganelleType[] = [
-  'mouth',
+  'vacuole',
   'chloroplast',
   'flagellum',
   'eye',
@@ -20,14 +20,15 @@ export const ORGANELLE_TYPES: readonly OrganelleType[] = [
 
 /**
  * Organelle types genomes can actually express right now. Plants-only
- * phase: mouths are switched off here — nowhere else. Every mouth-gated
- * behavior downstream (predation, threat-sensing, carrion-eating in
- * world.ts) stays fully implemented; it just goes inert on its own once
- * nothing in the dish can ever have biteRadius > 0. Re-adding 'mouth' to
- * this list is the entire "bring back animals" step.
+ * phase: vacuoles are switched off here — nowhere else. Every
+ * vacuole-gated behavior downstream (predation, threat-sensing,
+ * carrion-eating in world.ts) stays fully implemented; it just goes
+ * inert on its own once nothing in the dish can ever have
+ * vacuoleRadius > 0. Re-adding 'vacuole' to this list is the entire
+ * "bring back animals" step.
  */
 export const ACTIVE_ORGANELLE_TYPES: readonly OrganelleType[] = ORGANELLE_TYPES.filter(
-  (t) => t !== 'mouth',
+  (t) => t !== 'vacuole',
 );
 
 /** One organelle mounted on the chassis rim. */
@@ -202,15 +203,15 @@ export interface DerivedStats {
   agility: number;
   /** Combined photosynthesis rate (energy/tick at full sunlight budget). */
   photoRate: number;
-  /** Bite radius for eating (0 if no mouth). */
-  biteRadius: number;
-  /** Max prey mass this organism's mouth can take on (0 if no mouth). */
-  maxPreyMass: number;
+  /** Contact radius within which a vacuole can engulf carrion or smaller prey (0 if no vacuole). */
+  vacuoleRadius: number;
+  /** Max mass a vacuole can engulf in one go (0 if no vacuole). */
+  maxIngestMass: number;
   /** Vision range, in world units. */
   visionRange: number;
   /** Total half-arc of combined vision cones, radians (0 if no eyes). */
   visionArc: number;
-  /** Defense multiplier: incoming bite damage/odds scaled by 1/(1+armor). */
+  /** Defense multiplier: incoming predation odds/rate scaled by 1/(1+armor). */
   armor: number;
   /** Outer radius for rendering/collision — chassis + longest organelle reach. */
   hullRadius: number;
@@ -220,7 +221,7 @@ export interface DerivedStats {
 
 const UPKEEP_PER_MASS = 0.0025;
 const ORGANELLE_UPKEEP: Record<OrganelleType, number> = {
-  mouth: 0.006,
+  vacuole: 0.006,
   chloroplast: 0.003,
   flagellum: 0.007,
   eye: 0.004,
@@ -233,8 +234,8 @@ export function deriveStats(genome: Genome): DerivedStats {
   let upkeep = 0;
   let thrustForce = 0;
   let photoRate = 0;
-  let biteRadius = 0;
-  let maxPreyMass = 0;
+  let vacuoleRadius = 0;
+  let maxIngestMass = 0;
   let visionRange = 0;
   let visionArc = 0;
   let armor = 0;
@@ -253,9 +254,9 @@ export function deriveStats(genome: Genome): DerivedStats {
       case 'chloroplast':
         photoRate += o.size * 0.5;
         break;
-      case 'mouth':
-        biteRadius = Math.max(biteRadius, radius * 0.5 + o.size * 1.5);
-        maxPreyMass += o.size * 6;
+      case 'vacuole':
+        vacuoleRadius = Math.max(vacuoleRadius, radius * 0.5 + o.size * 1.5);
+        maxIngestMass += o.size * 6;
         break;
       case 'eye':
         visionRange = Math.max(visionRange, 60 + o.size * 25);
@@ -277,8 +278,8 @@ export function deriveStats(genome: Genome): DerivedStats {
     thrustForce,
     agility,
     photoRate,
-    biteRadius,
-    maxPreyMass,
+    vacuoleRadius,
+    maxIngestMass,
     visionRange,
     visionArc: Math.min(visionArc, Math.PI * 2),
     armor,
