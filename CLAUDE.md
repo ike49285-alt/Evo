@@ -1,6 +1,10 @@
-# Evo — working notes for whoever picks this up next
+# Evo — project notes for Claude
 
-This supersedes the previous version of this file (a pre-rebuild wish list).
+This file is the working handoff doc for whichever Claude session picks
+this project up next. Read it before making changes — it'll save you from
+re-deriving decisions that were already made deliberately, and from
+re-discovering bugs that already got fixed once.
+
 Everything below reflects what's actually built and verified as of branch
 `claude/genome-driven-rebuild`, not aspiration. Where something is still
 aspirational, it's labeled as such.
