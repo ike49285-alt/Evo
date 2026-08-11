@@ -56,6 +56,12 @@ const CONDENSATION_CHANCE_PER_SEC = 0.045; // nucleation rate once a cluster cle
 
 let nextParticleId = 1;
 
+/** For World.deserialize(): bump past the highest amino-acid/protein id in
+ *  a resumed save so a freshly-formed particle can't reuse a live id. */
+export function setNextParticleId(n: number): void {
+  nextParticleId = n;
+}
+
 export function spawnAminoAcid(rng: Rng, x: number, y: number): AminoAcid {
   return {
     id: nextParticleId++,

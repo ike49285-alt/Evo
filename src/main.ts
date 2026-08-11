@@ -9,16 +9,49 @@ const DISH_HEIGHT = 1600;
 const TICK_DT = 1 / 30; // fixed sim step, seconds
 const FRAME_BUDGET_MS = 18; // never spend more than this per frame on ticks
 const SOUP_BURST_SIZE = 60; // amino acids added by the "+ Soup" button
+const SAVE_KEY = 'evo-save-v1';
+const AUTOSAVE_INTERVAL_MS = 5000;
 
 const canvas = document.getElementById('dish') as HTMLCanvasElement;
 const renderer = new Renderer(canvas);
+
+/** Loads a previously-saved dish from localStorage, if one exists and
+ *  parses cleanly. Corrupt/incompatible saves are treated as no save —
+ *  logged, not thrown, so a bad save can never brick the page. */
+function loadSavedWorld(): World | null {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (data?.version !== 1) return null;
+    const loaded = World.deserialize(data);
+    console.log(`Evo: resumed saved dish (tick ${Math.floor(loaded.stats.tick)}, pop ${loaded.organisms.length}).`);
+    return loaded;
+  } catch (err) {
+    console.warn('Evo: saved dish failed to load, starting fresh.', err);
+    return null;
+  }
+}
+
+function saveWorld(): void {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(world.serialize()));
+  } catch (err) {
+    // Most likely quota exceeded — a very dense, long-running dish's JSON
+    // can get large. Not fatal: the sim keeps running, it just won't
+    // resume from this point. Logged so it's visible in devtools, not
+    // silently lost.
+    console.warn('Evo: failed to save dish.', err);
+  }
+}
 
 // No seeded life. The dish starts as pure primordial soup — amino acids
 // drifting, nothing alive — and every organism from here on had to
 // spontaneously condense out of chemistry (see World.tickChemistry /
 // sim/chemistry.ts). A run can go a long time without a single spark. That's
-// not a bug to paper over.
-let world = new World(DISH_WIDTH, DISH_HEIGHT, Date.now() & 0xffffffff);
+// not a bug to paper over. Unless a save exists, in which case: pick up
+// exactly where it left off.
+let world = loadSavedWorld() ?? new World(DISH_WIDTH, DISH_HEIGHT, Date.now() & 0xffffffff);
 
 const view: ViewTransform = { offsetX: 0, offsetY: 0, zoom: 1 };
 
@@ -103,6 +136,9 @@ playPauseBtn.addEventListener('click', () => {
 
 resetBtn.addEventListener('click', () => {
   world = new World(DISH_WIDTH, DISH_HEIGHT, Date.now() & 0xffffffff);
+  // A reset should mean a genuinely fresh dish, not "fresh until the next
+  // autosave tick silently brings the old one back."
+  localStorage.removeItem(SAVE_KEY);
 });
 
 fitBtn.addEventListener('click', fitView);
@@ -140,6 +176,17 @@ function updateHud(frameMs: number): void {
     `gen ${s.avgGeneration.toFixed(1)} (max ${s.highestGeneration})  |  ` +
     `tick ${Math.floor(s.tick)}  |  frame ${frameMs.toFixed(1)}ms`;
 }
+
+// ---- Save / resume --------------------------------------------------------
+// Autosave on an interval, plus best-effort saves at the moments a tab is
+// actually likely to disappear (switched away from, closed) — the interval
+// alone could miss up to AUTOSAVE_INTERVAL_MS of progress otherwise.
+
+setInterval(saveWorld, AUTOSAVE_INTERVAL_MS);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) saveWorld();
+});
+window.addEventListener('beforeunload', saveWorld);
 
 // ---- Game loop -----------------------------------------------------------
 

@@ -3,10 +3,10 @@
 // to know about more than one organism at a time.
 
 import { Rng } from './rng.js';
-import { Organism, Perception, SenseTarget } from './organism.js';
-import { Genome, mutateGenome, deriveStats } from './genome.js';
+import { Organism, Perception, SenseTarget, setNextOrganismId } from './organism.js';
+import { Genome, mutateGenome, deriveStats, serializeGenome, deserializeGenome, SerializedGenome } from './genome.js';
 import { SpatialGrid } from './grid.js';
-import { Carrion, spawnCarrion, CARRION_DECAY_TICKS, MAX_CARRION } from './food.js';
+import { Carrion, spawnCarrion, CARRION_DECAY_TICKS, MAX_CARRION, setNextFoodId } from './food.js';
 import { dist, directionTo } from './types.js';
 import {
   AminoAcid,
@@ -18,6 +18,7 @@ import {
   decayProteins,
   attemptCondensation,
   MAX_AMINO_ACIDS,
+  setNextParticleId,
 } from './chemistry.js';
 
 const GRID_CELL_SIZE = 48;
@@ -48,6 +49,41 @@ export interface WorldStats {
   colonyCount: number;
   largestColony: number;
   tick: number;
+}
+
+// ---- Serialization (save/resume) -----------------------------------------
+
+const SAVE_FORMAT_VERSION = 1;
+
+interface SavedOrganism {
+  id: number;
+  genome: SerializedGenome;
+  x: number;
+  y: number;
+  heading: number;
+  speed: number;
+  energy: number;
+  age: number;
+  generation: number;
+  lineageId: number;
+  /** null for a root; otherwise the parent's id plus the fixed bond offset
+   *  (see Organism.bondChild) needed to reconstruct the colony tree. */
+  parentId: number | null;
+  localAngle: number;
+  localDistance: number;
+}
+
+export interface SavedWorld {
+  version: number;
+  width: number;
+  height: number;
+  tickCount: number;
+  sparkCount: number;
+  nextLineageId: number;
+  organisms: SavedOrganism[];
+  carrion: Carrion[];
+  aminoAcids: AminoAcid[];
+  proteins: Protein[];
 }
 
 export class World {
@@ -87,6 +123,100 @@ export class World {
       largestColony: 0,
       tick: 0,
     };
+  }
+
+  /** Snapshot everything needed to resume this exact dish later — genomes,
+   *  the full bond tree (as parentId + the fixed offset, not object refs,
+   *  since those don't survive JSON), soup, carrion. Doesn't preserve the
+   *  RNG's internal state, so a resumed run's random sequence diverges from
+   *  where the original would have gone; it still keeps evolving forward
+   *  from a real snapshot, which is what "come back later" actually needs. */
+  serialize(): SavedWorld {
+    return {
+      version: SAVE_FORMAT_VERSION,
+      width: this.width,
+      height: this.height,
+      tickCount: this.tickCount,
+      sparkCount: this.sparkCount,
+      nextLineageId: this.nextLineageId,
+      organisms: this.organisms.map((o) => ({
+        id: o.id,
+        genome: serializeGenome(o.genome),
+        x: o.x,
+        y: o.y,
+        heading: o.heading,
+        speed: o.speed,
+        energy: o.energy,
+        age: o.age,
+        generation: o.generation,
+        lineageId: o.lineageId,
+        parentId: o.parent ? o.parent.id : null,
+        localAngle: o.localAngle,
+        localDistance: o.localDistance,
+      })),
+      carrion: this.carrion.map((c) => ({ ...c })),
+      aminoAcids: this.aminoAcids.map((a) => ({ ...a })),
+      proteins: this.proteins.map((p) => ({ ...p, composition: { ...p.composition } })),
+    };
+  }
+
+  /** Reconstructs a World from serialize()'s output. Ids are preserved
+   *  exactly (organism ids matter — bonds reference them), and every id
+   *  counter is bumped past the highest one seen so a freshly-born
+   *  organism or particle can never collide with a resumed one. */
+  static deserialize(data: SavedWorld): World {
+    const world = new World(data.width, data.height, Date.now() & 0xffffffff);
+    world.tickCount = data.tickCount;
+    world.sparkCount = data.sparkCount;
+    world.nextLineageId = data.nextLineageId;
+
+    const byId = new Map<number, Organism>();
+    let maxOrgId = 0;
+    for (const so of data.organisms) {
+      const org = new Organism(
+        deserializeGenome(so.genome),
+        so.x,
+        so.y,
+        so.energy,
+        so.generation,
+        so.lineageId,
+        so.id,
+      );
+      org.heading = so.heading;
+      org.speed = so.speed;
+      org.age = so.age;
+      byId.set(so.id, org);
+      if (so.id > maxOrgId) maxOrgId = so.id;
+    }
+    for (const so of data.organisms) {
+      if (so.parentId === null) continue;
+      const parent = byId.get(so.parentId);
+      const child = byId.get(so.id);
+      if (parent && child) parent.bondChild(child, so.localAngle, so.localDistance);
+    }
+    // Recompute derived-not-saved state (colonyRadius, descendant transforms)
+    // fresh from the reconstructed tree rather than trusting saved positions.
+    for (const org of byId.values()) {
+      if (org.isRoot) org.propagateColonyTransform();
+    }
+    world.organisms = Array.from(byId.values());
+    setNextOrganismId(maxOrgId + 1);
+
+    world.carrion = data.carrion.map((c) => ({ ...c }));
+    world.aminoAcids = data.aminoAcids.map((a) => ({ ...a }));
+    world.proteins = data.proteins.map((p) => ({ ...p, composition: { ...p.composition } }));
+
+    let maxFoodId = 0;
+    for (const c of world.carrion) if (c.id > maxFoodId) maxFoodId = c.id;
+    setNextFoodId(maxFoodId + 1);
+
+    let maxParticleId = 0;
+    for (const a of world.aminoAcids) if (a.id > maxParticleId) maxParticleId = a.id;
+    for (const p of world.proteins) if (p.id > maxParticleId) maxParticleId = p.id;
+    setNextParticleId(maxParticleId + 1);
+
+    world.updateStats();
+    return world;
   }
 
   /** Drop in a genome at a specific spot (used by the condensation pass), or

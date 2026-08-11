@@ -355,3 +355,37 @@ export function deriveStats(genome: Genome): DerivedStats {
 }
 
 export { WEIGHT_COUNT };
+
+// ---- Serialization (save/resume) -------------------------------------
+
+/** JSON-safe mirror of Genome — Float32Array doesn't round-trip through
+ *  JSON.stringify (it serializes as an object keyed "0","1",... not an
+ *  array), so brain weights go out as a plain number[]. */
+export interface SerializedGenome {
+  bodyPlan: BodyPlan;
+  weights: number[];
+  hue: number;
+}
+
+// Weights don't need full float64 JSON precision to behave identically —
+// 6 significant digits is far past where it'd affect a tanh/sigmoid
+// output, and cuts save-file size substantially at ~162 weights/organism.
+function round6(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
+}
+
+export function serializeGenome(genome: Genome): SerializedGenome {
+  return {
+    bodyPlan: genome.bodyPlan,
+    weights: Array.from(genome.brain.weights, round6),
+    hue: genome.hue,
+  };
+}
+
+export function deserializeGenome(s: SerializedGenome): Genome {
+  return {
+    bodyPlan: s.bodyPlan,
+    brain: { weights: Float32Array.from(s.weights) },
+    hue: s.hue,
+  };
+}

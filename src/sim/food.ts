@@ -16,6 +16,13 @@ export interface Carrion extends Vec2 {
 
 let nextFoodId = 1;
 
+/** For World.deserialize(): bump past the highest carrion id in a resumed
+ *  save. Carrion ids don't need to be preserved exactly (nothing else
+ *  references them by id), but they still can't collide with fresh ones. */
+export function setNextFoodId(n: number): void {
+  nextFoodId = n;
+}
+
 export function spawnCarrion(x: number, y: number, energy: number): Carrion {
   return {
     id: nextFoodId++,

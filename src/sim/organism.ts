@@ -12,6 +12,14 @@ import { GridEntry } from './grid.js';
 
 let nextOrganismId = 1;
 
+/** For World.deserialize(): after recreating every saved organism with its
+ *  original id (via the constructor's `id` override), the counter must be
+ *  bumped past the highest one seen, or a freshly-born organism could reuse
+ *  an id still held by a resumed one. */
+export function setNextOrganismId(n: number): void {
+  nextOrganismId = n;
+}
+
 export const MAX_TURN_RATE = 3.4; // rad/sec at full agility
 const DRAG_COEFF = 0.9;
 const MOVEMENT_UPKEEP_SCALE = 0.02;
@@ -65,8 +73,18 @@ export class Organism implements GridEntry {
   pendingPushX = 0;
   pendingPushY = 0;
 
-  constructor(genome: Genome, x: number, y: number, energy: number, generation: number, lineageId: number) {
-    this.id = nextOrganismId++;
+  constructor(
+    genome: Genome,
+    x: number,
+    y: number,
+    energy: number,
+    generation: number,
+    lineageId: number,
+    /** Explicit id override, for World.deserialize() reconstructing a
+     *  saved organism under its original id. Omit for normal creation. */
+    id?: number,
+  ) {
+    this.id = id ?? nextOrganismId++;
     this.genome = genome;
     this.stats = deriveStats(genome);
     this.x = x;
