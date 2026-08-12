@@ -120,7 +120,11 @@ export class Origin {
   readonly energyFluxPerTick = 1.6; // expected new energy particles/tick (fractional, accumulated)
   readonly lipidAssemblyRadius = 7;
   readonly membranePermeability = 0.02; // per-tick chance a small molecule crosses a nearby membrane
-  readonly copyStallTimeout = 1000; // ticks a templated copy can go without completing before the complex dissociates
+  // Bumped from an initial 1000: per-attempt diagnostics after fixing the
+  // substrate-radius bottleneck showed real attempts reaching 70-83% of
+  // their template before timing out — close enough that the timeout
+  // itself, not the underlying rate, looked like the remaining ceiling.
+  readonly copyStallTimeout = 1800;
   readonly substrateRadius = 42; // nucleotide search radius during templated copying — see templatedReplication's comment
   readonly statsSampleInterval = 20;
   readonly maxHistory = 500;
