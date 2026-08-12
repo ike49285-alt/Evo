@@ -166,12 +166,35 @@ export class Origin {
         this.grid.rebuild([...this.particles.values()]);
         this.moveParticles();
         this.spawnEnergyFlux();
+        // Each of these passes removes and creates particles, so the grid
+        // built above goes stale the moment the first one runs — rebuilding
+        // between every pass, not just once per tick, is what this fixes.
+        // Left stale (as an earlier version did), a later pass can still
+        // "find" a particle an earlier pass already deleted this same tick:
+        // the grid's bucket arrays hold object references, not live lookups,
+        // so the detached zombie object still passes every kind/length/
+        // vesicleId check. Extending or bonding into that zombie mutates an
+        // object nothing else references — a silent no-op for the sim state
+        // — while the *real* monomer that was "merged into it" still gets
+        // deleted for real. That's genuine mass destruction, not just a
+        // double-count: headless verification traced it directly (a hydrolysis
+        // event's freshly spawned replacement nucleotide vanishing in the same
+        // tick, consumed by an extend call whose target was an rna already
+        // deleted moments earlier by hydrolyze()) and confirmed it as the
+        // reason the free nucleotide pool was slowly starving out from under
+        // replication regardless of how generous the reaction rates were.
         this.hydrolyze();
+        this.grid.rebuild([...this.particles.values()]);
         this.condensePolymers('aa');
+        this.grid.rebuild([...this.particles.values()]);
         this.condensePolymers('nt');
+        this.grid.rebuild([...this.particles.values()]);
         this.templatedReplication();
+        this.grid.rebuild([...this.particles.values()]);
         this.lipidAssembly();
+        this.grid.rebuild([...this.particles.values()]);
         this.recruitAndDivideVesicles();
+        this.grid.rebuild([...this.particles.values()]);
         this.membraneDiffusion();
         if (this.tick % this.statsSampleInterval === 0)
             this.sampleStats();
@@ -285,9 +308,6 @@ export class Origin {
             refoldPeptide(p);
     }
     shrinkRna(p) {
-        if (globalThis.__ORIGIN_DEBUG__ && p.copying) {
-            console.log(`[repl] tick=${this.tick} rna=${p.id} HYDROLYZED mid-copy (len ${p.sequence.length}->${p.sequence.length - 1}, built=${p.copying.built.length})`);
-        }
         const fromStart = this.rng.bool(0.5);
         const code = fromStart ? p.sequence.shift() : p.sequence.pop();
         if (code) {
@@ -446,6 +466,21 @@ export class Origin {
             // it, RNA length plateaued hard the instant the first copy attempt
             // got stuck, for the entire rest of a 150,000-tick run.
             if (this.tick - p.copying.startedTick > this.copyStallTimeout) {
+                // The bases already built don't just vanish with the complex —
+                // headless-verified as a real, previously-silent mass-destruction
+                // bug: every abandoned copy was quietly deleting however many
+                // nucleotides it had successfully assembled before giving up,
+                // which (since most attempts don't complete) was steadily
+                // starving the free nucleotide pool out from under every other
+                // attempt still in progress.
+                for (const code of p.copying.built) {
+                    const mono = this.spawnNucleotide(code);
+                    mono.x = p.x + this.rng.range(-4, 4);
+                    mono.y = p.y + this.rng.range(-4, 4);
+                    mono.vesicleId = p.vesicleId;
+                    if (p.vesicleId !== null)
+                        this.vesicles.get(p.vesicleId)?.memberIds.add(mono.id);
+                }
                 p.copying = null;
                 continue;
             }
