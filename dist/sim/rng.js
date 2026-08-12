@@ -39,4 +39,18 @@ export class Rng {
     pick(arr) {
         return arr[Math.floor(this.next() * arr.length)];
     }
+    /** Raw internal state, for save/restore — continuing from this exact
+     * state picks the random sequence back up where it left off, rather
+     * than reseeding (which would replay from the start). */
+    getState() {
+        return this.state;
+    }
+    /** Restores an Rng to a previously saved state — bypasses the
+     * constructor's seed hashing since `state` here already *is* the raw
+     * internal value, not a seed to derive one from. */
+    static fromState(state) {
+        const rng = new Rng(0);
+        rng.state = state | 0;
+        return rng;
+    }
 }

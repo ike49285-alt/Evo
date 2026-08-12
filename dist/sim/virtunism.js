@@ -1,5 +1,15 @@
-import { crossoverGenome, deriveArmorBonus, deriveMaxSpeed, deriveMouthCount, deriveMouthPower, deriveTurnRate, derivePhotosynthesis, mutateGenome, } from './genome.js';
+import { crossoverGenome, deriveArmorBonus, deriveMaxSpeed, deriveMouthCount, deriveMouthPower, deriveTurnRate, derivePhotosynthesis, deserializeGenome, mutateGenome, serializeGenome, } from './genome.js';
+import { Rng } from './rng.js';
 let nextId = 1;
+/** The module-level id counter is process-global, not per-World — a saved
+ * game has to restore it too, or a freshly-created virtunism after reload
+ * could collide with an id that's still alive in the restored population. */
+export function getNextVirtunismId() {
+    return nextId;
+}
+export function setNextVirtunismId(n) {
+    nextId = n;
+}
 function clamp(v, min, max) {
     return Math.min(max, Math.max(min, v));
 }
@@ -16,7 +26,13 @@ function clamp(v, min, max) {
  * immediate parent in that tree — irrelevant for one with no attachedTo.
  */
 export class Virtunism {
-    constructor(genome, x, y, lineageId, generation, energy, rng, isPlayerDesigned = false) {
+    constructor(genome, x, y, lineageId, generation, energy, rng, isPlayerDesigned = false, 
+    // Only set when reconstructing a saved individual — lets save/restore
+    // reproduce its exact id and heading instead of minting a new id and
+    // rolling a fresh random heading, while every other normal-creation
+    // call site (reproduce, budOffspring, mateVirtunisms, addSpecies) stays
+    // untouched.
+    restore) {
         this.speed = 0; // current scalar speed, 0..deriveMaxSpeed(genome)
         this.age = 0; // ticks
         this.reproCooldown = 0;
@@ -29,11 +45,11 @@ export class Virtunism {
         // scratch: this tick's brain output, cached so colony movement can pool
         // every member's vote without re-running the network.
         this.lastOutputs = [0, 0];
-        this.id = nextId++;
+        this.id = restore?.id ?? nextId++;
         this.genome = genome;
         this.x = x;
         this.y = y;
-        this.heading = rng.range(0, Math.PI * 2);
+        this.heading = restore?.heading ?? rng.range(0, Math.PI * 2);
         this.energy = energy;
         this.lineageId = lineageId;
         this.generation = generation;
@@ -221,6 +237,59 @@ export class Virtunism {
         this.attachedTo = null;
         this.attachedChildren = [];
     }
+    /** attachedTo/attachedChildren are direct object references (a real bond
+     * tree, not just ids) — not JSON-safe as-is, so they're flattened to ids
+     * here and relinked in a second pass by `deserializeVirtunisms` below,
+     * once every individual in the save has actually been reconstructed. */
+    serialize() {
+        return {
+            id: this.id,
+            genome: serializeGenome(this.genome),
+            x: this.x,
+            y: this.y,
+            heading: this.heading,
+            speed: this.speed,
+            energy: this.energy,
+            age: this.age,
+            reproCooldown: this.reproCooldown,
+            alive: this.alive,
+            lineageId: this.lineageId,
+            generation: this.generation,
+            isPlayerDesigned: this.isPlayerDesigned,
+            attachedToId: this.attachedTo?.id ?? null,
+            attachedChildrenIds: this.attachedChildren.map((c) => c.id),
+            localAngle: this.localAngle,
+            localDist: this.localDist,
+            lastOutputs: [...this.lastOutputs],
+        };
+    }
+}
+/** Reconstructs a whole saved population in two passes: every individual
+ * first (so every id has a live instance to point to), then every bond-tree
+ * link (attachedTo/attachedChildren) — a Virtunism can reference a sibling
+ * that hasn't been constructed yet if done in one pass. */
+export function deserializeVirtunisms(list) {
+    const dummyRng = new Rng(0); // never actually drawn from — heading is always restored explicitly
+    const byId = new Map();
+    const result = [];
+    for (const data of list) {
+        const v = new Virtunism(deserializeGenome(data.genome), data.x, data.y, data.lineageId, data.generation, data.energy, dummyRng, data.isPlayerDesigned, { id: data.id, heading: data.heading });
+        v.speed = data.speed;
+        v.age = data.age;
+        v.reproCooldown = data.reproCooldown;
+        v.alive = data.alive;
+        v.localAngle = data.localAngle;
+        v.localDist = data.localDist;
+        v.lastOutputs = data.lastOutputs;
+        byId.set(v.id, v);
+        result.push(v);
+    }
+    for (const data of list) {
+        const v = byId.get(data.id);
+        v.attachedTo = data.attachedToId !== null ? (byId.get(data.attachedToId) ?? null) : null;
+        v.attachedChildren = data.attachedChildrenIds.map((id) => byId.get(id)).filter((c) => !!c);
+    }
+    return result;
 }
 /**
  * Sexual reproduction: crosses over both parents' genomes (traits, brain

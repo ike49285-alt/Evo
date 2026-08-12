@@ -6,6 +6,7 @@ import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
 import { drawSparkline, drawScatter } from './ui/chart.js';
 import { drawTree, hitTestTree } from './ui/treeview.js';
+import { loadGame, saveGame } from './save.js';
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 1500;
 // A small, concentrated "tide pool" rather than a thin ocean — real
@@ -22,14 +23,26 @@ function el(id) {
         throw new Error(`Missing element #${id}`);
     return found;
 }
-let stage = 'origins';
+// --- two coexisting top-level stages ---------------------------------
+// Origins is where life actually starts (see src/chem/) — the Dish (the
+// original organelle/Virtunism ecosystem) begins completely empty, and
+// only gets founders either by bootstrapping a stabilized protocell out
+// of Origins or by hand-designing one in the Designer tab. Both engines
+// keep ticking in the background regardless of which is on screen, so
+// switching tabs doesn't pause the one you're not looking at.
+//
+// Both engines' state autosaves to localStorage every 5s (see save.ts)
+// and gets restored here on load if a save exists — a page reload or an
+// accidentally-closed tab doesn't cost you a run.
+const restored = loadGame();
+let stage = restored?.stage ?? 'origins';
 document.body.dataset.stage = stage; // don't rely solely on the static HTML attribute for this
 const originCanvas = el('origins-canvas');
 const originRenderer = new OriginRenderer(originCanvas);
-let origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
+let origin = restored?.origin ?? Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
 const canvas = el('sim-canvas');
 const renderer = new Renderer(canvas);
-let world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+let world = restored?.world ?? new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
 let paused = false;
 let speed = 1;
 // --- resize / camera -------------------------------------------------
@@ -104,23 +117,27 @@ btnVision.addEventListener('click', () => {
     btnVision.classList.toggle('active', showVision);
 });
 // --- stage switcher -----------------------------------------------------
+function switchStage(next) {
+    stage = next;
+    document.body.dataset.stage = stage;
+    document.querySelectorAll('.stage-btn').forEach((b) => b.classList.toggle('active', b.dataset.stage === stage));
+    document.querySelectorAll('.stage-view').forEach((v) => v.classList.remove('active'));
+    el(`${stage}-stage`).classList.add('active');
+    // A canvas that was display:none reports zero size, so its backing
+    // buffer and camera fit need to be redone the moment it becomes visible.
+    handleResize();
+    if (stage === 'dish')
+        renderer.fitToWorld(world);
+    else
+        originRenderer.fitToWorld(origin);
+}
 document.querySelectorAll('.stage-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-        stage = btn.dataset.stage;
-        document.body.dataset.stage = stage;
-        document.querySelectorAll('.stage-btn').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        document.querySelectorAll('.stage-view').forEach((v) => v.classList.remove('active'));
-        el(`${stage}-stage`).classList.add('active');
-        // A canvas that was display:none reports zero size, so its backing
-        // buffer and camera fit need to be redone the moment it becomes visible.
-        handleResize();
-        if (stage === 'dish')
-            renderer.fitToWorld(world);
-        else
-            originRenderer.fitToWorld(origin);
-    });
+    btn.addEventListener('click', () => switchStage(btn.dataset.stage));
 });
+// A restored save might have left off on the Dish — the static HTML/CSS
+// always assumes Origins is the active view on load, so sync it here.
+if (stage === 'dish')
+    switchStage('dish');
 // --- sub-tabs (Designer / Ecosystem, inside the Dish stage) ------------
 document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -188,13 +205,7 @@ btnBootstrap.addEventListener('click', () => {
         return;
     const translated = translateBootstrapCandidate(candidate);
     world.addSpecies(translated.template, FOUNDER_COUNT, { name: translated.name, isPlayerDesigned: false });
-    stage = 'dish';
-    document.body.dataset.stage = stage;
-    document.querySelectorAll('.stage-btn').forEach((b) => b.classList.toggle('active', b.dataset.stage === 'dish'));
-    document.querySelectorAll('.stage-view').forEach((v) => v.classList.remove('active'));
-    el('dish-stage').classList.add('active');
-    handleResize();
-    renderer.fitToWorld(world);
+    switchStage('dish');
 });
 function updateOriginsPanel() {
     const s = origin.getStats();
@@ -383,3 +394,14 @@ function frame() {
     requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+// --- autosave ------------------------------------------------------------
+// Every 5s, plus a best-effort save the moment the tab is hidden/closed
+// (covers the common "closed the tab before the next 5s tick" case that a
+// bare interval alone would miss — `visibilitychange` fires reliably on
+// tab close/switch, `beforeunload` is a backstop for browsers that skip it).
+setInterval(() => saveGame(origin, world, stage), 5000);
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden)
+        saveGame(origin, world, stage);
+});
+window.addEventListener('beforeunload', () => saveGame(origin, world, stage));

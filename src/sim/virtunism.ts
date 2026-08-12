@@ -6,13 +6,26 @@ import {
   deriveMouthPower,
   deriveTurnRate,
   derivePhotosynthesis,
+  deserializeGenome,
   Genome,
   mutateGenome,
+  serializeGenome,
+  SerializedGenome,
 } from './genome.js';
 import { Rng } from './rng.js';
 import { GridPoint } from './grid.js';
 
 let nextId = 1;
+
+/** The module-level id counter is process-global, not per-World — a saved
+ * game has to restore it too, or a freshly-created virtunism after reload
+ * could collide with an id that's still alive in the restored population. */
+export function getNextVirtunismId(): number {
+  return nextId;
+}
+export function setNextVirtunismId(n: number): void {
+  nextId = n;
+}
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
@@ -65,12 +78,18 @@ export class Virtunism implements GridPoint {
     energy: number,
     rng: Rng,
     isPlayerDesigned = false,
+    // Only set when reconstructing a saved individual — lets save/restore
+    // reproduce its exact id and heading instead of minting a new id and
+    // rolling a fresh random heading, while every other normal-creation
+    // call site (reproduce, budOffspring, mateVirtunisms, addSpecies) stays
+    // untouched.
+    restore?: { id: number; heading: number },
   ) {
-    this.id = nextId++;
+    this.id = restore?.id ?? nextId++;
     this.genome = genome;
     this.x = x;
     this.y = y;
-    this.heading = rng.range(0, Math.PI * 2);
+    this.heading = restore?.heading ?? rng.range(0, Math.PI * 2);
     this.energy = energy;
     this.lineageId = lineageId;
     this.generation = generation;
@@ -288,6 +307,92 @@ export class Virtunism implements GridPoint {
     this.attachedTo = null;
     this.attachedChildren = [];
   }
+
+  /** attachedTo/attachedChildren are direct object references (a real bond
+   * tree, not just ids) — not JSON-safe as-is, so they're flattened to ids
+   * here and relinked in a second pass by `deserializeVirtunisms` below,
+   * once every individual in the save has actually been reconstructed. */
+  serialize(): SerializedVirtunism {
+    return {
+      id: this.id,
+      genome: serializeGenome(this.genome),
+      x: this.x,
+      y: this.y,
+      heading: this.heading,
+      speed: this.speed,
+      energy: this.energy,
+      age: this.age,
+      reproCooldown: this.reproCooldown,
+      alive: this.alive,
+      lineageId: this.lineageId,
+      generation: this.generation,
+      isPlayerDesigned: this.isPlayerDesigned,
+      attachedToId: this.attachedTo?.id ?? null,
+      attachedChildrenIds: this.attachedChildren.map((c) => c.id),
+      localAngle: this.localAngle,
+      localDist: this.localDist,
+      lastOutputs: [...this.lastOutputs],
+    };
+  }
+}
+
+export interface SerializedVirtunism {
+  id: number;
+  genome: SerializedGenome;
+  x: number;
+  y: number;
+  heading: number;
+  speed: number;
+  energy: number;
+  age: number;
+  reproCooldown: number;
+  alive: boolean;
+  lineageId: number;
+  generation: number;
+  isPlayerDesigned: boolean;
+  attachedToId: number | null;
+  attachedChildrenIds: number[];
+  localAngle: number;
+  localDist: number;
+  lastOutputs: number[];
+}
+
+/** Reconstructs a whole saved population in two passes: every individual
+ * first (so every id has a live instance to point to), then every bond-tree
+ * link (attachedTo/attachedChildren) — a Virtunism can reference a sibling
+ * that hasn't been constructed yet if done in one pass. */
+export function deserializeVirtunisms(list: readonly SerializedVirtunism[]): Virtunism[] {
+  const dummyRng = new Rng(0); // never actually drawn from — heading is always restored explicitly
+  const byId = new Map<number, Virtunism>();
+  const result: Virtunism[] = [];
+  for (const data of list) {
+    const v = new Virtunism(
+      deserializeGenome(data.genome),
+      data.x,
+      data.y,
+      data.lineageId,
+      data.generation,
+      data.energy,
+      dummyRng,
+      data.isPlayerDesigned,
+      { id: data.id, heading: data.heading },
+    );
+    v.speed = data.speed;
+    v.age = data.age;
+    v.reproCooldown = data.reproCooldown;
+    v.alive = data.alive;
+    v.localAngle = data.localAngle;
+    v.localDist = data.localDist;
+    v.lastOutputs = data.lastOutputs;
+    byId.set(v.id, v);
+    result.push(v);
+  }
+  for (const data of list) {
+    const v = byId.get(data.id)!;
+    v.attachedTo = data.attachedToId !== null ? (byId.get(data.attachedToId) ?? null) : null;
+    v.attachedChildren = data.attachedChildrenIds.map((id) => byId.get(id)).filter((c): c is Virtunism => !!c);
+  }
+  return result;
 }
 
 /**

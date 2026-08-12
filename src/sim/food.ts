@@ -25,3 +25,10 @@ export function createFood(x: number, y: number, energy: number, bornTick: numbe
     bornTick,
   };
 }
+
+export function getNextFoodId(): number {
+  return nextFoodId;
+}
+export function setNextFoodId(n: number): void {
+  nextFoodId = n;
+}

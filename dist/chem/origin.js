@@ -906,4 +906,41 @@ export class Origin {
             bootstrapReady: this.bootstrapCandidates.length,
         };
     }
+    // --- save/restore ----------------------------------------------------
+    // Particles are already plain, JSON-safe data (even the union's peptide/
+    // rna variants — `fold`/`copying` are plain objects, no class instances,
+    // no circular refs) — only the Maps and each Vesicle's `memberIds` Set
+    // need flattening to arrays.
+    serialize() {
+        return {
+            width: this.width,
+            height: this.height,
+            tick: this.tick,
+            rngState: this.rng.getState(),
+            nextId: this.nextId,
+            nextVesicleId: this.nextVesicleId,
+            energyDebt: this.energyDebt,
+            totalReplicationEvents: this.totalReplicationEvents,
+            particles: [...this.particles.values()],
+            vesicles: [...this.vesicles.values()].map((v) => ({ ...v, memberIds: [...v.memberIds] })),
+            history: this.history,
+            bootstrapCandidates: this.bootstrapCandidates,
+        };
+    }
+    static deserialize(data) {
+        const o = new Origin(data.width, data.height, 0);
+        o.rng = Rng.fromState(data.rngState);
+        o.tick = data.tick;
+        o.nextId = data.nextId;
+        o.nextVesicleId = data.nextVesicleId;
+        o.energyDebt = data.energyDebt;
+        o.totalReplicationEvents = data.totalReplicationEvents;
+        for (const p of data.particles)
+            o.particles.set(p.id, p);
+        for (const v of data.vesicles)
+            o.vesicles.set(v.id, { ...v, memberIds: new Set(v.memberIds) });
+        o.history = data.history;
+        o.bootstrapCandidates = data.bootstrapCandidates;
+        return o;
+    }
 }

@@ -240,3 +240,17 @@ export function crossoverGenome(a: Genome, b: Genome, rng: Rng): Genome {
     brain: NeuralNet.crossover(a.brain, b.brain, rng),
   };
 }
+
+// ---- save/restore ----------------------------------------------------------
+// Everything in a Genome except `brain` is already plain, JSON-safe data
+// (organelles are just kind/angle/size records) — only the brain's
+// Float32Arrays need converting on the way out and back.
+export type SerializedGenome = Omit<Genome, 'brain'> & { brain: ReturnType<NeuralNet['toJSON']> };
+
+export function serializeGenome(genome: Genome): SerializedGenome {
+  return { ...genome, brain: genome.brain.toJSON() };
+}
+
+export function deserializeGenome(json: SerializedGenome): Genome {
+  return { ...json, brain: NeuralNet.fromJSON(json.brain) };
+}

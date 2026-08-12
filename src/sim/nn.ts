@@ -123,6 +123,28 @@ export class NeuralNet {
     mutateArray(child.b2, rng, rate, strength);
     return child;
   }
+
+  /** Plain-array snapshot for save/restore — Float32Arrays don't survive
+   * JSON.stringify as themselves (they'd come back as an object keyed by
+   * numeric-string index, not a real array). */
+  toJSON(): { topology: NNTopology; w1: number[]; b1: number[]; w2: number[]; b2: number[] } {
+    return {
+      topology: this.topology,
+      w1: Array.from(this.w1),
+      b1: Array.from(this.b1),
+      w2: Array.from(this.w2),
+      b2: Array.from(this.b2),
+    };
+  }
+
+  static fromJSON(json: { topology: NNTopology; w1: number[]; b1: number[]; w2: number[]; b2: number[] }): NeuralNet {
+    return new NeuralNet(json.topology, {
+      w1: Float32Array.from(json.w1),
+      b1: Float32Array.from(json.b1),
+      w2: Float32Array.from(json.w2),
+      b2: Float32Array.from(json.b2),
+    });
+  }
 }
 
 function mutateArray(arr: Float32Array, rng: Rng, rate: number, strength: number): void {

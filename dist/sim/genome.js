@@ -194,3 +194,9 @@ export function crossoverGenome(a, b, rng) {
         brain: NeuralNet.crossover(a.brain, b.brain, rng),
     };
 }
+export function serializeGenome(genome) {
+    return { ...genome, brain: genome.brain.toJSON() };
+}
+export function deserializeGenome(json) {
+    return { ...json, brain: NeuralNet.fromJSON(json.brain) };
+}

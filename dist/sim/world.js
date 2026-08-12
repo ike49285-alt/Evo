@@ -1,5 +1,5 @@
-import { Virtunism, mateVirtunisms } from './virtunism.js';
-import { createFood } from './food.js';
+import { deserializeVirtunisms, getNextVirtunismId, mateVirtunisms, setNextVirtunismId, Virtunism, } from './virtunism.js';
+import { createFood, getNextFoodId, setNextFoodId } from './food.js';
 import { buildOrganelles, deriveArmorMitigation, deriveFlagellaPower, deriveMaxSpeed, deriveMouthPower, hasBud, } from './genome.js';
 import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
@@ -795,5 +795,43 @@ export class World {
             survivors.push(cell);
         }
         this.cells = survivors;
+    }
+    // --- save/restore --------------------------------------------------------
+    // Everything here is plain, JSON-safe data except Maps (flattened to
+    // arrays) and each Virtunism (which has its own serialize() — see
+    // virtunism.ts for why that one needs a real method instead of just
+    // spreading fields). The process-global id counters (Virtunism, Food)
+    // are captured too, so a freshly-created individual after a restore can
+    // never collide with one that's still alive in the restored population.
+    serialize() {
+        return {
+            width: this.width,
+            height: this.height,
+            tick: this.tick,
+            rngState: this.rng.getState(),
+            nextLineageId: this.nextLineageId,
+            nextVirtunismId: getNextVirtunismId(),
+            nextFoodId: getNextFoodId(),
+            cells: this.cells.map((c) => c.serialize()),
+            meatFood: this.meatFood,
+            lineages: [...this.lineages.values()],
+            history: this.history,
+            treeNodes: [...this.treeNodes.values()],
+        };
+    }
+    static deserialize(data) {
+        const world = new World(data.width, data.height, 0);
+        world.rng = Rng.fromState(data.rngState);
+        world.tick = data.tick;
+        world.nextLineageId = data.nextLineageId;
+        setNextVirtunismId(data.nextVirtunismId);
+        setNextFoodId(data.nextFoodId);
+        world.cells = deserializeVirtunisms(data.cells);
+        world.meatFood = data.meatFood;
+        world.lineages = new Map(data.lineages.map((l) => [l.id, l]));
+        world.history = data.history;
+        for (const node of data.treeNodes)
+            world.treeNodes.set(node.id, node);
+        return world;
     }
 }
