@@ -121,6 +121,7 @@ export class Origin {
   readonly lipidAssemblyRadius = 7;
   readonly membranePermeability = 0.02; // per-tick chance a small molecule crosses a nearby membrane
   readonly copyStallTimeout = 1000; // ticks a templated copy can go without completing before the complex dissociates
+  readonly substrateRadius = 42; // nucleotide search radius during templated copying — see templatedReplication's comment
   readonly statsSampleInterval = 20;
   readonly maxHistory = 500;
 
@@ -505,8 +506,19 @@ export class Origin {
       const nextTemplateIndex = p.sequence.length - 1 - p.copying.built.length;
       const templateBase = p.sequence[nextTemplateIndex];
       const correctBase = NUCLEOTIDES[templateBase].pairsWith;
+      // A wider net than ordinary condensation's blind bondRadius
+      // collision — a templated copy is a guided, selective process (it's
+      // looking for a *specific* base, not just any collision partner),
+      // and real polymerases/ribozymes have an effective capture radius
+      // well beyond van der Waals contact. Headless-verified as necessary,
+      // not just a nicety: at bondRadius, a mostly-stationary template's
+      // own tiny neighborhood of free nucleotides (~130-140 total spread
+      // across the whole dish) was thin enough that most copy attempts —
+      // tracked individually, not just by a discouraging aggregate —
+      // ended with *zero* successful extensions before hitting the stall
+      // timeout, not one.
       const near = this.grid
-        .queryRadius(p.x, p.y, this.bondRadius)
+        .queryRadius(p.x, p.y, this.substrateRadius)
         .filter((o): o is NucleotideParticle => o.kind === 'nt' && o.vesicleId === p.vesicleId);
       if (near.length === 0) continue;
       const correct = near.filter((n) => n.code === correctBase);
