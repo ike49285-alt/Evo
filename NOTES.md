@@ -71,38 +71,71 @@ doesn't need.
 ## What was actually verified this round (be honest about this again)
 
 - Monomer condensation into polymers, peptide/RNA folding producing real
-  catalytic peptides (verified via direct fold-distribution sampling, not
-  just eyeballing the sim), and lipid vesicle formation + membrane growth
-  all reliably occur within tens of thousands of ticks, headless-verified
-  across multiple seeds.
-- Two real bugs were found and fixed via headless verification, not just
-  parameter tuning: (1) the greedy peptide fold's tie-break always
-  preferred continuing straight, a shape that can *never* produce a
-  non-sequential contact regardless of sequence — chains were folding out
-  as straight lines, and fixing the tie-break took mean fold stability
-  from ~0.02-0.03 to ~0.12-0.16 across lengths 8-30; (2) a template
-  mid-copy had no hydrolysis protection, so a copy starting right at the
-  minimum length was routinely orphaned by a single hydrolysis tick —
-  replication never completed in a 150k-tick run despite catalysts
-  existing, even though the *rate* math said it should have.
-- **Not yet verified: a completed RNA self-replication event, or a
-  bootstrap into the Dish.** A 5-seed batch (150k-300k ticks each) with
-  the two bug fixes above reliably produced catalytic peptides (all 5
-  seeds, 9k-34k ticks) and occasionally a ribozyme (2 of 5 seeds), but
-  zero completed replications and zero bootstraps. Direct progress
-  tracking showed why: copy attempts were stalling at 15-50% of their
-  template length well before the stall timeout, not from bad luck but
-  from a per-base extension rate that was calibrated too low (0.04) to
-  realistically finish a 6-9-base copy — since fixed to 0.12 along with
-  a wasted-tick edge case in the mismatch logic, but this hasn't been
-  re-verified end-to-end yet. Don't claim replication or bootstrap work
-  until one is actually witnessed completing in a headless run — this is
-  the same discipline the original Dish notes insisted on, and it's
-  exactly the mistake honesty here is meant to catch.
+  catalytic peptides, and lipid vesicle formation + membrane growth all
+  reliably occur within tens of thousands of ticks, headless-verified
+  across many seeds. Ribozymes (self-catalytic RNA folds) form reliably
+  too, typically within 10k-40k ticks.
+- **RNA self-replication has been directly witnessed completing** — a
+  full templated copy, mutation mechanism included, detaching as an
+  independent RnaParticle — in 2 of 4 seeds in the most recent batch
+  (150k ticks each). This took five real bugs, found by tracing actual
+  particle IDs through individual ticks rather than by guessing at
+  parameters:
+  1. The greedy peptide fold's tie-break always preferred continuing
+     straight, a shape that can *never* produce a non-sequential
+     contact — chains were folding out as straight lines. Fixing the
+     tie-break took mean fold stability from ~0.02-0.03 to ~0.12-0.16.
+  2. A template mid-copy had no hydrolysis protection, so a copy
+     starting near the minimum length was routinely orphaned by a
+     single hydrolysis tick.
+  3. **The dominant bug**: the spatial grid was rebuilt once per tick,
+     but every reaction pass mutates the particle set — a later pass
+     could still "find" and merge into a particle an earlier pass had
+     already deleted that same tick, silently destroying real matter
+     (a zombie object mutation nothing else references, while the real
+     monomer merged "into" it got deleted for real). This was slowly
+     starving the whole simulation of free nucleotides no matter how
+     generous the reaction rates were tuned — confirmed by direct
+     mass-ledger tracking (free + embedded-in-polymer + embedded-mid-
+     copy nucleotide count), which held exactly constant at 140 for
+     hundreds of ticks and then started leaking, tick-by-tick traced to
+     this exact mechanism. Fixed by rebuilding the grid between every
+     pass, not just once per tick.
+  4. A second mass leak: an abandoned (timed-out) copy discarded its
+     already-built bases instead of returning them to the free pool.
+  5. The stall timeout was one flat number regardless of template
+     length, so once RNA started growing past ~20nt via ordinary
+     (uncapped, unrelated-to-replication) condensation, no template
+     that long could structurally finish copying inside the window —
+     confirmed by a run where RNA reached length 33 with an active
+     ribozyme and still completed nothing in 150k ticks. Fixed by
+     scaling the timeout per base.
+  Also caught and fixed along the way: `totalReplicationEvents` in
+  `getStats()` only summed each vesicle's own count, so it was blind to
+  the (much more common) free-floating completions — several
+  verification runs reported "zero replication" when the real answer
+  was "the stat can't see most of it."
+- **Not yet verified: a full bootstrap into the Dish.** This needs 2+
+  replication events *inside the same vesicle* plus that vesicle
+  surviving a division — a much rarer compound event than a single
+  free-floating completion. An extended run on the one seed that had
+  produced a completion (to 75k further ticks past its first) didn't
+  produce a second. Bootstrap is implemented and exercised in code
+  (`isBootstrapEligible` in vesicle.ts, `bridge.ts`'s translation) but
+  has not been directly witnessed completing end-to-end — don't claim
+  it works until it's actually seen, same discipline as everything
+  else in this file.
 
 ## Performance lessons (reapplied + new)
 
-- Spatial hash grid for every neighbor query, same as the Dish.
+- Spatial hash grid for every neighbor query, same as the Dish — but
+  rebuilt *between every reaction pass* within a tick, not once at the
+  start of it. Costs more (~7 rebuilds/tick instead of 1, ~25-30%
+  slower overall) but a stale mid-tick grid is a correctness bug, not
+  just a performance nuance — see the mass-conservation bug above. At
+  this particle count (hundreds, not thousands) the extra rebuilds are
+  still sub-millisecond; worth revisiting if particle counts ever grow
+  enough to make that not true.
 - RNA's hairpin search is bounded to realistic tetraloop-sized loops
   (3-8nt) rather than searched up to the full sequence length — this
   turned an O(n^3) search into O(n^2), and mattered in practice: an
