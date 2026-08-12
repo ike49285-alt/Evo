@@ -1,52 +1,73 @@
 import { Renderer } from './render/renderer.js';
+import { OriginRenderer } from './render/originRenderer.js';
 import { TRAIT_LIMITS, deriveMouthPower, deriveChloroplastPower } from './sim/genome.js';
 import { World } from './sim/world.js';
+import { Origin } from './chem/origin.js';
+import { translateBootstrapCandidate } from './chem/bridge.js';
 import { drawSparkline, drawScatter } from './ui/chart.js';
 import { drawTree, hitTestTree } from './ui/treeview.js';
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 1500;
+// A small, concentrated "tide pool" rather than a thin ocean — real
+// dilute-solution prebiotic chemistry runs into a genuine, well-known
+// "concentration problem" (see origin.ts's bondRadius comment); a denser
+// pool is the same fix real hypotheses reach for (tide pools, mineral
+// surfaces, evaporating basins concentrating solutes) rather than a purely
+// game-y shortcut.
+const ORIGIN_WIDTH = 800;
+const ORIGIN_HEIGHT = 500;
 function el(id) {
     const found = document.getElementById(id);
     if (!found)
         throw new Error(`Missing element #${id}`);
     return found;
 }
+let stage = 'origins';
+const originCanvas = el('origins-canvas');
+const originRenderer = new OriginRenderer(originCanvas);
+let origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
 const canvas = el('sim-canvas');
 const renderer = new Renderer(canvas);
-let world = World.createDefault(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+let world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
 let paused = false;
 let speed = 1;
 // --- resize / camera -------------------------------------------------
 function handleResize() {
     renderer.resize();
+    originRenderer.resize();
 }
 window.addEventListener('resize', handleResize);
 handleResize();
 renderer.fitToWorld(world);
-let dragging = false;
-let lastPointer = { x: 0, y: 0 };
-canvas.addEventListener('pointerdown', (e) => {
-    dragging = true;
-    lastPointer = { x: e.clientX, y: e.clientY };
-    canvas.setPointerCapture(e.pointerId);
-});
-canvas.addEventListener('pointermove', (e) => {
-    if (!dragging)
-        return;
-    const dx = e.clientX - lastPointer.x;
-    const dy = e.clientY - lastPointer.y;
-    lastPointer = { x: e.clientX, y: e.clientY };
-    renderer.panByScreenDelta(dx, dy);
-});
-window.addEventListener('pointerup', () => {
-    dragging = false;
-});
-canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    renderer.zoomAt(e.clientX - rect.left, e.clientY - rect.top, factor);
-}, { passive: false });
+originRenderer.fitToWorld(origin);
+function setupPanZoom(canvasEl, target) {
+    let dragging = false;
+    let lastPointer = { x: 0, y: 0 };
+    canvasEl.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        lastPointer = { x: e.clientX, y: e.clientY };
+        canvasEl.setPointerCapture(e.pointerId);
+    });
+    canvasEl.addEventListener('pointermove', (e) => {
+        if (!dragging)
+            return;
+        const dx = e.clientX - lastPointer.x;
+        const dy = e.clientY - lastPointer.y;
+        lastPointer = { x: e.clientX, y: e.clientY };
+        target.panByScreenDelta(dx, dy);
+    });
+    window.addEventListener('pointerup', () => {
+        dragging = false;
+    });
+    canvasEl.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const rect = canvasEl.getBoundingClientRect();
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        target.zoomAt(e.clientX - rect.left, e.clientY - rect.top, factor);
+    }, { passive: false });
+}
+setupPanZoom(canvas, renderer);
+setupPanZoom(originCanvas, originRenderer);
 // --- top bar controls --------------------------------------------------
 const btnPlay = el('btn-play');
 btnPlay.addEventListener('click', () => {
@@ -61,12 +82,19 @@ document.querySelectorAll('.speed-btn').forEach((btn) => {
     });
 });
 el('btn-fit').addEventListener('click', () => {
-    renderer.fitToWorld(world);
+    if (stage === 'dish')
+        renderer.fitToWorld(world);
+    else
+        originRenderer.fitToWorld(origin);
 });
 el('btn-reset').addEventListener('click', () => {
-    world = World.createDefault(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+    world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
     renderer.fitToWorld(world);
     selectedIndividualId = null;
+});
+el('btn-reset-origins').addEventListener('click', () => {
+    origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
+    originRenderer.fitToWorld(origin);
 });
 let showVision = false;
 const btnVision = el('btn-vision');
@@ -74,7 +102,25 @@ btnVision.addEventListener('click', () => {
     showVision = !showVision;
     btnVision.classList.toggle('active', showVision);
 });
-// --- tabs ---------------------------------------------------------------
+// --- stage switcher -----------------------------------------------------
+document.querySelectorAll('.stage-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        stage = btn.dataset.stage;
+        document.body.dataset.stage = stage;
+        document.querySelectorAll('.stage-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.stage-view').forEach((v) => v.classList.remove('active'));
+        el(`${stage}-stage`).classList.add('active');
+        // A canvas that was display:none reports zero size, so its backing
+        // buffer and camera fit need to be redone the moment it becomes visible.
+        handleResize();
+        if (stage === 'dish')
+            renderer.fitToWorld(world);
+        else
+            originRenderer.fitToWorld(origin);
+    });
+});
+// --- sub-tabs (Designer / Ecosystem, inside the Dish stage) ------------
 document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
@@ -131,6 +177,49 @@ el('btn-release').addEventListener('click', () => {
         loadout,
     }, Number(fCount.value), { name, isPlayerDesigned: true });
 });
+// --- Origins: bootstrap into the Dish ------------------------------------
+const btnBootstrap = el('btn-bootstrap');
+const bootstrapHint = el('bootstrap-hint');
+const FOUNDER_COUNT = 16; // a single evolved lineage still needs a real founding population in the Dish's own genetics — see world.ts's seedBaseSpecies note on why knife-edge-minimal founders keep failing
+btnBootstrap.addEventListener('click', () => {
+    const candidate = origin.bootstrapCandidates.pop();
+    if (!candidate)
+        return;
+    const translated = translateBootstrapCandidate(candidate);
+    world.addSpecies(translated.template, FOUNDER_COUNT, { name: translated.name, isPlayerDesigned: false });
+    stage = 'dish';
+    document.body.dataset.stage = stage;
+    document.querySelectorAll('.stage-btn').forEach((b) => b.classList.toggle('active', b.dataset.stage === 'dish'));
+    document.querySelectorAll('.stage-view').forEach((v) => v.classList.remove('active'));
+    el('dish-stage').classList.add('active');
+    handleResize();
+    renderer.fitToWorld(world);
+});
+function updateOriginsPanel() {
+    const s = origin.getStats();
+    el('ohud-tick').textContent = String(s.tick);
+    el('ohud-vesicles').textContent = String(s.vesicleCount);
+    el('ohud-ready').textContent = String(origin.bootstrapCandidates.length);
+    el('ohud-perf').textContent = `${origin.perf.lastTickMs.toFixed(2)}ms`;
+    el('os-aa').textContent = String(s.freeAminoAcids);
+    el('os-nt').textContent = String(s.freeNucleotides);
+    el('os-lipid').textContent = String(s.freeLipids);
+    el('os-energy').textContent = String(s.freeEnergy);
+    el('os-peptides').textContent = String(s.peptideCount);
+    el('os-catalysts').textContent = String(s.catalystCount);
+    el('os-longpep').textContent = String(s.longestPeptide);
+    el('os-rna').textContent = String(s.rnaCount);
+    el('os-ribozymes').textContent = String(s.ribozymeCount);
+    el('os-longrna').textContent = String(s.longestRna);
+    el('os-vesicles').textContent = String(s.vesicleCount);
+    el('os-replevents').textContent = String(s.totalReplicationEvents);
+    const ready = origin.bootstrapCandidates.length;
+    btnBootstrap.disabled = ready === 0;
+    bootstrapHint.textContent =
+        ready > 0
+            ? `${ready} protocell${ready === 1 ? '' : 's'} ready — click to release its evolved chemistry as a founding species in the Dish.`
+            : 'No protocell has stabilized yet — one needs an active catalyst, at least two completed self-replication events, and to have survived a division with a replicator still inside. Once one qualifies, this releases its evolved chemistry as a founding species in the Dish.';
+}
 // --- HUD + stats panel ----------------------------------------------------
 const hudTick = el('hud-tick');
 const hudPop = el('hud-pop');
@@ -267,20 +356,29 @@ function updateTree() {
 // speed multiplier, a single frame will never spend more than ~18ms
 // running ticks: if it hits the budget partway through the requested
 // `speed` ticks, it just stops early and picks up next frame. A busy tick
-// degrades to a lower effective speed instead of freezing the tab.
+// degrades to a lower effective speed instead of freezing the tab. Both
+// engines share this one budget — Origins keeps evolving in the
+// background while you're watching the Dish, and vice versa.
 const TICK_TIME_BUDGET_MS = 18;
 function frame() {
     if (!paused) {
         const frameStart = performance.now();
         for (let i = 0; i < speed; i++) {
+            origin.update(1);
             world.update(1);
             if (performance.now() - frameStart > TICK_TIME_BUDGET_MS)
                 break;
         }
     }
-    renderer.draw(world, { showVision, highlightId: selectedIndividualId });
-    updateHudAndStats();
-    updateTree();
+    if (stage === 'dish') {
+        renderer.draw(world, { showVision, highlightId: selectedIndividualId });
+        updateHudAndStats();
+        updateTree();
+    }
+    else {
+        originRenderer.draw(origin);
+        updateOriginsPanel();
+    }
     requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
