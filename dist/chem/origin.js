@@ -41,6 +41,18 @@ export class Origin {
         /** Every protocell that's ever crossed the bootstrap bar, most recent
          * last. main.ts drains this to offer a hand-off into the Virtunism dish. */
         this.bootstrapCandidates = [];
+        /** Every completed templated-RNA-replication event, in or out of a
+         * vesicle — this is the dish-wide total. `Vesicle.replicationEvents`
+         * (see vesicle.ts) is a separate, narrower per-protocell count used
+         * only for the bootstrap-eligibility bar, which specifically cares
+         * whether heredity happened *inside* that vesicle. An earlier version
+         * of this stat only summed the per-vesicle counts, so free-floating
+         * replication (the overwhelming majority of it, since only a small
+         * fraction of RNA ever ends up inside a vesicle) was invisible here —
+         * worth flagging since it looked like replication "never completed" in
+         * several verification runs when the real problem was this stat being
+         * blind to it, not replication itself failing. */
+        this.totalReplicationEvents = 0;
         // --- tunables --------------------------------------------------------
         this.bondRadius = 13;
         // Energy is checked over a wider radius than a literal monomer-monomer
@@ -548,6 +560,7 @@ export class Origin {
                     vesicleId: p.vesicleId,
                 };
                 this.particles.set(child.id, child);
+                this.totalReplicationEvents++;
                 if (p.vesicleId !== null) {
                     const v = this.vesicles.get(p.vesicleId);
                     if (v) {
@@ -867,9 +880,6 @@ export class Origin {
                     ribozymeCount++;
             }
         }
-        let totalReplicationEvents = 0;
-        for (const v of this.vesicles.values())
-            totalReplicationEvents += v.replicationEvents;
         return {
             tick: this.tick,
             freeAminoAcids: freeAA,
@@ -883,7 +893,7 @@ export class Origin {
             longestPeptide,
             longestRna,
             vesicleCount: this.vesicles.size,
-            totalReplicationEvents,
+            totalReplicationEvents: this.totalReplicationEvents,
             bootstrapReady: this.bootstrapCandidates.length,
         };
     }
