@@ -510,9 +510,12 @@ export class Origin {
         .filter((o): o is NucleotideParticle => o.kind === 'nt' && o.vesicleId === p.vesicleId);
       if (near.length === 0) continue;
       const correct = near.filter((n) => n.code === correctBase);
-      const mismatchRoll = this.rng.bool(this.mutationRate);
+      // Only actually attempt a mismatch when there's a wrong base on hand
+      // to make one with — otherwise "meant to mismatch, only correct
+      // bases nearby" was just wasting the tick's one shot at progress for
+      // no mutational effect.
+      const mismatchRoll = this.rng.bool(this.mutationRate) && correct.length < near.length;
       const chosen = !mismatchRoll && correct.length > 0 ? this.rng.pick(correct) : this.rng.pick(near);
-      if (mismatchRoll && chosen.code === correctBase) continue; // "meant" to mismatch but only correct bases nearby
 
       // Phosphodiester bond formation is just as endergonic as a peptide
       // bond — templated copying needs the same energy currency, not a
@@ -522,8 +525,13 @@ export class Origin {
         .find((o) => o.kind === 'energy' && o.vesicleId === p.vesicleId);
       if (!energyNearby) continue;
 
+      // Calibrated up from an initial 0.04: headless verification showed
+      // copies routinely stalling at ~15-20% of their template length
+      // before hitting the stall timeout even with an active ribozyme
+      // nearby — the base rate, not just catalysis, was too low to
+      // realistically finish a 6-9-base copy inside a ~1000-tick window.
       const boost = this.nearbyCatalystBoost(p.x, p.y, 'replicase') * (p.fold.isRibozyme ? 1 + p.fold.catalysisStrength * 4 : 1);
-      if (!this.rng.bool(Math.min(0.9, 0.04 * boost))) continue;
+      if (!this.rng.bool(Math.min(0.9, 0.12 * boost))) continue;
 
       this.removeParticle(energyNearby.id);
       p.copying.built.push(chosen.code);
