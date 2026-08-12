@@ -34,6 +34,7 @@ function el<T extends HTMLElement>(id: string): T {
 // switching tabs doesn't pause the one you're not looking at.
 type Stage = 'origins' | 'dish';
 let stage: Stage = 'origins';
+document.body.dataset.stage = stage; // don't rely solely on the static HTML attribute for this
 
 const originCanvas = el<HTMLCanvasElement>('origins-canvas');
 const originRenderer = new OriginRenderer(originCanvas);

@@ -23,6 +23,7 @@ function el(id) {
     return found;
 }
 let stage = 'origins';
+document.body.dataset.stage = stage; // don't rely solely on the static HTML attribute for this
 const originCanvas = el('origins-canvas');
 const originRenderer = new OriginRenderer(originCanvas);
 let origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);

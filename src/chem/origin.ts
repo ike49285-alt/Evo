@@ -132,11 +132,19 @@ export class Origin {
   readonly energyFluxPerTick = 1.6; // expected new energy particles/tick (fractional, accumulated)
   readonly lipidAssemblyRadius = 7;
   readonly membranePermeability = 0.02; // per-tick chance a small molecule crosses a nearby membrane
-  // Bumped from an initial 1000: per-attempt diagnostics after fixing the
-  // substrate-radius bottleneck showed real attempts reaching 70-83% of
-  // their template before timing out — close enough that the timeout
-  // itself, not the underlying rate, looked like the remaining ceiling.
-  readonly copyStallTimeout = 1800;
+  // A *per-base* allowance rather than one flat number — headless
+  // verification found RNA strands growing past 30nt via ordinary
+  // condensation (which has no completion requirement) while a fixed
+  // absolute timeout gave a 6nt template and a 33nt template the exact
+  // same window to finish copying in. That's not just unfair, it's a
+  // structural dead end: replication can never even in principle keep
+  // pace with unconstrained growth once a template gets long enough that
+  // copying it exceeds the timeout on expectation alone, and 200,000+
+  // ticks with zero completions across every seed traced back to exactly
+  // this. Scaling per base keeps the odds comparable regardless of how
+  // long a given template happens to be.
+  readonly copyStallTicksPerBase = 220;
+  readonly copyStallTimeoutFloor = 300;
   readonly substrateRadius = 42; // nucleotide search radius during templated copying — see templatedReplication's comment
   readonly statsSampleInterval = 20;
   readonly maxHistory = 500;
@@ -529,7 +537,8 @@ export class Origin {
       // on RnaParticle.copying) — headless-verified as necessary: without
       // it, RNA length plateaued hard the instant the first copy attempt
       // got stuck, for the entire rest of a 150,000-tick run.
-      if (this.tick - p.copying.startedTick > this.copyStallTimeout) {
+      const stallTimeout = this.copyStallTimeoutFloor + p.sequence.length * this.copyStallTicksPerBase;
+      if (this.tick - p.copying.startedTick > stallTimeout) {
         // The bases already built don't just vanish with the complex —
         // headless-verified as a real, previously-silent mass-destruction
         // bug: every abandoned copy was quietly deleting however many
