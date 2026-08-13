@@ -45,7 +45,11 @@ function clamp(v: number, min: number, max: number): number {
  */
 export class Virtunism implements GridPoint {
   readonly id: number;
-  readonly lineageId: number;
+  // Not readonly — a real speciation event (see World.checkSpeciation)
+  // reassigns a living individual to a newly-registered species the
+  // instant its genome is measured to have diverged past the threshold,
+  // rather than only ever being fixed at birth.
+  lineageId: number;
   readonly generation: number;
   readonly isPlayerDesigned: boolean;
 

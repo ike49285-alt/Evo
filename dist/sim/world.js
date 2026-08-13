@@ -1,6 +1,8 @@
 import { deserializeVirtunisms, getNextVirtunismId, mateVirtunisms, setNextVirtunismId, Virtunism, } from './virtunism.js';
 import { createFood, getNextFoodId, setNextFoodId } from './food.js';
-import { buildOrganelles, deriveArmorMitigation, deriveFlagellaPower, deriveMaxSpeed, deriveMouthPower, hasBud, } from './genome.js';
+import { buildGenome, buildOrganelles, deriveArmorMitigation, deriveFlagellaPower, deriveMaxSpeed, deriveMouthPower, encodeGeneSequence, genomeFromSequence, hasBud, } from './genome.js';
+import { decodeCoreTraits, geneticDistance, mutateGeneSequence } from './genes.js';
+import { generateSpeciesName } from './speciesNames.js';
 import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
 import { BRAIN_TOPOLOGY } from './types.js';
@@ -50,6 +52,17 @@ export class World {
         // predator population isn't crowded out of existing at all by a fast-
         // growing photosynthesizer one.
         this.maxLineageShare = 0.65;
+        // Genetic-distance threshold (see genes.ts's geneticDistance, 0..1-ish
+        // scale) past which a diverged individual founds its own species rather
+        // than staying counted under its parent lineage. Picked from an offline
+        // ensemble measurement (30-trial average per generation count, mutation
+        // operators as currently tuned): ~0.13 at 10 generations of drift, ~0.31
+        // at 50, saturating around 0.35-0.39 — 0.22 sits past the noise floor of
+        // a handful of mutations but well before the saturation ceiling, so it's
+        // reachable by real sustained drift without either firing on every birth
+        // or never firing at all. Not a rigorously derived constant — a tuned
+        // one, documented as such.
+        this.speciationThreshold = 0.22;
         this.predationSizeRatio = 0.88; // prey must be <= predator.size * this
         this.statsSampleInterval = 10;
         this.maxHistory = 400;
@@ -123,14 +136,26 @@ export class World {
      * Returns the new lineage id. */
     addSpecies(template, count, opts = {}) {
         const lineageId = this.nextLineageId++;
+        const baseOrganelles = buildOrganelles(template.loadout);
+        // The template's own encoded sequence is what every member of this
+        // founded species gets measured against for divergence — see
+        // checkSpeciation. It has no parent lineage; it *is* a root.
+        const referenceSequence = encodeGeneSequence({
+            reproductionMode: template.reproductionMode,
+            size: template.size,
+            senseRadius: template.senseRadius,
+            maxAge: template.maxAge,
+            hue: template.hue,
+        }, baseOrganelles);
         this.lineages.set(lineageId, {
             id: lineageId,
             name: opts.name ?? `Species ${lineageId}`,
             hue: template.hue,
             isPlayerDesigned: !!opts.isPlayerDesigned,
             createdTick: this.tick,
+            referenceSequence,
+            parentLineageId: null,
         });
-        const baseOrganelles = buildOrganelles(template.loadout);
         // A bootstrapped protocell has a real place it came from — spawn its
         // founders right there (see main.ts) instead of the usual random
         // cluster, so it visibly emerges from the pool rather than teleporting
@@ -141,19 +166,20 @@ export class World {
         for (let i = 0; i < count; i++) {
             if (this.cells.length >= this.maxPopulation)
                 break;
-            const genome = {
+            // Encoded into real genes (not assigned as a flat struct) so even a
+            // hand-designed or bootstrapped founder starts from an actual
+            // heritable sequence — see genome.ts's buildGenome.
+            const genome = buildGenome({
                 reproductionMode: template.reproductionMode,
                 size: jitterPct(template.size, 0.03),
                 senseRadius: jitterPct(template.senseRadius, 0.03),
                 maxAge: jitterPct(template.maxAge, 0.08),
                 hue: template.hue,
-                organelles: baseOrganelles.map((o) => ({
-                    kind: o.kind,
-                    angle: o.angle + this.rng.gaussian(0, 0.08),
-                    size: clamp(o.size + this.rng.gaussian(0, 0.04), 0.5, 1.5),
-                })),
-                brain: NeuralNet.random(BRAIN_TOPOLOGY, this.rng),
-            };
+            }, baseOrganelles.map((o) => ({
+                kind: o.kind,
+                angle: o.angle + this.rng.gaussian(0, 0.08),
+                size: clamp(o.size + this.rng.gaussian(0, 0.04), 0.5, 1.5),
+            })), NeuralNet.random(BRAIN_TOPOLOGY, this.rng));
             const x = opts.spread
                 ? this.rng.range(20, this.width - 20)
                 : clamp(clusterX + this.rng.gaussian(0, 90), 20, this.width - 20);
@@ -164,6 +190,47 @@ export class World {
             // and the lower sexual matingThreshold (0.3 * maxEnergy) so a freshly
             // released population always has to forage first.
             const startEnergy = 12 * template.size;
+            const founder = new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned);
+            this.cells.push(founder);
+            this.recordBirth(founder, null, null);
+        }
+        return lineageId;
+    }
+    /** Releases a new population founded directly from an already-real gene
+     * sequence, skipping the loadout->buildOrganelles->encode round trip —
+     * the bootstrap path (see chem/bridge.ts), where a founder's genes are
+     * built from its ancestral protocell's own surviving RNA content rather
+     * than a hand-designed phenotype. Returns the new lineage id. */
+    addSpeciesFromSequence(sequence, count, opts = {}) {
+        const lineageId = this.nextLineageId++;
+        const traits = decodeCoreTraits(sequence);
+        this.lineages.set(lineageId, {
+            id: lineageId,
+            name: opts.name ?? generateSpeciesName(sequence),
+            hue: traits.hue,
+            isPlayerDesigned: !!opts.isPlayerDesigned,
+            createdTick: this.tick,
+            referenceSequence: sequence,
+            parentLineageId: null,
+        });
+        const clusterX = opts.spawnCenter?.x ?? this.rng.range(this.width * 0.2, this.width * 0.8);
+        const clusterY = opts.spawnCenter?.y ?? this.rng.range(this.height * 0.2, this.height * 0.8);
+        for (let i = 0; i < count; i++) {
+            if (this.cells.length >= this.maxPopulation)
+                break;
+            // The founding sequence itself becomes the first founder unchanged;
+            // the rest each get one real mutation off it — the same starting-
+            // variation role addSpecies's per-field jitter plays, just expressed
+            // as an actual heritable mutation instead of a continuous nudge.
+            const founderSequence = i === 0 ? sequence : mutateGeneSequence(sequence, this.rng);
+            const genome = genomeFromSequence(founderSequence, NeuralNet.random(BRAIN_TOPOLOGY, this.rng));
+            const x = opts.spread
+                ? this.rng.range(20, this.width - 20)
+                : clamp(clusterX + this.rng.gaussian(0, 90), 20, this.width - 20);
+            const y = opts.spread
+                ? this.rng.range(20, this.height - 20)
+                : clamp(clusterY + this.rng.gaussian(0, 90), 20, this.height - 20);
+            const startEnergy = 12 * genome.size;
             const founder = new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned);
             this.cells.push(founder);
             this.recordBirth(founder, null, null);
@@ -187,6 +254,7 @@ export class World {
             alive: true,
             liveCount: 1,
             children: [],
+            isSpeciationEvent: false,
         };
         this.treeNodes.set(child.id, node);
         if (parentId === null)
@@ -199,6 +267,39 @@ export class World {
         while (cur) {
             cur.liveCount += 1;
             cur = cur.parentId !== null ? this.treeNodes.get(cur.parentId) : undefined;
+        }
+    }
+    /** Measures a cell's genome against its lineage's reference sequence and,
+     * if it's drifted past `speciationThreshold`, promotes it to found a
+     * brand-new species right there rather than staying counted under its
+     * parent lineage. Called just before an individual actually reproduces
+     * (not at birth) — a one-off mutant that never manages to pass anything
+     * on shouldn't get to register as a "species" that immediately goes
+     * extinct with it; only a genome that's about to prove itself by
+     * reproducing gets to found one. */
+    checkSpeciation(cell) {
+        const lineage = this.lineages.get(cell.lineageId);
+        if (!lineage)
+            return; // defensive — every live cell's lineage should exist
+        const distance = geneticDistance(cell.genome.sequence, lineage.referenceSequence);
+        if (distance < this.speciationThreshold)
+            return;
+        const newLineageId = this.nextLineageId++;
+        this.lineages.set(newLineageId, {
+            id: newLineageId,
+            name: generateSpeciesName(cell.genome.sequence),
+            hue: cell.genome.hue,
+            isPlayerDesigned: false,
+            createdTick: this.tick,
+            referenceSequence: cell.genome.sequence,
+            parentLineageId: cell.lineageId,
+        });
+        cell.lineageId = newLineageId;
+        const node = this.treeNodes.get(cell.id);
+        if (node) {
+            node.lineageId = newLineageId;
+            node.isSpeciationEvent = true;
+            node.hue = cell.genome.hue;
         }
     }
     /** Marks a tree node as no longer alive, then compacts from there upward
@@ -745,6 +846,7 @@ export class World {
                 const d = Math.hypot(b.x - a.x, b.y - a.y);
                 const range = Math.max(a.genome.senseRadius, b.genome.senseRadius);
                 if (d < range && (this.inFOV(a, b.x, b.y) || this.inFOV(b, a.x, a.y))) {
+                    this.checkSpeciation(a);
                     const child = mateVirtunisms(a, b, this.rng);
                     newborns.push(child);
                     this.recordBirth(child, a.id, b.id);
@@ -762,6 +864,7 @@ export class World {
                 break;
             if (!cell.canReproduce() || !roomFor(cell.lineageId))
                 continue;
+            this.checkSpeciation(cell);
             if (hasBud(cell.genome)) {
                 const root = this.findColonyRoot(cell);
                 if (this.collectColonyMembers(root).length < this.maxColonySize) {

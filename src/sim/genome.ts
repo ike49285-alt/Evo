@@ -1,19 +1,33 @@
 import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
-import { BRAIN_TOPOLOGY, Organelle, OrganelleKind, ReproductionMode } from './types.js';
+import { BRAIN_TOPOLOGY, Organelle, OrganelleKind, ReproductionMode, TRAIT_LIMITS } from './types.js';
+import {
+  CORE_GENE_COUNT,
+  crossoverGeneSequence,
+  decodeCoreTraits,
+  decodeOrganelles,
+  Gene,
+  GENE_LENGTH,
+  GeneSequence,
+  LOCUS,
+  mutateGeneSequence,
+  randomGeneSequence,
+} from './genes.js';
+import { NUCLEOTIDE_CODES } from '../chem/elements.js';
 
-/** Hard bounds so mutation can't drift traits into absurd/degenerate territory. */
-export const TRAIT_LIMITS = {
-  size: { min: 0.5, max: 3.2 },
-  senseRadius: { min: 40, max: 320 },
-  maxAge: { min: 400, max: 2400 },
-  organelleSize: { min: 0.5, max: 1.5 },
-  maxOrganelles: 10, // total slots across every kind (bud included)
-};
+export { TRAIT_LIMITS };
 
-const ORGANELLE_KINDS: OrganelleKind[] = ['flagellum', 'mouth', 'chloroplast', 'eye', 'armor'];
-
+/**
+ * A virtunism's real heredity is `sequence` (see genes.ts) — everything
+ * else here (`size`, `organelles`, etc.) is a *cached decode* of it,
+ * refreshed by `decodePhenotype` every time the sequence changes
+ * (construction, mutation, crossover). This is deliberate: it means
+ * Virtunism, World, and the renderer never had to change — they still
+ * just read `genome.size` / `genome.organelles` exactly as before. Only
+ * genome *construction* got deeper.
+ */
 export interface Genome {
+  sequence: GeneSequence;
   reproductionMode: ReproductionMode;
   size: number; // chassis scale — base body radius/energy budget, independent of organelles
   senseRadius: number; // detection *range*; organelle "eyes" separately control detection *angle*
@@ -25,6 +39,10 @@ export interface Genome {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
+}
+
+function decodePhenotype(sequence: GeneSequence): Omit<Genome, 'sequence' | 'brain'> {
+  return { ...decodeCoreTraits(sequence), organelles: decodeOrganelles(sequence) };
 }
 
 // ---- derived physical stats (computed from organelles, not stored) --------
@@ -102,7 +120,10 @@ export interface StarterLoadout {
 }
 
 /** Builds an evenly-spaced starter organelle ring from simple per-kind
- * counts — this is what the Designer UI hands to World.addSpecies(). */
+ * counts — this is what the Designer UI hands to World.addSpecies(). Still
+ * plain Organelle data; `encodeOrganelleGene` (below) is what turns a
+ * desired organelle back into real gene symbols when a hand-designed
+ * species needs an actual heritable sequence to start from. */
 export function buildOrganelles(loadout: StarterLoadout): Organelle[] {
   const list: { kind: OrganelleKind }[] = [];
   for (let i = 0; i < (loadout.flagella ?? 0); i++) list.push({ kind: 'flagellum' });
@@ -119,132 +140,146 @@ export function buildOrganelles(loadout: StarterLoadout): Organelle[] {
   }));
 }
 
-export function randomGenome(rng: Rng, reproductionMode: ReproductionMode = 'asexual'): Genome {
-  const count = rng.int(2, 6);
-  const organelles: Organelle[] = [];
-  for (let i = 0; i < count; i++) {
-    organelles.push({
-      kind: rng.pick(ORGANELLE_KINDS),
-      angle: rng.range(0, Math.PI * 2),
-      size: rng.range(TRAIT_LIMITS.organelleSize.min, TRAIT_LIMITS.organelleSize.max),
-    });
+// ---- encoding: trait/organelle -> gene symbols -----------------------------
+// The inverse of genes.ts's decode functions — needed wherever a *desired*
+// phenotype (the Designer form, a bootstrapped protocell's translated
+// stats) has to become a real starting sequence, not just the other way
+// around. Matches genes.ts's sum-based (not positional) decode: greedily
+// hands out the max symbol value (3) to as many positions as the target
+// sum needs, zeros the rest — any distribution across positions that adds
+// up to the right sum decodes correctly, this is just *a* valid one, not
+// the only one. Round-trips approximately (decode is quantized to
+// length*3 discrete sums), which is plenty for a starting point that
+// mutation immediately starts drifting anyway.
+export function encodeUnit(unit: number, length: number): Gene {
+  const maxSum = length * (NUCLEOTIDE_CODES.length - 1);
+  let remaining = Math.round(clamp(unit, 0, 1) * maxSum);
+  const digits: number[] = [];
+  for (let i = 0; i < length; i++) {
+    const take = Math.min(NUCLEOTIDE_CODES.length - 1, remaining);
+    digits.push(take);
+    remaining -= take;
   }
-  return {
-    reproductionMode,
-    size: rng.range(TRAIT_LIMITS.size.min, 1.6),
-    senseRadius: rng.range(100, 220),
-    maxAge: rng.range(700, 1400),
-    hue: rng.range(0, 360),
-    organelles,
-    brain: NeuralNet.random(BRAIN_TOPOLOGY, rng),
-  };
+  return digits.map((d) => NUCLEOTIDE_CODES[d]);
+}
+
+// Mirrors genes.ts's weighted organelle-kind buckets — kept in sync by
+// hand since it's a small, stable table, not worth a shared-state
+// abstraction for six entries.
+const ORGANELLE_KIND_BUCKETS: Array<{ kind: OrganelleKind; weight: number }> = [
+  { kind: 'flagellum', weight: 5 },
+  { kind: 'mouth', weight: 5 },
+  { kind: 'chloroplast', weight: 5 },
+  { kind: 'eye', weight: 4 },
+  { kind: 'armor', weight: 4 },
+  { kind: 'bud', weight: 1 },
+];
+const ORGANELLE_WEIGHT_TOTAL = ORGANELLE_KIND_BUCKETS.reduce((sum, o) => sum + o.weight, 0);
+
+function kindToUnit(kind: OrganelleKind): number {
+  let acc = 0;
+  for (const bucket of ORGANELLE_KIND_BUCKETS) {
+    if (bucket.kind === kind) return (acc + bucket.weight / 2) / ORGANELLE_WEIGHT_TOTAL; // bucket midpoint
+    acc += bucket.weight;
+  }
+  return 0;
+}
+
+export function encodeOrganelleGene(organelle: Organelle): Gene {
+  const kindUnit = kindToUnit(organelle.kind);
+  // JS `%` can return a negative result for a negative angle, but only
+  // ever needs *one* correction back into [0, 2π) — adding a full turn
+  // unconditionally (rather than only when negative) overshoots past 2π
+  // for any already-positive angle, which encodeUnit's clamp then
+  // silently flattens to 1.0 regardless of the real value.
+  let angleMod = organelle.angle % (Math.PI * 2);
+  if (angleMod < 0) angleMod += Math.PI * 2;
+  const angleUnit = angleMod / (Math.PI * 2);
+  const sizeUnit = (organelle.size - TRAIT_LIMITS.organelleSize.min) / (TRAIT_LIMITS.organelleSize.max - TRAIT_LIMITS.organelleSize.min);
+  return [...encodeUnit(kindUnit, 2), ...encodeUnit(angleUnit, 4), ...encodeUnit(sizeUnit, 4)];
+}
+
+export interface CoreTraitValues {
+  reproductionMode: ReproductionMode;
+  size: number;
+  senseRadius: number;
+  maxAge: number;
+  hue: number;
+}
+
+/** Builds a real GeneSequence from a desired phenotype — used to seed a
+ * hand-designed (Designer tab) or template-translated (bootstrap) species
+ * with genes that actually decode to what was asked for, rather than
+ * inventing a phenotype that bypasses genetics entirely. */
+export function encodeGeneSequence(traits: CoreTraitValues, organelles: readonly Organelle[]): GeneSequence {
+  const core: Gene[] = new Array(CORE_GENE_COUNT);
+  core[LOCUS.reproductionMode] = encodeUnit(traits.reproductionMode === 'sexual' ? 0.75 : 0.25, GENE_LENGTH);
+  core[LOCUS.size] = encodeUnit((traits.size - TRAIT_LIMITS.size.min) / (TRAIT_LIMITS.size.max - TRAIT_LIMITS.size.min), GENE_LENGTH);
+  core[LOCUS.senseRadius] = encodeUnit(
+    (traits.senseRadius - TRAIT_LIMITS.senseRadius.min) / (TRAIT_LIMITS.senseRadius.max - TRAIT_LIMITS.senseRadius.min),
+    GENE_LENGTH,
+  );
+  core[LOCUS.maxAge] = encodeUnit((traits.maxAge - TRAIT_LIMITS.maxAge.min) / (TRAIT_LIMITS.maxAge.max - TRAIT_LIMITS.maxAge.min), GENE_LENGTH);
+  core[LOCUS.hue] = encodeUnit(((traits.hue % 360) + 360) % 360 / 360, GENE_LENGTH);
+
+  const organelleGenes = organelles.slice(0, TRAIT_LIMITS.maxOrganelles).map(encodeOrganelleGene);
+  return { genes: [...core, ...organelleGenes] };
+}
+
+/** Builds a Genome straight from an already-real gene sequence (no
+ * trait->encode step) — the bootstrap path (chem/bridge.ts) uses this
+ * directly since its sequence is built from a protocell's actual RNA
+ * content, not a desired phenotype to encode. */
+export function genomeFromSequence(sequence: GeneSequence, brain: NeuralNet): Genome {
+  return { sequence, brain, ...decodePhenotype(sequence) };
+}
+
+/** Builds a full Genome from a desired phenotype — the entry point for
+ * anywhere a species starts from a *template* rather than being born
+ * (World.addSpecies, both the hand-designed and bootstrapped-from-RNA
+ * paths): encode the requested traits/organelles into real genes, then
+ * decode straight back so the returned Genome's cached phenotype fields
+ * always match what its own sequence actually says. */
+export function buildGenome(traits: CoreTraitValues, organelles: readonly Organelle[], brain: NeuralNet): Genome {
+  return genomeFromSequence(encodeGeneSequence(traits, organelles), brain);
+}
+
+export function randomGenome(rng: Rng, reproductionMode: ReproductionMode = 'asexual'): Genome {
+  const organelleCount = rng.int(2, 6);
+  let sequence = randomGeneSequence(rng, organelleCount);
+  // Random core genes decode to a random reproductionMode too (it's a real
+  // evolvable locus now — see genes.ts's LOCUS.reproductionMode) — override
+  // just that one gene so callers that ask for a specific starting mode
+  // (most of them do) actually get it, without hand-rolling the rest of
+  // the sequence themselves.
+  sequence = { genes: [encodeUnit(reproductionMode === 'sexual' ? 0.75 : 0.25, GENE_LENGTH), ...sequence.genes.slice(1)] };
+  return genomeFromSequence(sequence, NeuralNet.random(BRAIN_TOPOLOGY, rng));
 }
 
 /** Produces a mutated child genome from a parent. Parent is untouched. */
 export function mutateGenome(parent: Genome, rng: Rng): Genome {
-  const traitMutRate = 0.35;
-  const traitStrength = 0.08;
-
-  const jitter = (value: number, min: number, max: number): number => {
-    if (!rng.bool(traitMutRate)) return value;
-    const delta = rng.gaussian(0, value * traitStrength);
-    return clamp(value + delta, min, max);
-  };
-
-  return {
-    reproductionMode: parent.reproductionMode,
-    size: jitter(parent.size, TRAIT_LIMITS.size.min, TRAIT_LIMITS.size.max),
-    senseRadius: jitter(parent.senseRadius, TRAIT_LIMITS.senseRadius.min, TRAIT_LIMITS.senseRadius.max),
-    maxAge: jitter(parent.maxAge, TRAIT_LIMITS.maxAge.min, TRAIT_LIMITS.maxAge.max),
-    hue: (parent.hue + (rng.bool(traitMutRate) ? rng.gaussian(0, 8) : 0) + 360) % 360,
-    organelles: mutateOrganelles(parent.organelles, rng),
-    // Strength scaled down to match the brain's Xavier-init weight range
-    // (roughly ±0.2-0.3) rather than the old flat [-1,1] one — mutation
-    // noise should perturb a weight, not routinely swamp it.
-    brain: parent.brain.mutate(rng, 0.12, 0.15),
-  };
+  const sequence = mutateGeneSequence(parent.sequence, rng);
+  // Strength scaled down to match the brain's Xavier-init weight range
+  // (roughly ±0.2-0.3) rather than the old flat [-1,1] one — mutation
+  // noise should perturb a weight, not routinely swamp it.
+  return genomeFromSequence(sequence, parent.brain.mutate(rng, 0.12, 0.15));
 }
 
-function mutateOrganelles(organelles: readonly Organelle[], rng: Rng): Organelle[] {
-  let next = organelles.map((o) => ({ ...o }));
-
-  // Jitter each existing organelle's angle/size a little.
-  next = next.map((o) => {
-    const angle = rng.bool(0.3) ? o.angle + rng.gaussian(0, 0.25) : o.angle;
-    const size = rng.bool(0.3)
-      ? clamp(o.size + rng.gaussian(0, 0.1), TRAIT_LIMITS.organelleSize.min, TRAIT_LIMITS.organelleSize.max)
-      : o.size;
-    return { ...o, angle, size };
-  });
-
-  // Rarely lose a random organelle — a real structural regression.
-  if (next.length > 0 && rng.bool(0.05)) {
-    next.splice(rng.int(0, next.length - 1), 1);
-  }
-
-  // Rarely grow a new one — a real structural innovation. A virtunism can
-  // only ever carry one bud gland; it's a capability switch, not a stat to
-  // stack.
-  if (next.length < TRAIT_LIMITS.maxOrganelles && rng.bool(0.06)) {
-    const kind = rng.pick(ORGANELLE_KINDS);
-    const alreadyHasBud = next.some((o) => o.kind === 'bud');
-    if (kind !== 'bud' || !alreadyHasBud) {
-      next.push({ kind, angle: rng.range(0, Math.PI * 2), size: rng.range(0.7, 1.1) });
-    }
-  }
-  // Very rare: grow the bud gland itself, letting a lineage discover
-  // multicellularity even if you didn't design it in.
-  if (next.length < TRAIT_LIMITS.maxOrganelles && !next.some((o) => o.kind === 'bud') && rng.bool(0.01)) {
-    next.push({ kind: 'bud', angle: 0, size: 1 });
-  }
-
-  return next;
-}
-
-/** Uniform-ish crossover of two same-lineage parents (for sexual
- * reproduction). Continuous traits and the brain are drawn per-field from
- * one parent or the other; organelles are pooled from both parents and a
- * random subset (capped at maxOrganelles) is kept, biased toward the
- * shorter parent's count so bodies don't balloon every generation. */
+/** Crossover of two same-lineage parents (for sexual reproduction). Core
+ * loci are picked per-gene from one parent or the other (independent
+ * assortment); the organelle-gene run uses real unequal crossover — see
+ * genes.ts's crossoverGeneSequence for why that's not just a convenient
+ * mechanic. Brain crossover is unchanged. */
 export function crossoverGenome(a: Genome, b: Genome, rng: Rng): Genome {
-  const pick = <T,>(x: T, y: T): T => (rng.bool(0.5) ? x : y);
-
-  const pool = [...a.organelles, ...b.organelles];
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = rng.int(0, i);
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  const targetCount = clamp(
-    Math.round((a.organelles.length + b.organelles.length) / 2),
-    0,
-    TRAIT_LIMITS.maxOrganelles,
-  );
-  const organelles: Organelle[] = [];
-  let usedBud = false;
-  for (const o of pool) {
-    if (organelles.length >= targetCount) break;
-    if (o.kind === 'bud') {
-      if (usedBud) continue;
-      usedBud = true;
-    }
-    organelles.push({ ...o });
-  }
-
-  return {
-    reproductionMode: pick(a.reproductionMode, b.reproductionMode),
-    size: pick(a.size, b.size),
-    senseRadius: pick(a.senseRadius, b.senseRadius),
-    maxAge: pick(a.maxAge, b.maxAge),
-    hue: pick(a.hue, b.hue),
-    organelles,
-    brain: NeuralNet.crossover(a.brain, b.brain, rng),
-  };
+  const sequence = crossoverGeneSequence(a.sequence, b.sequence, rng);
+  return genomeFromSequence(sequence, NeuralNet.crossover(a.brain, b.brain, rng));
 }
 
 // ---- save/restore ----------------------------------------------------------
 // Everything in a Genome except `brain` is already plain, JSON-safe data
-// (organelles are just kind/angle/size records) — only the brain's
-// Float32Arrays need converting on the way out and back.
+// (the gene sequence is just arrays of single-character strings, organelles
+// are kind/angle/size records) — only the brain's Float32Arrays need
+// converting on the way out and back.
 export type SerializedGenome = Omit<Genome, 'brain'> & { brain: ReturnType<NeuralNet['toJSON']> };
 
 export function serializeGenome(genome: Genome): SerializedGenome {

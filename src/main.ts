@@ -203,8 +203,7 @@ function autoBootstrap(): void {
     const candidate = origin.bootstrapCandidates.shift();
     if (!candidate) break;
     const translated = translateBootstrapCandidate(candidate);
-    world.addSpecies(translated.template, BOOTSTRAP_FOUNDER_COUNT, {
-      name: translated.name,
+    world.addSpeciesFromSequence(translated.sequence, BOOTSTRAP_FOUNDER_COUNT, {
       isPlayerDesigned: false,
       spawnCenter: { x: POOL_OFFSET.x + candidate.x, y: POOL_OFFSET.y + candidate.y },
     });
@@ -239,6 +238,7 @@ const hudVesicles = el('hud-vesicles');
 const hudPerf = el('hud-perf');
 
 const sPop = el('s-pop');
+const sSpecies = el('s-species');
 const sGen = el('s-gen');
 const sColonies = el('s-colonies');
 const sColonySize = el('s-colonysize');
@@ -273,6 +273,12 @@ function updateHudAndStats(): void {
   hudPerf.textContent = `${(world.perf.lastTickMs + origin.perf.lastTickMs).toFixed(2)}ms`;
 
   sPop.textContent = String(live.population);
+  // Distinct lineages actually represented among living individuals right
+  // now — world.lineages itself never shrinks (it's the permanent
+  // phylogenetic record, extinct branches included), so counting *that*
+  // would only ever go up. This is the number that actually answers "how
+  // many species exist in the dish right now."
+  sSpecies.textContent = String(new Set(world.cells.map((c) => c.lineageId)).size);
   sGen.textContent = String(live.maxGeneration);
   sColonies.textContent = String(live.colonies);
   sColonySize.textContent = live.avgColonySize.toFixed(1);
@@ -353,7 +359,8 @@ function describeSelection(): void {
         ? `of #${node.parentId} & #${node.secondParentId}`
         : `of #${node.parentId}`;
   const status = node.alive ? 'alive' : 'extinct branch';
-  treeInfo.textContent = `#${node.id} · ${lineageName} · gen ${node.generation} · born t${node.birthTick} · ${parents} · ${status}`;
+  const speciation = node.isSpeciationEvent ? ' · 🔀 new species' : '';
+  treeInfo.textContent = `#${node.id} · ${lineageName} · gen ${node.generation} · born t${node.birthTick} · ${parents} · ${status}${speciation}`;
 }
 
 treeCanvas.addEventListener('click', (e) => {

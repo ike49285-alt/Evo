@@ -70,14 +70,82 @@ doesn't need.
   once it has an active catalyst, has completed at least 2 real
   replication events, and has survived a division with a replicator still
   inside — a lucky one-off capture doesn't count as heritable.
-- **Bootstrap translation** (`bridge.ts`): a protocell's evolved catalyst
-  repertoire deterministically becomes a founder organelle loadout —
-  anabolic (peptide-bond-forming) catalysts seed chloroplasts, hydrolytic
-  (protease-class) catalysts seed mouths, membrane-associated catalysts
-  seed armor, and strong replicase activity seeds a mobility head start.
-  This is a documented translation-layer choice, not a claim that real
-  biology works this way mechanistically — an actual genetic code and
-  ribosomal translation are still out of scope.
+- **Bootstrap translation** (`bridge.ts`): a founder's genes are built
+  directly from its ancestral protocell's own real RNA nucleotide content
+  — chunked/wrapped into `GENE_LENGTH`-sized genes (`Gene` is literally
+  `NucleotideCode[]`, the exact same 4-letter alphabet Stage 0's RNA uses)
+  — not an abstract stat translation. The catalyst repertoire still
+  matters, just for a narrower role: it decides *how many* organelle
+  genes a founder gets (peptidyl-heavy → leans more chloroplast genes,
+  protease-heavy → more mouth genes, lipidsynthase → more armor, strong
+  replicase → a mobility head start), and patches in one chloroplast gene
+  only in the rare case real RNA content decoded to zero mouths *and*
+  zero chloroplasts (a guaranteed-extinction edge case, not a normal
+  outcome). This is still a documented translation-layer choice, not a
+  claim that real biology works this way mechanistically — an actual
+  genetic code and ribosomal translation are still out of scope — but the
+  *symbols* themselves are no longer invented; "from abiogenesis to
+  evolving life" is now a literal unbroken molecular sequence, not just a
+  spatial/visual one.
+
+## Genes and emergent species
+
+The old "genome" was a flat struct of independent continuous fields
+(`size`, `senseRadius`, `maxAge`, `hue`, `organelles[]`) each jittered
+independently on reproduction — no real sequence, no real mutation
+classes, and "species" was just `lineageId`, a label assigned once at
+founding time and never anything the simulation itself discovered.
+
+- **`src/sim/genes.ts`**: a real linear `GeneSequence` made of the same
+  4-letter nucleotide alphabet Stage 0's RNA uses. `genes[0..4]` are
+  fixed-locus core genes (size, senseRadius, maxAge, hue,
+  reproductionMode — reproductionMode is now a real evolvable/mutable
+  locus, not "inherited unchanged, never mutates" as before). `genes[5..]`
+  is a *variable-length* run of organelle genes — variable length is the
+  actual mechanism for structural change now, not a hand-rolled "5%
+  chance to lose one, 6% chance to gain one" special case.
+- **Mutation operators modeled on real chromosomal mutation classes**:
+  point mutation (per-symbol, guaranteed to substitute a *different* base
+  so the effective rate isn't silently 3/4 of the stated one), gene
+  duplication, gene deletion, and inversion of a short contiguous run —
+  all capped at `TRAIT_LIMITS.maxOrganelles`.
+- **Unequal crossover** for sexual reproduction's organelle genes: an
+  independent cut fraction in each parent's organelle-gene run, spliced
+  together, so a child's organelle count doesn't have to match either
+  parent's. This is a real biological route to gene duplication/deletion
+  in its own right, not just a crossover mechanic borrowed for
+  convenience. Core loci still assort independently, per-gene.
+- **`genome.ts` keeps a cached phenotype**: `Genome.sequence` is the real
+  heredity; `size`/`organelles`/etc. are a decode of it, refreshed on
+  every construction/mutation/crossover. This was the deliberate move
+  that kept the blast radius small — Virtunism, World, and the renderer
+  never had to change, they still just read `genome.size` etc.
+- **Emergent speciation** (`World.checkSpeciation`, called right before an
+  individual actually reproduces — not at birth, so a one-off mutant that
+  never passes anything on doesn't get to register as a "species"): if a
+  cell's genome has diverged past `speciationThreshold` (0.22) from its
+  lineage's `referenceSequence`, it founds a brand-new lineage right
+  there — new id, its own genome becomes the new reference,
+  `parentLineageId` set to the old lineage, itself and its descendants
+  reassigned. Threshold picked from an offline ensemble measurement (30
+  trials/generation-count, current mutation tuning): ~0.13 average
+  distance at 10 generations of drift, ~0.31 at 50, saturating around
+  0.35-0.39 — 0.22 sits past the noise floor of a handful of mutations
+  but under the saturation ceiling.
+- **`geneticDistance`** is an explicitly documented proxy, not a rigorous
+  population-genetics statistic: 0.5× per-locus core-trait distance +
+  0.5× an alignment-free organelle-kind histogram distance. Real sequence
+  alignment between two variable-length, independently-duplicated/deleted
+  gene runs is a much harder problem than this needed to solve for a
+  usable divergence signal.
+- **Procedural species names** (`speciesNames.ts`): deterministic
+  binomial-style names hashed from the founding genome's own sequence —
+  same genome always names the same way, and naming has no side effect on
+  simulation determinism (doesn't touch the world's rng stream).
+- **Tree of Life** renders a speciation event as a visually distinct
+  edge (dashed, colored by the new lineage's hue) and a dashed ring
+  around the founding node, instead of an ordinary parent→child line —
+  see `TreeNode.isSpeciationEvent` / `ui/treeview.ts`.
 
 ## What was actually verified this round (be honest about this again)
 

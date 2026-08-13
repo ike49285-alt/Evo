@@ -13,6 +13,12 @@ export interface TreeNodeData {
   hue: number;
   alive: boolean;
   isPlayerDesigned: boolean;
+  /** True if this individual is where a new species was founded — its
+   * genome measured past the divergence threshold from its old lineage's
+   * reference sequence right before it reproduced (see World.checkSpeciation).
+   * The edge from its parent gets drawn distinctly, not as an ordinary
+   * birth. */
+  isSpeciationEvent: boolean;
 }
 
 export interface TreeNodeScreenPos {
@@ -132,8 +138,18 @@ export function drawTree(
     const c = positions.get(node.id);
     if (!p || !c) continue;
     const onPath = highlightIds.has(node.id) && highlightIds.has(node.parentId);
-    ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.85)' : 'rgba(150, 165, 190, 0.3)';
-    ctx.lineWidth = onPath ? 2 : 1;
+    // A speciation edge is a real phylogenetic branch point, not an
+    // ordinary parent->child birth — drawn dashed and in the new lineage's
+    // own hue so it reads as a distinct event even when it's not on the
+    // currently-highlighted path.
+    if (node.isSpeciationEvent) {
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.95)' : `hsla(${node.hue}, 80%, 65%, 0.75)`;
+      ctx.lineWidth = onPath ? 2.5 : 1.8;
+    } else {
+      ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.85)' : 'rgba(150, 165, 190, 0.3)';
+      ctx.lineWidth = onPath ? 2 : 1;
+    }
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
     // A short horizontal-then-diagonal elbow reads a lot more like a
@@ -142,6 +158,7 @@ export function drawTree(
     ctx.lineTo(p.x + (c.x - p.x) * 0.4, p.y);
     ctx.lineTo(c.x, c.y);
     ctx.stroke();
+    if (node.isSpeciationEvent) ctx.setLineDash([]);
   }
 
   for (const node of nodes.values()) {
@@ -159,6 +176,15 @@ export function drawTree(
       ctx.strokeStyle = 'rgba(255,255,255,0.85)';
       ctx.lineWidth = 1;
       ctx.stroke();
+    }
+    if (node.isSpeciationEvent) {
+      ctx.setLineDash([2, 2]);
+      ctx.strokeStyle = `hsla(${node.hue}, 90%, 75%, 0.9)`;
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 2.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
     if (isSelected) {
       ctx.strokeStyle = 'rgba(255,255,255,0.95)';
