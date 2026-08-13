@@ -309,32 +309,177 @@ founding time and never anything the simulation itself discovered.
   never grew a polymer past 2 monomers in a 60k-tick, 5-seed run as a
   direct result.
 
-## The wider dish — unchanged ecosystem mechanics
+## The wider dish — real emergent function, not organelles
 
-Everything below carries over as-is; see git history for the original
-design rationale.
+This replaced an earlier hard-coded system (flagellum/mouth/chloroplast/
+eye/armor/bud, decoded via a weighted-bucket lookup table from a gene's
+sum-decoded value) — a fixed catalog where evolution could only ever pick
+from 6 predetermined kinds, never discover a 7th or blend two. The
+watchword for this rewrite was scientific accuracy: genes now translate
+through the real standard genetic code into amino-acid sequences, fold
+via the exact same HP-lattice mechanism Stage 0's own chemistry already
+used (`chem/polymer.ts`'s `foldPeptide`), and whatever functional class
+the fold's real surface chemistry produces *is* the organism's capability
+— no lookup table, no fixed catalog, unbounded in combination.
 
-- **Sunlight as the only external input**, drawn via chloroplast organelles,
-  shared across a finite dish-wide budget.
-- **Organelle-based physical evolution:** flagella, mouths, chloroplasts,
-  eyes, armor, a bud gland for multicellularity — each has upkeep cost;
-  mutation adds/removes/resizes/repositions organelles each generation.
+- **Real translation**: `sim/genes.ts`'s protein-coding genes
+  (`PROTEIN_GENE_LENGTH` = 60 symbols = 20 codons) read left-to-right
+  through `chem/elements.ts`'s `CODON_TABLE` (the real 64-codon standard
+  genetic code), stopping at the gene's end or the first STOP codon —
+  which makes STOP-codon-introduced protein truncation a real,
+  biologically grounded large-effect mutation, not a hand-injected one.
+- **Six catalysis classes**, all scored from the fold's real surface-
+  chemistry descriptors (posSurface/negSurface/aromaticSurface/
+  hydrophobicSurface/serineSurface/histidineSurface/glycineSurface/
+  cysCount/stability) via an argmax "best-scoring class wins" comparison
+  — `replicase`/`peptidyl`/`lipidsynthase`/`protease` (Stage 0's original
+  four) plus `motor` and `photoreceptor` (added for the Virtunism layer;
+  inert in Stage 0's own pool chemistry, which only ever checks for one
+  specific class per reaction). Class → capability: peptidyl → energy
+  capture, protease → predation, lipidsynthase → structural defense,
+  motor → motility + turn rate, photoreceptor → its own vision cone at
+  its own gene-encoded mount angle, replicase → reproduction efficiency
+  and (past a threshold) budding/colony growth.
+- **Gene-expression scaling** (`GENE_EXPRESSION_SCALE` = 12,
+  headless-tuned): a single fold's `catalysisStrength` is one molecule's
+  worth of activity, but real cellular capability depends on how many
+  copies get expressed — applied once in `classPower()`, not baked into
+  the fold measurement itself.
+- **Rich vs. cheap simulation fidelity**, decided once at birth from the
+  population size at that moment (`World.richChemistryPopulationThreshold`
+  = 60) and never re-evaluated — an individual born into a small
+  population keeps running its richer simulation for its whole life even
+  after the population grows past the threshold. Rich-mode individuals
+  get a live, per-tick Ornstein-Uhlenbeck stochastic "expression noise"
+  process (real transcriptional/translational bursting, not a frozen
+  constant) that scales both capability and upkeep together each tick;
+  cheap-mode individuals use the same deterministic formulas as before.
+  Headless-verified both modes coexist and the split actually happens as
+  designed (early founders rich, later births cheap) without either mode
+  ever going extinct on its own.
+- **Stage 0 retirement**: once the dish's population has stayed at or
+  above a threshold for a sustained tick count, `main.ts` stops calling
+  `origin.update()`/`autoBootstrap()` — a fresh abiogenesis event has
+  effectively no chance of taking root against an already-established,
+  many-generations-deep population, so that compute goes back to the
+  living population. This is *not* an unconditional one-way latch: a
+  headless run caught that if the population later collapses to true
+  extinction, staying retired forever leaves the world permanently dead
+  with no recovery path, so retirement un-latches the moment population
+  hits 0, handing the compute budget back to abiogenesis. Verified
+  against the exact seed that originally exposed the bug.
+- **Sunlight as the only external input**, drawn via peptidyl-class
+  proteins, shared across a finite dish-wide budget.
 - **Brain as a small neural net:** ~15 sensor inputs → 10 hidden neurons →
   2 outputs. Offspring inherit a mutated copy of parent weights.
 - **Three reproduction modes:** asexual, sexual, budded.
 - **Carrying capacity, twice over:** shared sunlight budget, and no
   single lineage can occupy more than ~65% of the population cap.
 - **No hard-coded species tiers** — diet, size, speed, defense are all
-  just organelle counts/sizes, whether a founder came from the Designer
-  or from a bootstrapped protocell.
+  just real protein-fold-derived class power, whether a founder came from
+  the Designer (now a random-valid-genome test-seed tool, not a hand-
+  picked loadout editor — there's no catalog left to hand-pick from) or
+  from a bootstrapped protocell.
 - **Tree of Life view** and **Ecosystem tab**, both bounded (pruned
   ancestry tree, capped/decaying carrion) rather than growing forever.
 
+### Real bugs this rewrite surfaced (all headless-caught, all fixed)
+
+Emergent, argmax-based class scoring is much easier to get subtly wrong
+than a lookup table, and every one of these was a real behavioral bug
+that shipped before a headless ensemble run caught it — worth keeping as
+a reminder of why the "verify via actual runs, don't assume" discipline
+matters more here, not less:
+
+- **`motor` mathematically dominated `lipidsynthase`**: an early formula
+  scored `motor` as `hydrophobicSurface * 1.2 + posSurface * 0.5` —
+  strictly ≥ `lipidsynthase`'s plain `hydrophobicSurface` for every
+  possible input, so `lipidsynthase` measured at a real, exact 0% across
+  a 44,717-protein sample. Fixed by giving `motor` its own real,
+  independent axis: glycine-rich surface content, the actual Walker-motif
+  P-loop signature of real NTPase motor domains — not a bigger
+  coefficient on an axis another class already owned.
+- **`trimToProteinCap` couldn't tell classes apart**: its "keep
+  functional genes first" trim only meant *any* of the six classes, and
+  once `lipidsynthase` became the single most common catalytic outcome,
+  a long founder-viability search could accumulate plenty of
+  non-viability-relevant functional genes and silently push the one gene
+  that actually cleared viability past the cap. Measured directly:
+  founder viability dropped to ~87% instead of the ~100% the search's own
+  attempt-count calibration predicted. Fixed with `prioritizeFounderGenes`,
+  which sorts viability-relevant genes (peptidyl/protease/motor) ahead of
+  everything else before the generic cap-down trim runs.
+- **Bridge.ts's bootstrap-founder reroll collapsed for clean-multiple RNA
+  lengths**: the search cursor advanced by a full `PROTEIN_GENE_LENGTH`
+  (60) each attempt, which repeats the *identical* read whenever the RNA
+  length shares a large common factor with 60 — viability actually got
+  *worse* for longer RNA (0% at length 300, vs. 9% at length 12) because
+  longer-but-60-divisible RNA collapsed to fewer genuinely distinct reads,
+  not more. Fixed by advancing one nucleotide per attempt instead (a real
+  frameshift-reading analog), capped at `rnaSymbols.length` attempts since
+  further repeats are guaranteed once every offset's been tried.
+- **A real ~2.2x per-tick performance regression**: `canEat` (and related
+  per-protein-class checks) re-scanned `genome.proteins` from scratch on
+  every call, and `World.buildInputs()` calls these for every nearby
+  individual a virtunism senses, every tick, for every cell. Genomes now
+  routinely carry 10-16 real proteins (up from ~9 before the reroll-cap
+  recalibration below), so this scaled up enough that a `node --prof`
+  profile showed `canEat` alone consuming ~25% of total runtime — more
+  than the actual physics (distance math, neural-net forward passes)
+  combined. Fixed by caching each class's total power and count on the
+  `Genome` object once at construction (`classPowerCache`/
+  `classCountCache` — genome.proteins never changes after a Genome is
+  built), turning those checks into O(1) reads. Measured 17.12ms/tick →
+  7.78ms/tick (solo, uncontended, identical deterministic run) at
+  population ~220.
+- **Founder-viability reroll cap needed real recalibration, twice**: the
+  original cap (120 attempts) was tuned against an earlier, unbalanced
+  class formula. Once all six classes competed fairly, a direct
+  50,000-gene sample measured real single-gene hit rates of ~0.6%
+  peptidyl / ~0.95% protease / ~0.24% motor — a 120-attempt cap measured
+  at only ~59% actual founder-viability success. A cap-vs-success sweep
+  found 800 attempts reaches ~99.8% and 1200 reaches 100% over 5,000
+  trials; 1200 is used for real margin. This also exposed that the
+  original reroll loop was accidentally O(attempts²) (re-decoding the
+  whole accumulated gene list every attempt) — fine at 120, a real
+  problem at the low thousands — fixed by tracking viability
+  incrementally instead.
+
 Previously verified (Dandelion/Rabbit hand-seeded runs, kept for
-reference — the Dish itself is unchanged, only how it gets founders has):
-trait divergence real over 30,000+ ticks; predator lineage established in
-~67% of 15 seeds, the rest a real starvation collapse; a full multi-tier
-food web was never directly witnessed end-to-end.
+reference — the Dish's core loop is unchanged, only how genes decode into
+capability and how founders arrive has): trait divergence real over
+30,000+ ticks; predator lineage established in ~67% of 15 seeds, the rest
+a real starvation collapse; a full multi-tier food web was never directly
+witnessed end-to-end.
+
+Newly verified this rewrite (all headless, node --prof where noted):
+translation/fold ensemble confirms all six catalysis classes reachable
+with real nonzero representation (no class mathematically stuck at 0%);
+founder viability ~99.98% (up from a measured 58.7% mid-fix, before the
+prioritizeFounderGenes/cap fixes landed); cheap-mode-only population
+survived 50,000 ticks (40→209, one bottleneck down to 3 that recovered,
+106 generations); rich/cheap mode split confirmed behaving as designed
+(early founders rich, later births cheap, neither mode going extinct on
+its own) over 20,000 ticks; Stage-0 retirement fires and its extinction
+safety-valve un-latches correctly against the exact seed that first
+exposed the "retired into a permanently dead world" bug; a fresh
+50,000-tick survival run (post perf-fix) reached a stable population of
+~320 (near max capacity) through at least 30,000 ticks with no extinction
+before hitting the verification script's own wall-clock budget — it
+stopped because it was thriving, not because it crashed.
+
+**Not yet directly observed**: a full 50,000-tick run completing beyond
+tick 30,000 in one continuous headless session (the perf-fixed build is
+still ~4x slower per tick than the original organelle-based baseline at
+comparable population, a real and accepted cost of genuinely richer
+per-organism data — 10-16 real proteins instead of a fixed 2-6 organelle
+slots — not further chased down given "less concerned it run smoothly
+than that it run at all"); a live rich-mode population still containing
+rich-mode individuals at the moment it's compared against a pure
+cheap-mode baseline over an equally long window (rich founders
+consistently aged out and died before either verification run's midpoint
+in every headless run so far — expected, since maxAge is typically well
+under the tick counts being tested, not a sign rich mode doesn't work).
 
 ## Tech constraint from last time
 
