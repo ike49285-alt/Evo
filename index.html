@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Evo — Virtunism Ecosystem</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%235ad46a'/%3E%3Ccircle cx='16' cy='16' r='14' fill='none' stroke='%230b1220' stroke-width='2'/%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%232fe6c4'/%3E%3Ccircle cx='16' cy='16' r='14' fill='none' stroke='%230a0f0d' stroke-width='2'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -43,224 +43,252 @@
       </div>
 
       <aside id="sidebar" class="sidebar">
-        <div class="tabs" role="tablist">
-          <button class="tab-btn active" data-tab="designer" role="tab">Designer</button>
-          <button class="tab-btn" data-tab="ecosystem" role="tab">Ecosystem</button>
-          <button class="tab-btn" data-tab="chemistry" role="tab">Chemistry</button>
-        </div>
+        <div class="tab-panels">
+          <section id="tab-designer" class="tab-panel active">
+            <p class="panel-hint">
+              Life starts on its own in the primordial pool (the glowing
+              region in the dish) — free amino acids and nucleotides
+              occasionally bond, fold into catalysts, and a lucky
+              self-replicator sealed inside a lipid membrane becomes a
+              protocell that swims out as a real founding lineage, no
+              button required. You can also design a body plan by hand
+              here and release it anywhere in the dish. Either way, its
+              brain starts random — evolution shapes how it actually
+              behaves over the generations that follow.
+            </p>
 
-        <section id="tab-designer" class="tab-panel active">
-          <p class="panel-hint">
-            Life starts on its own in the primordial pool (the glowing
-            region in the dish) — free amino acids and nucleotides
-            occasionally bond, fold into catalysts, and a lucky
-            self-replicator sealed inside a lipid membrane becomes a
-            protocell that swims out as a real founding lineage, no
-            button required. You can also design a body plan by hand
-            here and release it anywhere in the dish. Either way, its
-            brain starts random — evolution shapes how it actually
-            behaves over the generations that follow.
-          </p>
-
-          <label class="field">
-            <span>Species name</span>
-            <input id="f-name" type="text" maxlength="24" value="My Species" />
-          </label>
-
-          <fieldset class="field">
-            <legend>Reproduction</legend>
-            <div class="segmented">
-              <label><input type="radio" name="repro" value="asexual" checked /> Asexual</label>
-              <label><input type="radio" name="repro" value="sexual" /> Sexual</label>
-            </div>
-          </fieldset>
-          <p class="panel-hint" id="repro-hint">
-            Asexual: reproduces solo, child is a mutated clone. Sexual: two
-            ready adults of this species have to physically meet — their
-            offspring's traits and brain are shuffled from both parents, then
-            mutated. Harder to pull off, more genetic mixing.
-          </p>
-
-          <fieldset class="field">
-            <legend>Organelles <em id="v-organelle-total">0 / 10</em></legend>
-            <div class="organelle-grid">
-              <label class="organelle-row">
-                <span class="organelle-swatch" data-organelle="flagellum"></span>
-                <span class="organelle-name">Flagella<small>speed &amp; agility</small></span>
-                <input id="f-flagella" type="number" min="0" max="6" step="1" value="2" />
-              </label>
-              <label class="organelle-row">
-                <span class="organelle-swatch" data-organelle="mouth"></span>
-                <span class="organelle-name">Mouths<small>eat carrion &amp; smaller virtunisms (incl. photosynthesizers)</small></span>
-                <input id="f-mouths" type="number" min="0" max="6" step="1" value="1" />
-              </label>
-              <label class="organelle-row">
-                <span class="organelle-swatch" data-organelle="chloroplast"></span>
-                <span class="organelle-name">Chloroplasts<small>passive energy from light</small></span>
-                <input id="f-chloroplasts" type="number" min="0" max="6" step="1" value="0" />
-              </label>
-              <label class="organelle-row">
-                <span class="organelle-swatch" data-organelle="eye"></span>
-                <span class="organelle-name">Eyes<small>each adds its own vision cone</small></span>
-                <input id="f-eyes" type="number" min="0" max="6" step="1" value="1" />
-              </label>
-              <label class="organelle-row">
-                <span class="organelle-swatch" data-organelle="armor"></span>
-                <span class="organelle-name">Armor<small>harder to catch &amp; eat</small></span>
-                <input id="f-armor" type="number" min="0" max="6" step="1" value="0" />
-              </label>
-            </div>
-            <label class="organelle-row bud-row">
-              <span class="organelle-swatch" data-organelle="bud"></span>
-              <span class="organelle-name">Bud gland<small>offspring stay attached &amp; grow into a colony</small></span>
-              <input id="f-bud" type="checkbox" />
+            <label class="field">
+              <span>Species name</span>
+              <input id="f-name" type="text" maxlength="24" value="My Species" />
             </label>
-          </fieldset>
-          <p class="panel-hint">
-            Every organelle has a running energy cost, so a loadout is a bet,
-            not a free upgrade — evolution will prune what doesn't pay for
-            itself. A virtunism with zero mouths and zero chloroplasts can't
-            feed itself at all.
-          </p>
 
-          <label class="field slider-field">
-            <span>Size <em id="v-size"></em></span>
-            <input id="f-size" type="range" min="0.5" max="3.2" step="0.05" value="1.1" />
-          </label>
+            <fieldset class="field">
+              <legend>Reproduction</legend>
+              <div class="segmented">
+                <label><input type="radio" name="repro" value="asexual" checked /> Asexual</label>
+                <label><input type="radio" name="repro" value="sexual" /> Sexual</label>
+              </div>
+            </fieldset>
+            <p class="panel-hint" id="repro-hint">
+              Asexual: reproduces solo, child is a mutated clone. Sexual: two
+              ready adults of this species have to physically meet — their
+              offspring's traits and brain are shuffled from both parents, then
+              mutated. Harder to pull off, more genetic mixing.
+            </p>
 
-          <label class="field slider-field">
-            <span>Sense radius <em id="v-sense"></em></span>
-            <input id="f-sense" type="range" min="40" max="320" step="5" value="170" />
-          </label>
+            <fieldset class="field">
+              <legend>Organelles <em id="v-organelle-total">0 / 10</em></legend>
+              <div class="organelle-grid">
+                <label class="organelle-row">
+                  <span class="organelle-swatch" data-organelle="flagellum"></span>
+                  <span class="organelle-name">Flagella<small>speed &amp; agility</small></span>
+                  <input id="f-flagella" type="number" min="0" max="6" step="1" value="2" />
+                </label>
+                <label class="organelle-row">
+                  <span class="organelle-swatch" data-organelle="mouth"></span>
+                  <span class="organelle-name">Mouths<small>eat carrion &amp; smaller virtunisms (incl. photosynthesizers)</small></span>
+                  <input id="f-mouths" type="number" min="0" max="6" step="1" value="1" />
+                </label>
+                <label class="organelle-row">
+                  <span class="organelle-swatch" data-organelle="chloroplast"></span>
+                  <span class="organelle-name">Chloroplasts<small>passive energy from light</small></span>
+                  <input id="f-chloroplasts" type="number" min="0" max="6" step="1" value="0" />
+                </label>
+                <label class="organelle-row">
+                  <span class="organelle-swatch" data-organelle="eye"></span>
+                  <span class="organelle-name">Eyes<small>each adds its own vision cone</small></span>
+                  <input id="f-eyes" type="number" min="0" max="6" step="1" value="1" />
+                </label>
+                <label class="organelle-row">
+                  <span class="organelle-swatch" data-organelle="armor"></span>
+                  <span class="organelle-name">Armor<small>harder to catch &amp; eat</small></span>
+                  <input id="f-armor" type="number" min="0" max="6" step="1" value="0" />
+                </label>
+              </div>
+              <label class="organelle-row bud-row">
+                <span class="organelle-swatch" data-organelle="bud"></span>
+                <span class="organelle-name">Bud gland<small>offspring stay attached &amp; grow into a colony</small></span>
+                <input id="f-bud" type="checkbox" />
+              </label>
+            </fieldset>
+            <p class="panel-hint">
+              Every organelle has a running energy cost, so a loadout is a bet,
+              not a free upgrade — evolution will prune what doesn't pay for
+              itself. A virtunism with zero mouths and zero chloroplasts can't
+              feed itself at all.
+            </p>
 
-          <label class="field slider-field">
-            <span>Lifespan (ticks) <em id="v-age"></em></span>
-            <input id="f-age" type="range" min="400" max="2400" step="20" value="1100" />
-          </label>
+            <label class="field slider-field">
+              <span>Size <em id="v-size"></em></span>
+              <input id="f-size" type="range" min="0.5" max="3.2" step="0.05" value="1.1" />
+            </label>
 
-          <label class="field slider-field">
-            <span>Hue <em id="v-hue"></em></span>
-            <input id="f-hue" type="range" min="0" max="360" step="1" value="200" />
-          </label>
-          <div id="hue-swatch"></div>
+            <label class="field slider-field">
+              <span>Sense radius <em id="v-sense"></em></span>
+              <input id="f-sense" type="range" min="40" max="320" step="5" value="170" />
+            </label>
 
-          <label class="field slider-field">
-            <span>Population to release <em id="v-count"></em></span>
-            <input id="f-count" type="range" min="1" max="40" step="1" value="26" />
-          </label>
-          <p class="panel-hint" id="count-hint">
-            Sexual reproducers in particular need a decent founding
-            population — a mate has to actually be nearby and ready too, so a
-            handful of individuals can struggle against an established rival
-            for the same food.
-          </p>
+            <label class="field slider-field">
+              <span>Lifespan (ticks) <em id="v-age"></em></span>
+              <input id="f-age" type="range" min="400" max="2400" step="20" value="1100" />
+            </label>
 
-          <button id="btn-release" class="btn primary wide">Release into Dish</button>
-        </section>
+            <label class="field slider-field">
+              <span>Hue <em id="v-hue"></em></span>
+              <input id="f-hue" type="range" min="0" max="360" step="1" value="200" />
+            </label>
+            <div id="hue-swatch"></div>
 
-        <section id="tab-ecosystem" class="tab-panel">
-          <div class="stat-grid">
-            <div class="stat"><span class="stat-label">Population</span><span id="s-pop">0</span></div>
-            <div class="stat"><span class="stat-label">Living species</span><span id="s-species">0</span></div>
-            <div class="stat"><span class="stat-label">Highest generation</span><span id="s-gen">0</span></div>
-            <div class="stat"><span class="stat-label">Colonies</span><span id="s-colonies">0</span></div>
-            <div class="stat"><span class="stat-label">Avg. colony size</span><span id="s-colonysize">0</span></div>
-            <div class="stat"><span class="stat-label">Solo virtunisms</span><span id="s-solo">0</span></div>
-            <div class="stat"><span class="stat-label">Meat / carrion</span><span id="s-meat">0</span></div>
-            <div class="stat"><span class="stat-label">Sexual / asexual</span><span id="s-repro">0 / 0</span></div>
-            <div class="stat"><span class="stat-label">Avg. mouths</span><span id="s-mouths">0</span></div>
-            <div class="stat"><span class="stat-label">Avg. eyes</span><span id="s-eyes">0</span></div>
-            <div class="stat"><span class="stat-label">Avg. armor</span><span id="s-armor">0</span></div>
-          </div>
+            <label class="field slider-field">
+              <span>Population to release <em id="v-count"></em></span>
+              <input id="f-count" type="range" min="1" max="40" step="1" value="26" />
+            </label>
+            <p class="panel-hint" id="count-hint">
+              Sexual reproducers in particular need a decent founding
+              population — a mate has to actually be nearby and ready too, so a
+              handful of individuals can struggle against an established rival
+              for the same food.
+            </p>
 
-          <div class="chart-block">
-            <div class="chart-title">Population <em id="c-pop-val"></em></div>
-            <canvas class="chart" id="chart-pop" height="70"></canvas>
-          </div>
-          <div class="chart-block">
-            <div class="chart-title">Morphs — size vs. diet lean (each dot is one virtunism)</div>
-            <canvas class="chart" id="chart-morphs" height="120"></canvas>
-          </div>
-          <div class="chart-block">
-            <div class="chart-title">Avg. size (chassis) <em id="c-size-val"></em></div>
-            <canvas class="chart" id="chart-size" height="60"></canvas>
-          </div>
-          <div class="chart-block">
-            <div class="chart-title">Avg. max speed <em id="c-speed-val"></em></div>
-            <canvas class="chart" id="chart-speed" height="60"></canvas>
-          </div>
-          <div class="chart-block">
-            <div class="chart-title">Avg. sense radius <em id="c-sense-val"></em></div>
-            <canvas class="chart" id="chart-sense" height="60"></canvas>
-          </div>
-          <div class="chart-block">
-            <div class="chart-title">Avg. flagella <em id="c-flagella-val"></em></div>
-            <canvas class="chart" id="chart-flagella" height="60"></canvas>
-          </div>
-          <div class="chart-block">
-            <div class="chart-title">Avg. chloroplasts <em id="c-chloro-val"></em></div>
-            <canvas class="chart" id="chart-chloro" height="60"></canvas>
-          </div>
-        </section>
+            <button id="btn-release" class="btn primary wide">Release into Dish</button>
+          </section>
 
-        <section id="tab-chemistry" class="tab-panel">
-          <p class="panel-hint">
-            The primordial pool, live — free amino acids and nucleotides
-            drift and occasionally bond when energy happens to be nearby.
-            Folded peptides can become catalysts; RNA long and structured
-            enough can start templating copies of itself, mutations and
-            all. Lipids self-assemble into membranes for free, and a
-            membrane that closes around a working replicator becomes a
-            protocell. The moment one proves itself (an active catalyst,
-            real replication, survived a division) it swims out into the
-            dish on its own as a new founding lineage — see it happen
-            live in the pool, bottom-center of the dish.
-          </p>
+          <section id="tab-species" class="tab-panel">
+            <p class="panel-hint">
+              One card per species currently alive in the dish — whether it
+              swam out of the pool, was hand-designed, or split off from
+              another lineage once its genes drifted far enough to earn its
+              own name.
+            </p>
+            <div id="species-list" class="species-list"></div>
+          </section>
 
-          <div class="stat-grid">
-            <div class="stat"><span class="stat-label">Pool tick</span><span id="os-tick">0</span></div>
-            <div class="stat"><span class="stat-label">Origins so far</span><span id="os-bootstraps">0</span></div>
-            <div class="stat"><span class="stat-label">Free amino acids</span><span id="os-aa">0</span></div>
-            <div class="stat"><span class="stat-label">Free nucleotides</span><span id="os-nt">0</span></div>
-            <div class="stat"><span class="stat-label">Free lipids</span><span id="os-lipid">0</span></div>
-            <div class="stat"><span class="stat-label">Free energy</span><span id="os-energy">0</span></div>
-            <div class="stat"><span class="stat-label">Peptides</span><span id="os-peptides">0</span></div>
-            <div class="stat"><span class="stat-label">— catalytic</span><span id="os-catalysts">0</span></div>
-            <div class="stat"><span class="stat-label">Longest peptide</span><span id="os-longpep">0</span></div>
-            <div class="stat"><span class="stat-label">RNA strands</span><span id="os-rna">0</span></div>
-            <div class="stat"><span class="stat-label">— ribozymes</span><span id="os-ribozymes">0</span></div>
-            <div class="stat"><span class="stat-label">Longest RNA</span><span id="os-longrna">0</span></div>
-            <div class="stat"><span class="stat-label">Vesicles</span><span id="os-vesicles">0</span></div>
-            <div class="stat"><span class="stat-label">Replication events</span><span id="os-replevents">0</span></div>
-          </div>
+          <section id="tab-ecosystem" class="tab-panel">
+            <div class="vitals-row">
+              <div class="stat vital"><span class="stat-label">Population</span><span id="s-pop">0</span></div>
+              <div class="stat vital"><span class="stat-label">Living species</span><span id="s-species">0</span></div>
+              <div class="stat vital"><span class="stat-label">Highest generation</span><span id="s-gen">0</span></div>
+              <div class="stat vital"><span class="stat-label">Colonies</span><span id="s-colonies">0</span></div>
+            </div>
 
-          <div class="legend-block">
-            <div class="legend-row"><span class="legend-swatch" style="background:rgba(230,140,90,0.9)"></span>hydrophobic amino acid</div>
-            <div class="legend-row"><span class="legend-swatch" style="background:rgba(120,170,235,0.9)"></span>polar amino acid</div>
-            <div class="legend-row"><span class="legend-swatch" style="background:#f5a623"></span>catalytic peptide</div>
-            <div class="legend-row"><span class="legend-swatch" style="background:rgba(199,125,255,0.95)"></span>ribozyme RNA</div>
-            <div class="legend-row"><span class="legend-swatch" style="background:rgba(245,220,160,0.85)"></span>lipid</div>
-          </div>
-        </section>
-      </aside>
-    </main>
+            <div class="stat-grid">
+              <div class="stat"><span class="stat-label">Avg. colony size</span><span id="s-colonysize">0</span></div>
+              <div class="stat"><span class="stat-label">Solo virtunisms</span><span id="s-solo">0</span></div>
+              <div class="stat"><span class="stat-label">Meat / carrion</span><span id="s-meat">0</span></div>
+              <div class="stat"><span class="stat-label">Sexual / asexual</span><span id="s-repro">0 / 0</span></div>
+              <div class="stat"><span class="stat-label">Avg. mouths</span><span id="s-mouths">0</span></div>
+              <div class="stat"><span class="stat-label">Avg. eyes</span><span id="s-eyes">0</span></div>
+              <div class="stat"><span class="stat-label">Avg. armor</span><span id="s-armor">0</span></div>
+            </div>
 
-    <div id="tree-drawer">
-      <button id="tree-tab" class="drawer-tab">🌳 Tree of Life</button>
-      <div id="tree-panel" class="drawer-panel">
-        <div class="tree-toolbar">
-          <p class="panel-hint">
-            Every dot is one virtunism that's ever lived; lines trace parent
-            → child. Click a dot to trace its ancestry and find it in the
-            dish (if it's still alive). Dim dots are extinct — kept only
-            because a still-living descendant traces back through them.
-          </p>
-          <span id="tree-info" class="tree-info"></span>
-          <button id="tree-clear" class="btn">Clear</button>
+            <div class="chart-grid">
+              <div class="chart-block wide">
+                <div class="chart-title">Population <em id="c-pop-val"></em></div>
+                <canvas class="chart" id="chart-pop" height="70"></canvas>
+              </div>
+              <div class="chart-block wide">
+                <div class="chart-title">Morphs — size vs. diet lean (each dot is one virtunism)</div>
+                <canvas class="chart" id="chart-morphs" height="120"></canvas>
+              </div>
+              <div class="chart-block">
+                <div class="chart-title">Avg. size (chassis) <em id="c-size-val"></em></div>
+                <canvas class="chart" id="chart-size" height="60"></canvas>
+              </div>
+              <div class="chart-block">
+                <div class="chart-title">Avg. max speed <em id="c-speed-val"></em></div>
+                <canvas class="chart" id="chart-speed" height="60"></canvas>
+              </div>
+              <div class="chart-block">
+                <div class="chart-title">Avg. sense radius <em id="c-sense-val"></em></div>
+                <canvas class="chart" id="chart-sense" height="60"></canvas>
+              </div>
+              <div class="chart-block">
+                <div class="chart-title">Avg. flagella <em id="c-flagella-val"></em></div>
+                <canvas class="chart" id="chart-flagella" height="60"></canvas>
+              </div>
+              <div class="chart-block">
+                <div class="chart-title">Avg. chloroplasts <em id="c-chloro-val"></em></div>
+                <canvas class="chart" id="chart-chloro" height="60"></canvas>
+              </div>
+            </div>
+          </section>
+
+          <section id="tab-chemistry" class="tab-panel">
+            <p class="panel-hint">
+              The primordial pool, live — free amino acids and nucleotides
+              drift and occasionally bond when energy happens to be nearby.
+              Folded peptides can become catalysts; RNA long and structured
+              enough can start templating copies of itself, mutations and
+              all. Lipids self-assemble into membranes for free, and a
+              membrane that closes around a working replicator becomes a
+              protocell. The moment one proves itself (an active catalyst,
+              real replication, survived a division) it swims out into the
+              dish on its own as a new founding lineage — see it happen
+              live in the pool, bottom-center of the dish.
+            </p>
+
+            <div class="stat-grid">
+              <div class="stat"><span class="stat-label">Pool tick</span><span id="os-tick">0</span></div>
+              <div class="stat"><span class="stat-label">Origins so far</span><span id="os-bootstraps">0</span></div>
+              <div class="stat"><span class="stat-label">Free amino acids</span><span id="os-aa">0</span></div>
+              <div class="stat"><span class="stat-label">Free nucleotides</span><span id="os-nt">0</span></div>
+              <div class="stat"><span class="stat-label">Free lipids</span><span id="os-lipid">0</span></div>
+              <div class="stat"><span class="stat-label">Free energy</span><span id="os-energy">0</span></div>
+              <div class="stat"><span class="stat-label">Peptides</span><span id="os-peptides">0</span></div>
+              <div class="stat"><span class="stat-label">— catalytic</span><span id="os-catalysts">0</span></div>
+              <div class="stat"><span class="stat-label">Longest peptide</span><span id="os-longpep">0</span></div>
+              <div class="stat"><span class="stat-label">RNA strands</span><span id="os-rna">0</span></div>
+              <div class="stat"><span class="stat-label">— ribozymes</span><span id="os-ribozymes">0</span></div>
+              <div class="stat"><span class="stat-label">Longest RNA</span><span id="os-longrna">0</span></div>
+              <div class="stat"><span class="stat-label">Vesicles</span><span id="os-vesicles">0</span></div>
+              <div class="stat"><span class="stat-label">Replication events</span><span id="os-replevents">0</span></div>
+            </div>
+
+            <div class="legend-block">
+              <div class="legend-row"><span class="legend-swatch" style="background:rgba(230,140,90,0.9)"></span>hydrophobic amino acid</div>
+              <div class="legend-row"><span class="legend-swatch" style="background:rgba(120,170,235,0.9)"></span>polar amino acid</div>
+              <div class="legend-row"><span class="legend-swatch" style="background:#f5a623"></span>catalytic peptide</div>
+              <div class="legend-row"><span class="legend-swatch" style="background:rgba(199,125,255,0.95)"></span>ribozyme RNA</div>
+              <div class="legend-row"><span class="legend-swatch" style="background:rgba(245,220,160,0.85)"></span>lipid</div>
+            </div>
+          </section>
+
+          <section id="tab-tree" class="tab-panel">
+            <div class="tree-toolbar">
+              <p class="panel-hint">
+                Every dot is one virtunism that's ever lived; lines trace parent
+                → child. A dashed amber edge marks a real speciation event —
+                the individual's genes had drifted far enough to found a new
+                species. Click a dot to trace its ancestry and find it in the
+                dish (if it's still alive). Dim dots are extinct — kept only
+                because a still-living descendant traces back through them.
+              </p>
+              <span id="tree-info" class="tree-info"></span>
+              <button id="tree-clear" class="btn">Clear</button>
+            </div>
+            <canvas id="chart-tree"></canvas>
+          </section>
         </div>
-        <canvas id="chart-tree"></canvas>
-      </div>
-    </div>
+      </aside>
+
+      <nav id="tab-rail" role="tablist" aria-orientation="vertical">
+        <button class="tab-btn active" data-tab="designer" role="tab" aria-selected="true" title="Designer">
+          <span class="tab-icon" aria-hidden="true">🧬</span><span class="tab-label">Designer</span>
+        </button>
+        <button class="tab-btn" data-tab="species" role="tab" aria-selected="false" title="Species">
+          <span class="tab-icon" aria-hidden="true">🏷</span><span class="tab-label">Species</span>
+        </button>
+        <button class="tab-btn" data-tab="ecosystem" role="tab" aria-selected="false" title="Ecosystem">
+          <span class="tab-icon" aria-hidden="true">📈</span><span class="tab-label">Ecosystem</span>
+        </button>
+        <button class="tab-btn" data-tab="chemistry" role="tab" aria-selected="false" title="Chemistry">
+          <span class="tab-icon" aria-hidden="true">⚗️</span><span class="tab-label">Chemistry</span>
+        </button>
+        <button class="tab-btn" data-tab="tree" role="tab" aria-selected="false" title="Tree of Life">
+          <span class="tab-icon" aria-hidden="true">🌳</span><span class="tab-label">Tree</span>
+        </button>
+      </nav>
+    </main>
   </div>
 
   <script type="module" src="dist/main.js"></script>

@@ -91,8 +91,9 @@ export function drawScatter(
   const xOf = (v: number): number => pad + ((v - minX) / (maxX - minX)) * (w - pad * 2);
   const yOf = (v: number): number => h - pad - ((v - minY) / (maxY - minY)) * (h - pad * 2);
 
-  // zero-lines
-  ctx.strokeStyle = 'rgba(150, 165, 190, 0.25)';
+  // zero-lines — green-grey to match style.css's --text-dim token (canvas
+  // can't read CSS custom properties, so it's mirrored here as a literal).
+  ctx.strokeStyle = 'rgba(138, 154, 142, 0.25)';
   ctx.lineWidth = 1;
   if (opts.xZeroLine !== false) {
     ctx.beginPath();
@@ -124,7 +125,7 @@ export function drawScatter(
   }
 
   // axis labels
-  ctx.fillStyle = 'rgba(160, 175, 200, 0.8)';
+  ctx.fillStyle = 'rgba(138, 154, 142, 0.8)';
   ctx.font = '10px sans-serif';
   ctx.fillText(opts.xLabel, pad, h - 3);
   ctx.save();

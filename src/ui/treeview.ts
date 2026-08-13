@@ -21,6 +21,15 @@ export interface TreeNodeData {
   isSpeciationEvent: boolean;
 }
 
+// Canvas can't read CSS custom properties, so the two semantic colors
+// from style.css's token system are mirrored here as literals:
+// --text-dim (neutral axis/label text) and --accent-2 (genetic/species
+// identity — a speciation event is drawn in this color everywhere,
+// Species panel included, rather than the diverging individual's own
+// hue, so it reads as "the same kind of thing" across the whole UI).
+const NEUTRAL = 'rgba(138, 154, 142, 0.8)';
+const SPECIATION_COLOR = '#e8a23c';
+
 export interface TreeNodeScreenPos {
   x: number;
   y: number;
@@ -52,7 +61,7 @@ export function drawTree(
   const h = canvas.height;
   ctx.clearRect(0, 0, w, h);
   if (nodes.size === 0) {
-    ctx.fillStyle = 'rgba(160, 175, 200, 0.6)';
+    ctx.fillStyle = NEUTRAL;
     ctx.font = '12px sans-serif';
     ctx.fillText('No living lineage yet.', 12, h / 2);
     return positions;
@@ -139,15 +148,15 @@ export function drawTree(
     if (!p || !c) continue;
     const onPath = highlightIds.has(node.id) && highlightIds.has(node.parentId);
     // A speciation edge is a real phylogenetic branch point, not an
-    // ordinary parent->child birth — drawn dashed and in the new lineage's
-    // own hue so it reads as a distinct event even when it's not on the
-    // currently-highlighted path.
+    // ordinary parent->child birth — drawn dashed, in the same amber
+    // "genetic record" color everywhere in the UI, so it reads as a
+    // distinct event even when it's not on the currently-highlighted path.
     if (node.isSpeciationEvent) {
       ctx.setLineDash([4, 3]);
-      ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.95)' : `hsla(${node.hue}, 80%, 65%, 0.75)`;
+      ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.95)' : `${SPECIATION_COLOR}bf`;
       ctx.lineWidth = onPath ? 2.5 : 1.8;
     } else {
-      ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.85)' : 'rgba(150, 165, 190, 0.3)';
+      ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.85)' : 'rgba(138, 154, 142, 0.3)';
       ctx.lineWidth = onPath ? 2 : 1;
     }
     ctx.beginPath();
@@ -179,7 +188,7 @@ export function drawTree(
     }
     if (node.isSpeciationEvent) {
       ctx.setLineDash([2, 2]);
-      ctx.strokeStyle = `hsla(${node.hue}, 90%, 75%, 0.9)`;
+      ctx.strokeStyle = `${SPECIATION_COLOR}e6`;
       ctx.lineWidth = 1.3;
       ctx.beginPath();
       ctx.arc(p.x, p.y, r + 2.5, 0, Math.PI * 2);
@@ -195,7 +204,7 @@ export function drawTree(
     }
   }
 
-  ctx.fillStyle = 'rgba(160, 175, 200, 0.8)';
+  ctx.fillStyle = NEUTRAL;
   ctx.font = '10px sans-serif';
   ctx.fillText('time (tick) →', padL, h - 4);
 

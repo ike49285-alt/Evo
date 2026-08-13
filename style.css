@@ -1,15 +1,59 @@
 :root {
   color-scheme: dark;
-  --bg: #070b13;
-  --panel: #0f1626;
-  --panel-2: #131c30;
-  --border: #223047;
-  --text: #e7edf7;
-  --text-dim: #90a0ba;
-  --accent: #5ad46a;
-  --accent-2: #4f8cff;
-  --danger: #ff5c5c;
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --ink: #0a0f0d;
+  --panel: #121815;
+  --panel-2: #1a221e;
+  --line: #2a352f;
+  --text: #eef2ea;
+  --text-dim: #8a9a8e;
+  /* Two accents, split by meaning, not decoration: cyan-green marks live/
+     active simulation state (play controls, the active tab, HUD figures);
+     amber marks genetic/species identity (species names, speciation
+     markers, the Species panel). Keep that split everywhere both are
+     used, including canvas-drawn UI in treeview.ts/chart.ts. */
+  --accent: #2fe6c4;
+  --accent-2: #e8a23c;
+  --danger: #ff6b57;
+
+  --btn-bg: var(--panel-2);
+  --btn-border: var(--line);
+  --btn-hover-bg: #1c2622;
+  --btn-hover-border: #3a4a41;
+  --btn-primary-bg: #163a30;
+  --btn-primary-border: #2a7a63;
+  --btn-primary-hover-bg: #1c483c;
+  --btn-danger-bg: #3a1e1a;
+  --btn-danger-border: #7a3a2f;
+  --btn-danger-hover-bg: #472521;
+
+  /* Designer-tab organelle legend dots only — NOT src/sim/types.ts's
+     ORGANELLE_COLORS or the Chemistry tab's inline chemistry-legend
+     swatches, both of which are pixel-matched to what renderer.ts
+     actually draws on the dish canvas and must stay untouched. */
+  --organelle-flagellum: #cfe8de;
+  --organelle-mouth: #6f7d74;
+  --organelle-chloroplast: #3fae5a;
+  --organelle-eye: var(--text);
+  --organelle-armor: #9fb0a3;
+  --organelle-bud: #e896c4;
+
+  /* Type carries meaning here: serif = a named living thing (species,
+     panel titles), monospace = live simulation telemetry, sans = UI
+     chrome. System stacks only — this app also bundles into a CSP-locked
+     single-file artifact, so no webfont CDNs. */
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  --font-sans: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+
+  --fs-eyebrow: 10.5px;
+  --fs-body: 12.5px;
+  --fs-ui: 13px;
+  --fs-data: 15px;
+  --fs-data-lg: 20px;
+  --fs-title: 17px;
+  --fs-specimen: 18px;
+
+  font-family: var(--font-sans);
 }
 
 * { box-sizing: border-box; }
@@ -17,7 +61,7 @@
 html, body {
   height: 100%;
   margin: 0;
-  background: var(--bg);
+  background: var(--ink);
   color: var(--text);
 }
 
@@ -35,7 +79,7 @@ html, body {
   gap: 16px;
   padding: 10px 16px;
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
   flex-wrap: wrap;
 }
@@ -43,39 +87,41 @@ html, body {
 .brand { display: flex; align-items: center; gap: 8px; }
 .brand-dot {
   width: 12px; height: 12px; border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #9dffb0, var(--accent));
+  background: radial-gradient(circle at 35% 30%, #b9fff0, var(--accent));
   box-shadow: 0 0 8px var(--accent);
 }
-.brand h1 { font-size: 18px; margin: 0; letter-spacing: 0.5px; }
-.tagline { color: var(--text-dim); font-size: 12px; }
+.brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 0.3px; font-weight: 600; }
+.tagline { color: var(--text-dim); font-size: var(--fs-body); }
 
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
 .btn {
-  background: var(--panel-2);
+  background: var(--btn-bg);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--btn-border);
   border-radius: 6px;
   padding: 7px 12px;
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
-.btn:hover { background: #1a2438; border-color: #33507a; }
-.btn.primary { background: #1b3a26; border-color: #2f7a45; }
-.btn.primary:hover { background: #21472e; }
-.btn.danger { background: #3a1b1b; border-color: #7a2f2f; }
-.btn.danger:hover { background: #472121; }
+.btn:hover { background: var(--btn-hover-bg); border-color: var(--btn-hover-border); }
+.btn.primary { background: var(--btn-primary-bg); border-color: var(--btn-primary-border); }
+.btn.primary:hover { background: var(--btn-primary-hover-bg); }
+.btn.danger { background: var(--btn-danger-bg); border-color: var(--btn-danger-border); }
+.btn.danger:hover { background: var(--btn-danger-hover-bg); }
 .btn.wide { width: 100%; padding: 10px; font-weight: 600; }
-.btn.active { background: var(--accent-2); border-color: var(--accent-2); color: white; }
+.btn.active { background: var(--accent); border-color: var(--accent); color: var(--ink); }
 
-.speed-group { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.speed-group { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .speed-btn {
-  background: var(--panel-2); color: var(--text-dim); border: none;
-  padding: 7px 10px; cursor: pointer; font-size: 12px; border-right: 1px solid var(--border);
+  background: var(--btn-bg); color: var(--text-dim); border: none;
+  padding: 7px 10px; cursor: pointer; font-family: var(--font-sans); font-size: var(--fs-body);
+  border-right: 1px solid var(--line);
 }
 .speed-btn:last-child { border-right: none; }
-.speed-btn.active { background: var(--accent-2); color: white; }
+.speed-btn.active { background: var(--accent); color: var(--ink); }
 
 main { flex: 1 1 auto; display: flex; min-height: 0; }
 
@@ -85,62 +131,90 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
 
 .hud {
   position: absolute; top: 12px; left: 12px;
-  background: rgba(10, 15, 25, 0.72);
-  border: 1px solid var(--border);
+  background: rgba(18, 24, 21, 0.78);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 8px 12px;
-  display: flex; gap: 16px;
-  font-size: 12px;
+  padding: 8px 0;
+  display: flex;
   backdrop-filter: blur(4px);
 }
-.hud > div { display: flex; flex-direction: column; gap: 2px; }
-.hud span:not(.hud-label) { font-size: 15px; font-weight: 600; }
-.hud-label { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
+.hud > div { display: flex; flex-direction: column; gap: 2px; padding: 0 14px; }
+.hud > div + div { border-left: 1px solid var(--line); }
+.hud span:not(.hud-label) {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-data); font-weight: 600; color: var(--accent);
+}
+.hud-label { color: var(--text-dim); font-size: var(--fs-eyebrow); text-transform: uppercase; letter-spacing: 0.8px; }
 
 .hint {
   position: absolute; bottom: 10px; left: 12px;
   color: var(--text-dim); font-size: 11px;
-  background: rgba(10, 15, 25, 0.6);
+  background: rgba(10, 15, 13, 0.6);
   padding: 4px 8px; border-radius: 6px;
 }
 
 .sidebar {
-  width: 320px;
   flex: 0 0 320px;
   background: var(--panel);
-  border-left: 1px solid var(--border);
-  overflow-y: auto;
-  padding: 14px;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tab-panels { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+/* The Tree of Life canvas needs to fill whatever height is left in the
+   panel, not grow with its content — this is the one panel that isn't a
+   plain scrolling block. */
+#tab-tree.tab-panel.active {
+  display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px;
+}
+
+#tab-rail {
+  flex: 0 0 68px;
+  background: var(--panel-2);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+}
+#tab-rail .tab-btn {
+  background: none; border: none; border-left: 2px solid transparent;
+  color: var(--text-dim);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 12px 4px; cursor: pointer;
+}
+#tab-rail .tab-icon { font-size: 18px; line-height: 1; }
+#tab-rail .tab-label {
+  font-family: var(--font-serif); font-size: 10.5px; letter-spacing: 0.3px;
+  text-align: center; line-height: 1.15;
+}
+#tab-rail .tab-btn.active {
+  color: var(--text); border-left-color: var(--accent); background: var(--panel);
 }
 
 .legend-block { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
-.legend-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-dim); }
+.legend-row { display: flex; align-items: center; gap: 8px; font-size: var(--fs-body); color: var(--text-dim); }
 .legend-swatch { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
 
-.tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
-.tab-btn {
-  flex: 1; background: none; border: none; color: var(--text-dim);
-  padding: 8px 4px; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent;
-}
-.tab-btn.active { color: var(--text); border-bottom-color: var(--accent-2); }
-
-.tab-panel { display: none; }
-.tab-panel.active { display: block; }
-
-.panel-hint { color: var(--text-dim); font-size: 12px; line-height: 1.5; margin: 0 0 14px; }
+.panel-hint { color: var(--text-dim); font-size: var(--fs-body); line-height: 1.5; margin: 0 0 14px; }
 
 .field { display: block; margin-bottom: 12px; }
-.field > span { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+.field > span { display: flex; justify-content: space-between; font-size: var(--fs-body); color: var(--text-dim); margin-bottom: 4px; }
 .field em { font-style: normal; color: var(--text); font-weight: 600; }
 .field input[type="text"] {
-  width: 100%; background: var(--panel-2); border: 1px solid var(--border);
-  color: var(--text); border-radius: 6px; padding: 7px 8px; font-size: 13px;
+  width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--text); border-radius: 6px; padding: 7px 8px; font-family: var(--font-sans); font-size: var(--fs-ui);
 }
-.field input[type="range"] { width: 100%; accent-color: var(--accent-2); }
+.field input[type="range"] { width: 100%; accent-color: var(--accent); }
+/* The one control that's literally genetic identity, not UI state. */
+#f-hue { accent-color: var(--accent-2); }
 
 fieldset.field { border: none; padding: 0; margin: 0 0 12px; }
 fieldset legend {
-  font-size: 12px; color: var(--text-dim); margin-bottom: 6px; padding: 0;
+  font-size: var(--fs-body); color: var(--text-dim); margin-bottom: 6px; padding: 0;
   display: flex; justify-content: space-between; align-items: baseline; width: 100%;
 }
 fieldset legend em { font-style: normal; color: var(--text); font-weight: 600; }
@@ -149,101 +223,133 @@ fieldset legend em { font-style: normal; color: var(--text); font-weight: 600; }
 .organelle-grid { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
 .organelle-row {
   display: flex; align-items: center; gap: 8px;
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
   padding: 6px 8px;
 }
 .organelle-swatch {
   width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto;
   background: var(--text-dim);
 }
-.organelle-swatch[data-organelle="flagellum"] { background: #cdd8ee; }
-.organelle-swatch[data-organelle="mouth"] { background: #6b7280; }
-.organelle-swatch[data-organelle="chloroplast"] { background: #3fae5a; }
-.organelle-swatch[data-organelle="eye"] { background: #fefefe; }
-.organelle-swatch[data-organelle="armor"] { background: #9aa7bd; }
-.organelle-swatch[data-organelle="bud"] { background: #ff8fd6; }
-.organelle-name { flex: 1 1 auto; font-size: 12px; display: flex; flex-direction: column; line-height: 1.3; }
+.organelle-swatch[data-organelle="flagellum"] { background: var(--organelle-flagellum); }
+.organelle-swatch[data-organelle="mouth"] { background: var(--organelle-mouth); }
+.organelle-swatch[data-organelle="chloroplast"] { background: var(--organelle-chloroplast); }
+.organelle-swatch[data-organelle="eye"] { background: var(--organelle-eye); }
+.organelle-swatch[data-organelle="armor"] { background: var(--organelle-armor); }
+.organelle-swatch[data-organelle="bud"] { background: var(--organelle-bud); }
+.organelle-name { flex: 1 1 auto; font-size: var(--fs-body); display: flex; flex-direction: column; line-height: 1.3; }
 .organelle-name small { color: var(--text-dim); font-size: 10px; }
 .organelle-row input[type="number"] {
-  width: 44px; background: var(--panel); border: 1px solid var(--border);
-  color: var(--text); border-radius: 5px; padding: 4px; font-size: 13px; text-align: center;
+  width: 44px; background: var(--panel); border: 1px solid var(--line);
+  color: var(--text); border-radius: 5px; padding: 4px; font-family: var(--font-mono); font-size: var(--fs-ui); text-align: center;
 }
 .organelle-row.bud-row { margin-bottom: 0; }
-.organelle-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent-2); }
+.organelle-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
 .segmented label {
-  flex: 1; text-align: center; font-size: 11px; padding: 6px 4px;
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+  flex: 1; text-align: center; font-size: var(--fs-body); padding: 6px 4px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
 }
 .segmented input { display: none; }
-.segmented label:has(input:checked) { background: var(--accent-2); border-color: var(--accent-2); color: white; }
+.segmented label:has(input:checked) { background: var(--accent); border-color: var(--accent); color: var(--ink); }
 
 #hue-swatch {
   height: 18px; border-radius: 5px; margin: -6px 0 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
 }
+
+.vitals-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;
+}
+.stat.vital > span:not(.stat-label) { font-size: var(--fs-data-lg); }
 
 .stat-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px;
 }
 .stat {
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 10px; display: flex; flex-direction: column; gap: 2px;
 }
-.stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); }
-.stat > span:not(.stat-label) { font-size: 17px; font-weight: 700; }
+.stat-label { font-family: var(--font-sans); font-size: var(--fs-eyebrow); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); }
+.stat > span:not(.stat-label) { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-data); font-weight: 700; color: var(--text); }
 
-.chart-block { margin-bottom: 14px; }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.chart-block { margin-bottom: 0; }
+.chart-block.wide { grid-column: 1 / -1; }
 .chart-title {
-  font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px;
+  font-family: var(--font-sans); font-size: var(--fs-eyebrow); color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px;
   display: flex; justify-content: space-between; margin-bottom: 4px;
 }
-.chart-title em { font-style: normal; color: var(--text); font-weight: 700; text-transform: none; }
+.chart-title em { font-style: normal; font-family: var(--font-mono); color: var(--text); font-weight: 700; text-transform: none; }
 canvas.chart {
   width: 100%; display: block; background: var(--panel-2);
-  border: 1px solid var(--border); border-radius: 6px;
+  border: 1px solid var(--line); border-radius: 6px;
 }
 
-#tree-drawer {
-  flex: 0 0 auto;
-  background: var(--panel);
-  border-top: 1px solid var(--border);
-}
-.drawer-tab {
-  display: block;
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  padding: 6px 16px;
-  margin-left: 16px;
-  font-size: 12px;
-  cursor: pointer;
-  transform: translateY(1px);
-  position: relative;
-}
-.drawer-tab.active { background: var(--panel); z-index: 1; }
-.drawer-panel {
-  display: none;
-  height: 280px;
-  padding: 10px 16px 14px;
-  flex-direction: column;
-  gap: 8px;
-}
-#tree-drawer.open .drawer-panel { display: flex; }
-
-.tree-toolbar { display: flex; align-items: flex-start; gap: 12px; }
+.tree-toolbar { display: flex; align-items: flex-start; gap: 12px; flex: 0 0 auto; }
 .tree-toolbar .panel-hint { flex: 1 1 auto; margin: 0; }
-.tree-info { flex: 0 1 260px; font-size: 12px; color: var(--text-dim); text-align: right; }
+.tree-info { flex: 0 1 260px; font-size: var(--fs-body); color: var(--text-dim); text-align: right; }
 #chart-tree {
-  flex: 1 1 auto; width: 100%; min-height: 0;
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  flex: 1 1 auto; width: 100%; min-height: 160px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
   cursor: pointer;
 }
+.specimen-name { font-family: var(--font-serif); color: var(--accent-2); }
+
+.species-list { display: flex; flex-direction: column; gap: 10px; }
+.species-card {
+  background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--accent-2);
+  border-radius: 8px; padding: 10px 12px;
+}
+.species-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.species-swatch { width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto; border: 1px solid var(--line); }
+.species-name { font-family: var(--font-serif); font-size: var(--fs-specimen); color: var(--accent-2); }
+.species-pop { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-body); color: var(--text-dim); margin-bottom: 6px; }
+.species-traits { display: flex; gap: 10px; flex-wrap: wrap; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-body); color: var(--text); }
+.species-lineage { margin-top: 6px; font-family: var(--font-sans); font-size: var(--fs-body); color: var(--text-dim); }
+.species-lineage em { font-style: normal; font-family: var(--font-serif); color: var(--accent-2); }
+.species-empty { color: var(--text-dim); font-size: var(--fs-body); }
 
 @media (max-width: 760px) {
   main { flex-direction: column; }
-  .sidebar { width: 100%; flex-basis: auto; max-height: 45vh; }
+  .sidebar { order: 2; width: 100%; flex-basis: auto; max-height: 45vh; }
+  #tab-rail { order: 1; width: 100%; flex-basis: auto; flex-direction: row; }
+  #tab-rail .tab-btn { border-left: none; border-bottom: 2px solid transparent; flex: 1; }
+  #tab-rail .tab-btn.active { border-left-color: transparent; border-bottom-color: var(--accent); }
   .tree-toolbar { flex-direction: column; }
   .tree-info { text-align: left; max-width: none; }
+}
+
+/* A phone held sideways is short, not narrow — the 760px breakpoint above
+   is shaped for a tall, narrow portrait phone and would be actively wrong
+   here (stacking canvas/sidebar/rail vertically eats the one dimension
+   that's already scarce). Row layout stays; every fixed-height/padding
+   piece of chrome around the canvas gets compacted instead, since height
+   is what's tight, not width. Matches iPhone SE (667x375) through
+   Pro Max (926x428) landscape viewports. Comes after the block above in
+   source order so it wins on the properties both touch when a device is
+   both short *and* narrow. */
+@media (max-height: 500px) and (orientation: landscape) {
+  main { flex-direction: row; }
+  .sidebar { order: 0; width: 250px; flex-basis: 250px; max-height: none; }
+  #tab-rail { order: 0; width: 52px; flex-basis: 52px; flex-direction: column; }
+  #tab-rail .tab-btn { border-left: 2px solid transparent; border-bottom: none; flex: 0 0 auto; padding: 8px 2px; }
+  #tab-rail .tab-btn.active { border-left-color: var(--accent); border-bottom-color: transparent; }
+  #tab-rail .tab-label { display: none; }
+  #tab-rail .tab-icon { font-size: 16px; }
+
+  #topbar { padding: 5px 10px; gap: 8px; }
+  .tagline { display: none; }
+  .brand h1 { font-size: 15px; }
+  .btn { padding: 5px 9px; font-size: 12px; }
+  .speed-btn { padding: 5px 8px; }
+
+  .hud { top: 6px; left: 6px; padding: 5px 0; }
+  .hud > div { padding: 0 8px; }
+  .hud-label { font-size: 9px; }
+  .hud span:not(.hud-label) { font-size: 12px; }
+  .hint { display: none; } /* the one hint that can go — everything it says is discoverable by trying */
+
+  .tab-panels { padding: 8px; }
+  .panel-hint { margin-bottom: 8px; }
+  .vitals-row, .stat-grid { gap: 6px; margin-bottom: 8px; }
+  .chart-grid { gap: 6px; }
 }

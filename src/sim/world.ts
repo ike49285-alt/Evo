@@ -23,7 +23,7 @@ import { decodeCoreTraits, GeneSequence, geneticDistance, mutateGeneSequence } f
 import { generateSpeciesName } from './speciesNames.js';
 import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
-import { BRAIN_TOPOLOGY, ReproductionMode } from './types.js';
+import { BRAIN_TOPOLOGY, OrganelleKind, ReproductionMode } from './types.js';
 import { SpatialGrid } from './grid.js';
 
 function clamp(v: number, min: number, max: number): number {
@@ -110,6 +110,30 @@ export interface StatsSnapshot {
   avgAge: number;
   maxGeneration: number;
   meatFood: number;
+}
+
+/** One row of World.getLivingSpecies() — a currently-living lineage's
+ * identity plus a live snapshot of its population, the Species panel's
+ * data source. */
+export interface SpeciesSummary {
+  lineageId: number;
+  name: string;
+  hue: number;
+  isPlayerDesigned: boolean;
+  createdTick: number;
+  /** Set when this lineage itself emerged via speciation (see
+   * World.checkSpeciation) rather than being an original founder. */
+  parentLineageId: number | null;
+  parentName: string | null;
+  population: number;
+  maxGeneration: number;
+  avgSize: number;
+  avgSpeed: number;
+  avgSense: number;
+  /** The organelle kind most represented across this lineage's living
+   * members right now — not a fixed trait, just a cheap-to-show summary
+   * of what it currently leans toward. */
+  dominantOrganelle: OrganelleKind | null;
 }
 
 /** How long the *last* update() call actually took, in milliseconds — the
@@ -654,6 +678,69 @@ export class World {
   private pushStatsSnapshot(): void {
     this.history.push(this.getLiveStats());
     if (this.history.length > this.maxHistory) this.history.shift();
+  }
+
+  /** One entry per lineage actually represented among *living* individuals
+   * right now, mirroring getLiveStats()'s single-pass style — the
+   * read-only aggregation the Species panel renders from. Not
+   * sampled/cached: cheap (same O(population) cost as getLiveStats()),
+   * and callers already throttle how often they call it. */
+  getLivingSpecies(): SpeciesSummary[] {
+    interface Acc {
+      population: number;
+      maxGeneration: number;
+      sumSize: number;
+      sumSpeed: number;
+      sumSense: number;
+      organelleCounts: Partial<Record<OrganelleKind, number>>;
+    }
+    const acc = new Map<number, Acc>();
+    for (const c of this.cells) {
+      let a = acc.get(c.lineageId);
+      if (!a) {
+        a = { population: 0, maxGeneration: 0, sumSize: 0, sumSpeed: 0, sumSense: 0, organelleCounts: {} };
+        acc.set(c.lineageId, a);
+      }
+      a.population++;
+      a.sumSize += c.genome.size;
+      a.sumSpeed += deriveMaxSpeed(c.genome);
+      a.sumSense += c.genome.senseRadius;
+      if (c.generation > a.maxGeneration) a.maxGeneration = c.generation;
+      for (const o of c.genome.organelles) a.organelleCounts[o.kind] = (a.organelleCounts[o.kind] ?? 0) + 1;
+    }
+
+    const result: SpeciesSummary[] = [];
+    for (const [lineageId, a] of acc) {
+      const info = this.lineages.get(lineageId);
+      if (!info) continue; // every live cell's lineage is recorded at founding time
+      const parent = info.parentLineageId !== null ? this.lineages.get(info.parentLineageId) : undefined;
+      let dominant: OrganelleKind | null = null;
+      let dominantCount = 0;
+      for (const kind in a.organelleCounts) {
+        const count = a.organelleCounts[kind as OrganelleKind]!;
+        if (count > dominantCount) {
+          dominant = kind as OrganelleKind;
+          dominantCount = count;
+        }
+      }
+      result.push({
+        lineageId,
+        name: info.name,
+        hue: info.hue,
+        isPlayerDesigned: info.isPlayerDesigned,
+        createdTick: info.createdTick,
+        parentLineageId: info.parentLineageId,
+        parentName: parent?.name ?? null,
+        population: a.population,
+        maxGeneration: a.maxGeneration,
+        avgSize: a.sumSize / a.population,
+        avgSpeed: a.sumSpeed / a.population,
+        avgSense: a.sumSense / a.population,
+        dominantOrganelle: dominant,
+      });
+    }
+    result.sort((x, y) => y.population - x.population);
+    return result;
   }
 
   /** Adds a carrion pellet, oldest-first-evicting if that would push the

@@ -510,6 +510,62 @@ export class World {
         if (this.history.length > this.maxHistory)
             this.history.shift();
     }
+    /** One entry per lineage actually represented among *living* individuals
+     * right now, mirroring getLiveStats()'s single-pass style — the
+     * read-only aggregation the Species panel renders from. Not
+     * sampled/cached: cheap (same O(population) cost as getLiveStats()),
+     * and callers already throttle how often they call it. */
+    getLivingSpecies() {
+        const acc = new Map();
+        for (const c of this.cells) {
+            let a = acc.get(c.lineageId);
+            if (!a) {
+                a = { population: 0, maxGeneration: 0, sumSize: 0, sumSpeed: 0, sumSense: 0, organelleCounts: {} };
+                acc.set(c.lineageId, a);
+            }
+            a.population++;
+            a.sumSize += c.genome.size;
+            a.sumSpeed += deriveMaxSpeed(c.genome);
+            a.sumSense += c.genome.senseRadius;
+            if (c.generation > a.maxGeneration)
+                a.maxGeneration = c.generation;
+            for (const o of c.genome.organelles)
+                a.organelleCounts[o.kind] = (a.organelleCounts[o.kind] ?? 0) + 1;
+        }
+        const result = [];
+        for (const [lineageId, a] of acc) {
+            const info = this.lineages.get(lineageId);
+            if (!info)
+                continue; // every live cell's lineage is recorded at founding time
+            const parent = info.parentLineageId !== null ? this.lineages.get(info.parentLineageId) : undefined;
+            let dominant = null;
+            let dominantCount = 0;
+            for (const kind in a.organelleCounts) {
+                const count = a.organelleCounts[kind];
+                if (count > dominantCount) {
+                    dominant = kind;
+                    dominantCount = count;
+                }
+            }
+            result.push({
+                lineageId,
+                name: info.name,
+                hue: info.hue,
+                isPlayerDesigned: info.isPlayerDesigned,
+                createdTick: info.createdTick,
+                parentLineageId: info.parentLineageId,
+                parentName: parent?.name ?? null,
+                population: a.population,
+                maxGeneration: a.maxGeneration,
+                avgSize: a.sumSize / a.population,
+                avgSpeed: a.sumSpeed / a.population,
+                avgSense: a.sumSense / a.population,
+                dominantOrganelle: dominant,
+            });
+        }
+        result.sort((x, y) => y.population - x.population);
+        return result;
+    }
     /** Adds a carrion pellet, oldest-first-evicting if that would push the
      * standing amount over the cap — a predation/death spike (a colony wiped
      * out at once, say) can't make the meat pile grow without bound. */
