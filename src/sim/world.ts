@@ -195,6 +195,19 @@ export class World {
   // metric random walk with reference-reset, not a bug — the tuning
   // question is the steady-state cadence, not eliminating recurrence.
   readonly speciationThreshold = 0.34;
+  // Below this population, a newborn gets real per-tick internal
+  // chemistry (Virtunism.runInternalChemistry — stochastic expression
+  // noise, not a frozen fold-derived constant); at or above it, a
+  // newborn gets the cheap, deterministic, already-verified-at-scale
+  // formulas instead. Decided once, at birth, from the population at
+  // that moment — not re-evaluated later, so individuals born early keep
+  // richMode for their whole life even after the population grows past
+  // this line (see Virtunism.richMode's own doc comment). First-pass
+  // number, not yet swept the way e.g. speciationThreshold was — chosen
+  // so the rich phase covers genuine early-founder-population scale
+  // without ever approaching maxPopulation, where the per-tick cost of
+  // richMode individuals would start to matter. See NOTES.md.
+  readonly richChemistryPopulationThreshold = 60;
   readonly predationSizeRatio = 0.88; // prey must be <= predator.size * this
   readonly statsSampleInterval = 10;
   readonly maxHistory = 400;
@@ -268,7 +281,8 @@ export class World {
         ? this.rng.range(20, this.height - 20)
         : clamp(clusterY + this.rng.gaussian(0, 90), 20, this.height - 20);
       const startEnergy = 12 * genome.size;
-      const founder = new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned);
+      const richMode = this.cells.length < this.richChemistryPopulationThreshold;
+      const founder = new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned, richMode);
       this.cells.push(founder);
       this.recordBirth(founder, null, null);
     }
@@ -441,7 +455,10 @@ export class World {
     }
 
     for (const cell of this.cells) {
-      if (cell.alive) cell.metabolize(dt);
+      if (cell.alive) {
+        cell.runInternalChemistry(dt, this.rng); // no-op for cheap-mode cells
+        cell.metabolize(dt);
+      }
     }
     this.applyPhotosynthesis(dt);
 
@@ -929,6 +946,10 @@ export class World {
     if (this.cells.length >= this.maxPopulation) return;
     const newborns: Virtunism[] = [];
     const mated = new Set<number>();
+    // Same birth-time rule as addSpeciesFromSequence: decided once, off
+    // the population size at the moment of birth (existing cells plus
+    // whatever's already been born this tick), never re-evaluated later.
+    const richModeNow = (): boolean => this.cells.length + newborns.length < this.richChemistryPopulationThreshold;
 
     const lineageCounts = new Map<number, number>();
     for (const c of this.cells) lineageCounts.set(c.lineageId, (lineageCounts.get(c.lineageId) ?? 0) + 1);
@@ -954,7 +975,7 @@ export class World {
         const range = Math.max(a.genome.senseRadius, b.genome.senseRadius);
         if (d < range && (this.inFOV(a, b.x, b.y) || this.inFOV(b, a.x, a.y))) {
           this.checkSpeciation(a);
-          const child = mateVirtunisms(a, b, this.rng);
+          const child = mateVirtunisms(a, b, this.rng, richModeNow());
           newborns.push(child);
           this.recordBirth(child, a.id, b.id);
           mated.add(a.id);
@@ -974,7 +995,7 @@ export class World {
       if (hasBud(cell.genome)) {
         const root = this.findColonyRoot(cell);
         if (this.collectColonyMembers(root).length < this.maxColonySize) {
-          const child = cell.budOffspring(this.rng);
+          const child = cell.budOffspring(this.rng, richModeNow());
           newborns.push(child);
           this.recordBirth(child, cell.id, null);
           grow(cell.lineageId);
@@ -982,7 +1003,7 @@ export class World {
         }
       }
       {
-        const child = cell.reproduce(this.rng);
+        const child = cell.reproduce(this.rng, richModeNow());
         newborns.push(child);
         this.recordBirth(child, cell.id, null);
         grow(cell.lineageId);

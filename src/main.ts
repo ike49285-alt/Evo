@@ -181,6 +181,61 @@ function autoBootstrap(): void {
   }
 }
 
+// --- Stage 0 retirement -----------------------------------------------
+// A fresh abiogenesis event has effectively no real chance of taking root
+// once the dish already has an established population several
+// generations deep — a brand-new protocell is competing against a
+// population that's had many generations of selection to get good at
+// staying alive, in a dish that's likely already near capacity. Past
+// that point, running the pool is pure sunk compute (and, once
+// rich-mode chemistry exists, compute that population actually wants).
+// Once the dish's own population has stayed at or above
+// STAGE0_RETIREMENT_POP_THRESHOLD for STAGE0_RETIREMENT_SUSTAIN_TICKS
+// consecutive ticks, the pool is declared established and stops
+// simulating.
+//
+// This is *not* an unconditional one-way latch, though — a real headless
+// run caught why: if the dish's population later collapses to true
+// extinction (0), staying retired forever leaves the whole world
+// permanently dead with no possible recovery, which is a strictly worse
+// outcome than spending compute on a pool that might not pay off. So
+// retirement un-latches the moment population hits 0, handing the compute
+// budget back to abiogenesis — the one thing that can still put life back
+// in an empty dish. (An earlier version tried to derive this purely from
+// world.history so it would round-trip through save/reload for free, but
+// a stale trailing window made it flicker: right after a resume, the
+// window was still full of pre-crash high-population samples, so it
+// would immediately re-retire before origin.update() got a real chance to
+// bootstrap anything. A live in-memory counter avoids that; the tradeoff
+// is it doesn't persist across a reload, so a reload shortly after
+// retirement re-observes the population for a while before re-retiring —
+// harmless, just some redundant pool compute, never a hidden bug.)
+const STAGE0_RETIREMENT_POP_THRESHOLD = 30;
+const STAGE0_RETIREMENT_SUSTAIN_TICKS = 3000;
+
+let stage0Retired = false;
+let sustainedAboveThresholdTicks = 0;
+const osRetiredNotice = el('os-retired-notice');
+
+function updateStage0Retirement(): void {
+  if (world.cells.length === 0) {
+    sustainedAboveThresholdTicks = 0;
+    if (stage0Retired) {
+      stage0Retired = false;
+      osRetiredNotice.style.display = 'none';
+      console.info('Evo: Stage 0 (primordial pool) resumed — the dish went fully extinct, so abiogenesis gets another shot.');
+    }
+    return;
+  }
+  if (stage0Retired) return;
+  sustainedAboveThresholdTicks = world.cells.length >= STAGE0_RETIREMENT_POP_THRESHOLD ? sustainedAboveThresholdTicks + 1 : 0;
+  if (sustainedAboveThresholdTicks >= STAGE0_RETIREMENT_SUSTAIN_TICKS) {
+    stage0Retired = true;
+    osRetiredNotice.style.display = '';
+    console.info('Evo: Stage 0 (primordial pool) retired — the dish sustained its own population, so the pool stopped simulating.');
+  }
+}
+
 // --- chemistry stats panel ------------------------------------------------
 function updateChemistryPanel(): void {
   const s = origin.getStats();
@@ -428,9 +483,12 @@ function frame(): void {
   if (!paused) {
     const frameStart = performance.now();
     for (let i = 0; i < speed; i++) {
-      origin.update(1);
+      if (!stage0Retired) {
+        origin.update(1);
+        autoBootstrap();
+      }
       world.update(1);
-      autoBootstrap();
+      updateStage0Retirement();
       if (performance.now() - frameStart > TICK_TIME_BUDGET_MS) break;
     }
   }

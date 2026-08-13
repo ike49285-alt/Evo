@@ -20,8 +20,8 @@
  * "From abiogenesis through evolving life" is an unbroken molecular
  * sequence, not a resemblance.
  */
-import { encodeUnit, trimToProteinCap } from '../sim/genome.js';
-import { CORE_GENE_COUNT, decodeProteins, Gene, GENE_LENGTH, GeneSequence, LOCUS, PROTEIN_GENE_LENGTH } from '../sim/genes.js';
+import { encodeUnit, prioritizeFounderGenes, trimToProteinCap } from '../sim/genome.js';
+import { CORE_GENE_COUNT, decodeProteinGene, Gene, GENE_LENGTH, GeneSequence, LOCUS, PROTEIN_GENE_LENGTH } from '../sim/genes.js';
 import { TRAIT_LIMITS } from '../sim/types.js';
 import { BootstrapCandidate } from './origin.js';
 import { NucleotideCode } from './elements.js';
@@ -86,8 +86,6 @@ export function translateBootstrapCandidate(candidate: BootstrapCandidate): Tran
   // RNA-derived sequence.
   genes[LOCUS.reproductionMode] = encodeUnit(0.25, GENE_LENGTH);
 
-  const sequence: GeneSequence = { genes };
-
   // The one hard viability guarantee worth keeping: a founder needs a
   // real, *reachable* way to get energy, or it's a guaranteed,
   // uninteresting extinction — not a real evolutionary outcome, just bad
@@ -103,22 +101,32 @@ export function translateBootstrapCandidate(candidate: BootstrapCandidate): Tran
   // read at a different offset — still entirely real RNA content, just a
   // different real slice of it, tried until one clears the bar or the
   // attempts run out and the founder is released as translated (a real
-  // failure mode, not hidden). Real codon-translated genes land on
-  // peptidyl/protease at a combined ~4.8% (headless-verified), so a low
-  // attempt cap measured at nowhere near enough actual success;
-  // genome.ts's randomGenome needed ~120 attempts for >99% success —
-  // matched here, though a short-lived protocell's finite real RNA
+  // failure mode, not hidden). A short-lived protocell's finite real RNA
   // content means these attempts aren't fully independent draws the way
   // a random genome's are (only so many distinct cursor offsets exist in
   // a short symbol stream), so this is a best effort, not the same
-  // statistical guarantee.
-  const isViable = (seq: GeneSequence): boolean => {
-    const proteins = decodeProteins(seq);
-    const hasEnergyCapture = proteins.some((p) => p.fold.catalysisClass === 'peptidyl');
-    const hasPredation = proteins.some((p) => p.fold.catalysisClass === 'protease');
-    const hasMotor = proteins.some((p) => p.fold.catalysisClass === 'motor');
-    return hasEnergyCapture || (hasPredation && hasMotor);
+  // statistical guarantee genome.ts's randomGenome gets — matched to it
+  // in cap and mechanism regardless (see genome.ts's ensureEnergyCapable
+  // for the actual calibration numbers this cap is set from).
+  //
+  // Tracked incrementally (not re-decoded from the whole `genes` array on
+  // every attempt) for the same reason genome.ts's ensureEnergyCapable
+  // is: re-scanning the full accumulated gene list each attempt is
+  // quadratic in the attempt count for no reason, and that stopped being
+  // free once the cap needed to grow by an order of magnitude (see
+  // genome.ts).
+  let hasEnergyCapture = false;
+  let hasPredation = false;
+  let hasMotor = false;
+  const scan = (gene: Gene): void => {
+    const cls = decodeProteinGene(gene).fold.catalysisClass;
+    if (cls === 'peptidyl') hasEnergyCapture = true;
+    else if (cls === 'protease') hasPredation = true;
+    else if (cls === 'motor') hasMotor = true;
   };
+  for (const gene of proteins.genes) scan(gene);
+  const isViable = (): boolean => hasEnergyCapture || (hasPredation && hasMotor);
+
   // Appends fresh genes (never overwrites an existing one) — an earlier
   // version overwrote the same last slot on every attempt and a real
   // headless run caught it destroying a founder's one working protein
@@ -127,24 +135,52 @@ export function translateBootstrapCandidate(candidate: BootstrapCandidate): Tran
   // lost. Search headroom is deliberately *not* capped by
   // TRAIT_LIMITS.maxProteins here — genome.ts's randomGenome hit the
   // same issue capped this way: with a typical starting protein count
-  // already using up most of the headroom to the cap, nowhere near the
-  // ~94 real attempts needed for >99% success ever actually ran. Search
-  // freely, then trim back down to the cap afterward (genome.ts's
-  // trimToProteinCap, which keeps every functional gene the search found
-  // first, so trimming can't undo the very search that just succeeded).
-  // `genes` is mutated in place (push, not reassignment) so
-  // `sequence.genes` — the same array reference — stays in sync for the
-  // isViable checks below.
-  const MAX_REROLL_ATTEMPTS = 120;
+  // already using up most of the headroom to the cap, nowhere near
+  // enough real attempts ever actually ran. Search freely, then trim back
+  // down to the cap afterward — reordered first via genome.ts's
+  // prioritizeFounderGenes so the specific gene(s) that made isViable()
+  // true sort ahead of every other merely-functional gene the search
+  // turned up along the way (lipidsynthase/replicase/photoreceptor don't
+  // help this founder and shouldn't get trim priority over the one that
+  // does — see prioritizeFounderGenes's comment for the real bug this
+  // fixes), then genome.ts's trimToProteinCap for the actual cap-down.
+  // Matched to genome.ts's MAX_FOUNDER_REROLL_ATTEMPTS (see its comment
+  // for the actual measured hit rates and the cap-vs-success sweep that
+  // picked 1200) — a bootstrap founder's attempts aren't fully
+  // independent draws the way a random genome's are (finite real RNA
+  // content means only so many distinct cursor offsets exist in a short
+  // symbol stream), so this is a best effort at the same cap, not an
+  // identical statistical guarantee.
+  //
+  // The offset advances by a single nucleotide each attempt, not by a
+  // whole PROTEIN_GENE_LENGTH — a real headless run caught why that
+  // matters: advancing by exactly one gene-length each time re-reads the
+  // *same* window whenever rnaSymbols.length shares a large common
+  // factor with PROTEIN_GENE_LENGTH (e.g. any RNA length that's a clean
+  // multiple of 60 collapsed to a period of 1 — every "attempt" drew the
+  // identical gene, so 1200 attempts had the search power of one).
+  // Shifting by a single nucleotide instead gives up to
+  // `rnaSymbols.length` genuinely different reading-frame offsets before
+  // anything repeats — a real biological analog too (frameshifted/
+  // alternative-frame reading of the same transcript produces a
+  // completely different downstream codon partition, not a resemblance).
+  // Capped at rnaSymbols.length attempts: once every distinct offset has
+  // been tried, further attempts are guaranteed repeats, so there's no
+  // reason to spend up to 1200 iterations cycling the same handful of
+  // reads for a short-lived protocell with little real RNA content.
+  const MAX_REROLL_ATTEMPTS = Math.min(1200, rnaSymbols.length);
   let attemptCursor = proteins.cursor;
-  for (let attempt = 0; attempt < MAX_REROLL_ATTEMPTS && !isViable(sequence); attempt++) {
+  for (let attempt = 0; attempt < MAX_REROLL_ATTEMPTS && !isViable(); attempt++) {
     const patch = drawGenesFromSymbols(rnaSymbols, 1, PROTEIN_GENE_LENGTH, attemptCursor);
     genes.push(patch.genes[0]);
-    attemptCursor = patch.cursor;
+    scan(patch.genes[0]);
+    attemptCursor += 1;
   }
 
+  const coreGenes = genes.slice(0, CORE_GENE_COUNT);
+  const proteinGenes = prioritizeFounderGenes(genes.slice(CORE_GENE_COUNT));
   return {
-    sequence: trimToProteinCap(sequence),
+    sequence: trimToProteinCap({ genes: [...coreGenes, ...proteinGenes] }),
     originVesicleId: candidate.vesicleId,
   };
 }

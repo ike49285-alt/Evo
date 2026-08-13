@@ -190,6 +190,7 @@ export function foldPeptide(sequence: readonly AminoAcidCode[]): PeptideFold {
     let hydrophobicSurface = 0;
     let serineSurface = 0;
     let histidineSurface = 0;
+    let glycineSurface = 0;
     let cysCount = 0;
     for (let i = 0; i < positions.length; i++) {
       const [x, y] = positions[i];
@@ -204,6 +205,7 @@ export function foldPeptide(sequence: readonly AminoAcidCode[]): PeptideFold {
       if (isHydrophobic(sequence[i])) hydrophobicSurface++;
       if (sequence[i] === 'S') serineSurface++;
       if (sequence[i] === 'H') histidineSurface++;
+      if (sequence[i] === 'G') glycineSurface++;
     }
 
     // Each class's score is grounded in a real structural-biology pattern:
@@ -213,23 +215,32 @@ export function foldPeptide(sequence: readonly AminoAcidCode[]): PeptideFold {
     //    catalytic triads) lean on Ser + His, with aromatics lining the
     //    binding pocket.
     //  - lipidsynthase: anything that has to work at a membrane needs a
-    //    hydrophobic face to sit against the lipid tails.
+    //    hydrophobic face to sit against the lipid tails — a clean
+    //    single-descriptor score, like photoreceptor's aromatic score.
     //  - peptidyl: Cys thioester chemistry and general acid/base catalysis
     //    (negative residues) are the classic path to activating a peptide
     //    bond for ligation.
-    //  - motor: real motor assemblies (flagellar motors, myosin/dynein-
-    //    type domains) are large, membrane-associated structural
-    //    complexes with a nucleotide-binding (ATP-hydrolyzing) site —
-    //    the same hydrophobic-face reasoning lipidsynthase uses, plus a
-    //    real positive-charge component (P-loop NTPase motifs are
-    //    characteristically Gly/Lys-rich) so it's not just lipidsynthase
-    //    under another name. Deliberately kept as a pure surface-count
-    //    score like every other class here, not weighted by `stability`
-    //    — headless-verified that multiplying by stability handicapped
-    //    it against the other classes' unweighted integer-count scores
-    //    in this same argmax comparison, so it almost never won even
-    //    when it should have (99% of sampled genomes had zero motor
-    //    protein at all before this fix).
+    //  - motor: real motor/NTPase assemblies (flagellar motors,
+    //    myosin/dynein/kinesin heads, ATP synthase) center on a Walker-
+    //    motif P-loop (consensus GxxxxGK[S/T]) — glycine-rich for the
+    //    backbone flexibility the loop needs, plus the Lys that actually
+    //    coordinates the phosphate, i.e. real positive charge alongside
+    //    it. Glycine surface content is its own real, independent signal
+    //    (no other class here reads it), which matters: headless-verified
+    //    two earlier formulas both failed for different reasons before
+    //    this one. First, `stability * hydrophobicSurface * 2` handicapped
+    //    it against every other class's unweighted integer-count score
+    //    (nearly always zero motor protein anywhere). Fixing that by
+    //    reusing posSurface/hydrophobicSurface — axes replicase and
+    //    lipidsynthase already own — swapped the bug rather than fixing
+    //    it: with those coefficients, motor was *pointwise dominated* by
+    //    max(replicase, lipidsynthase) for every possible surface
+    //    composition, so it was mathematically impossible for motor to
+    //    ever win the argmax (confirmed 0% across a 44,717-protein
+    //    sample). A class built only from other classes' axes, scaled
+    //    down, can never win; it needs a real region of composition-space
+    //    where it's genuinely the best-fitting explanation, which is what
+    //    glycine content (an axis nothing else here reads) actually gives it.
     //  - photoreceptor: real photoreceptor proteins (the rhodopsin
     //    family) hold a light-absorbing chromophore in an aromatic-rich
     //    binding pocket — aromatic surface exposure is the cheapest
@@ -237,9 +248,9 @@ export function foldPeptide(sequence: readonly AminoAcidCode[]): PeptideFold {
     const scores: Record<CatalysisClass, number> = {
       replicase: posSurface * 2,
       protease: aromaticSurface * 1.5 + serineSurface + histidineSurface * 1.5,
-      lipidsynthase: hydrophobicSurface,
+      lipidsynthase: hydrophobicSurface * 2,
       peptidyl: cysCount * 2 + negSurface,
-      motor: hydrophobicSurface * 1.2 + posSurface * 0.5,
+      motor: glycineSurface * 1.5 + posSurface,
       photoreceptor: aromaticSurface * 2,
     };
     let best: CatalysisClass = 'replicase';

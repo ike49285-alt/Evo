@@ -26,7 +26,7 @@ function clamp(v, min, max) {
  * immediate parent in that tree — irrelevant for one with no attachedTo.
  */
 export class Virtunism {
-    constructor(genome, x, y, lineageId, generation, energy, rng, isPlayerDesigned = false, 
+    constructor(genome, x, y, lineageId, generation, energy, rng, isPlayerDesigned = false, richMode = false, 
     // Only set when reconstructing a saved individual — lets save/restore
     // reproduce its exact id and heading instead of minting a new id and
     // rolling a fresh random heading, while every other normal-creation
@@ -37,6 +37,15 @@ export class Virtunism {
         this.age = 0; // ticks
         this.reproCooldown = 0;
         this.alive = true;
+        // Slow mean-reverting stochastic drift (an Ornstein-Uhlenbeck process),
+        // only ever updated for richMode individuals — a real, well-documented
+        // phenomenon (transcriptional/translational "noise" or "bursting": gene
+        // expression genuinely fluctuates tick-to-tick around its mean in real
+        // cells, not just because of what's nearby) rather than a frozen
+        // fold-derived constant. Affects both capability and its upkeep cost
+        // together, same as real expression bursts do.
+        this.expressionNoise = 0;
+        this.noiseVelocity = 0;
         // bond-tree state (multicellularity)
         this.attachedTo = null;
         this.attachedChildren = [];
@@ -51,6 +60,7 @@ export class Virtunism {
         this.y = y;
         this.heading = restore?.heading ?? rng.range(0, Math.PI * 2);
         this.energy = energy;
+        this.richMode = richMode;
         this.lineageId = lineageId;
         this.generation = generation;
         this.isPlayerDesigned = isPlayerDesigned;
@@ -87,9 +97,14 @@ export class Virtunism {
     act(outputs, dt, worldWidth, worldHeight) {
         const turnOut = clamp(outputs[0] ?? 0, -1, 1);
         const thrustOut = clamp(outputs[1] ?? 0, 0, 1);
-        const maxTurnRate = deriveTurnRate(this.genome);
+        // Approximation: scales the whole formula output, including its fixed
+        // "sessile" floor, rather than just the motor-power term inside it —
+        // simpler than threading a multiplier into derive* itself, and the
+        // floor is small enough (0.05) that the difference is negligible.
+        const mult = this.expressionMultiplier;
+        const maxTurnRate = deriveTurnRate(this.genome) * mult;
         this.heading += turnOut * maxTurnRate * dt;
-        this.speed = thrustOut * deriveMaxSpeed(this.genome);
+        this.speed = thrustOut * deriveMaxSpeed(this.genome) * mult;
         this.x += Math.cos(this.heading) * this.speed * dt;
         this.y += Math.sin(this.heading) * this.speed * dt;
         this.clampToBounds(worldWidth, worldHeight, true);
@@ -120,6 +135,33 @@ export class Virtunism {
                 this.heading = -this.heading;
         }
     }
+    /** Rich-mode-only: advances the stochastic expression-noise process one
+     * tick (an Ornstein-Uhlenbeck walk — mean-reverting, so it wanders but
+     * always drifts back toward 0 rather than random-walking away forever,
+     * the standard model for this kind of real biological fluctuation).
+     * First-pass constants, not yet empirically calibrated the way e.g.
+     * speciationThreshold was — see NOTES.md. No-op for cheap-mode
+     * individuals, which stay exactly the deterministic, already-verified
+     * behavior. World calls this once per tick, before metabolize(), only
+     * for cells where richMode is true. */
+    runInternalChemistry(dt, rng) {
+        if (!this.richMode)
+            return;
+        const MEAN_REVERSION = 0.02;
+        const NOISE_MAGNITUDE = 0.015;
+        const MAX_DRIFT = 0.4;
+        this.noiseVelocity += (-MEAN_REVERSION * this.noiseVelocity + NOISE_MAGNITUDE * rng.gaussian(0, 1)) * dt;
+        this.expressionNoise = clamp(this.expressionNoise + this.noiseVelocity * dt, -MAX_DRIFT, MAX_DRIFT);
+    }
+    /** 1 for cheap-mode individuals (no effect — exactly the deterministic
+     * formulas already verified), 1+expressionNoise for rich-mode ones. A
+     * real expression burst raises both capability *and* its upkeep cost
+     * together, same as actual transcriptional bursts do, so this one
+     * multiplier is applied on both sides rather than inventing an
+     * asymmetric version. */
+    get expressionMultiplier() {
+        return this.richMode ? 1 + this.expressionNoise : 1;
+    }
     /** Burns upkeep + movement energy and ages by one tick. Every protein
      * has a real running cost — a bigger genome is never free, it's a bet
      * that what its proteins do is worth what they burn. Energy-capture
@@ -134,11 +176,12 @@ export class Virtunism {
         // inline used to skip the gene-expression scale genome.ts's derive*
         // functions apply, silently making upkeep cheaper than it should be
         // relative to income.
-        const motorPower = deriveMotorPower(this.genome);
-        const predationPower = derivePredationPower(this.genome);
-        const energyCapturePower = deriveEnergyCapturePower(this.genome);
+        const mult = this.expressionMultiplier;
+        const motorPower = deriveMotorPower(this.genome) * mult;
+        const predationPower = derivePredationPower(this.genome) * mult;
+        const energyCapturePower = deriveEnergyCapturePower(this.genome) * mult;
         const sensorCount = deriveSensors(this.genome).length;
-        const structurePower = deriveStructurePower(this.genome);
+        const structurePower = deriveStructurePower(this.genome) * mult;
         const baseUpkeep = 0.002 + 0.005 * size * size + 0.0008 * (this.genome.senseRadius / 100);
         const proteinUpkeep = 0.0035 * motorPower + 0.0025 * predationPower + 0.0015 * energyCapturePower + 0.0006 * sensorCount + 0.002 * structurePower;
         const moveCost = 0.005 * this.speed * size;
@@ -150,7 +193,7 @@ export class Virtunism {
     /** This virtunism's uncontested share of sunlight — World scales this by
      * a dish-wide availability multiplier before actually granting it. */
     get baseSunlightDemand() {
-        return deriveEnergyCapture(this.genome);
+        return deriveEnergyCapture(this.genome) * this.expressionMultiplier;
     }
     photosynthesize(dt, availabilityMultiplier) {
         this.energy += this.baseSunlightDemand * availabilityMultiplier * dt;
@@ -160,7 +203,7 @@ export class Virtunism {
     }
     /** How much energy a bite yields, scaled by total predation investment. */
     get biteYield() {
-        return 0.4 + derivePredationPower(this.genome) * 0.5;
+        return 0.4 + derivePredationPower(this.genome) * this.expressionMultiplier * 0.5;
     }
     get canEat() {
         return derivePredationCount(this.genome) > 0;
@@ -192,20 +235,21 @@ export class Virtunism {
         return { genome, energy: childEnergy };
     }
     /** Asexual reproduction that ejects a fully independent, free-floating
-     * child nearby. */
-    reproduce(rng) {
+     * child nearby. `richMode` is decided by the caller (World knows the
+     * current population, this class doesn't) at the moment of this birth. */
+    reproduce(rng, richMode) {
         const { genome, energy } = this.spawnChildGenome(rng);
         const angle = rng.range(0, Math.PI * 2);
         const dist = this.radius * 2.2;
-        return new Virtunism(genome, this.x + Math.cos(angle) * dist, this.y + Math.sin(angle) * dist, this.lineageId, this.generation + 1, energy, rng, this.isPlayerDesigned);
+        return new Virtunism(genome, this.x + Math.cos(angle) * dist, this.y + Math.sin(angle) * dist, this.lineageId, this.generation + 1, energy, rng, this.isPlayerDesigned, richMode);
     }
     /** Asexual reproduction that instead buds a child permanently attached to
      * this virtunism — how colonies grow. Requires this one to carry a bud
      * organelle (checked by the caller). */
-    budOffspring(rng) {
+    budOffspring(rng, richMode) {
         const { genome, energy } = this.spawnChildGenome(rng);
         const siblingCount = this.attachedChildren.length;
-        const child = new Virtunism(genome, this.x, this.y, this.lineageId, this.generation + 1, energy, rng, this.isPlayerDesigned);
+        const child = new Virtunism(genome, this.x, this.y, this.lineageId, this.generation + 1, energy, rng, this.isPlayerDesigned, richMode);
         child.attachedTo = this;
         // Spread siblings out around this one rather than stacking on one spot.
         child.localAngle = (siblingCount / 5) * Math.PI * 2 + rng.range(-0.3, 0.3);
@@ -248,12 +292,24 @@ export class Virtunism {
             lineageId: this.lineageId,
             generation: this.generation,
             isPlayerDesigned: this.isPlayerDesigned,
+            richMode: this.richMode,
+            expressionNoise: this.expressionNoise,
+            noiseVelocity: this.noiseVelocity,
             attachedToId: this.attachedTo?.id ?? null,
             attachedChildrenIds: this.attachedChildren.map((c) => c.id),
             localAngle: this.localAngle,
             localDist: this.localDist,
             lastOutputs: [...this.lastOutputs],
         };
+    }
+    /** Only used by deserializeVirtunisms (a module-level function, so this
+     * can't itself be `private` despite being internal bookkeeping) —
+     * expressionNoise/noiseVelocity aren't part of the constructor's public
+     * surface, so a saved individual needs this one setter to restore them
+     * exactly rather than resuming from zero. */
+    restoreExpressionState(noise, velocity) {
+        this.expressionNoise = noise;
+        this.noiseVelocity = velocity;
     }
 }
 /** Reconstructs a whole saved population in two passes: every individual
@@ -265,7 +321,7 @@ export function deserializeVirtunisms(list) {
     const byId = new Map();
     const result = [];
     for (const data of list) {
-        const v = new Virtunism(deserializeGenome(data.genome), data.x, data.y, data.lineageId, data.generation, data.energy, dummyRng, data.isPlayerDesigned, { id: data.id, heading: data.heading });
+        const v = new Virtunism(deserializeGenome(data.genome), data.x, data.y, data.lineageId, data.generation, data.energy, dummyRng, data.isPlayerDesigned, data.richMode, { id: data.id, heading: data.heading });
         v.speed = data.speed;
         v.age = data.age;
         v.reproCooldown = data.reproCooldown;
@@ -273,6 +329,7 @@ export function deserializeVirtunisms(list) {
         v.localAngle = data.localAngle;
         v.localDist = data.localDist;
         v.lastOutputs = data.lastOutputs;
+        v.restoreExpressionState(data.expressionNoise, data.noiseVelocity);
         byId.set(v.id, v);
         result.push(v);
     }
@@ -290,9 +347,10 @@ export function deserializeVirtunisms(list) {
  * parents. Always produces a free-floating virtunism — sexual reproduction
  * is the "spread genes to a new lineage" path; budding (asexual + bud
  * organelle) is the "grow this colony" path. Requires the two virtunisms
- * to already be within sensing range of each other.
+ * to already be within sensing range of each other. `richMode` is decided
+ * by the caller (World) at the moment of this birth.
  */
-export function mateVirtunisms(a, b, rng) {
+export function mateVirtunisms(a, b, rng, richMode) {
     const childGenome = mutateGenome(crossoverGenome(a.genome, b.genome, rng), rng);
     const shareA = a.energy * 0.25;
     const shareB = b.energy * 0.25;
@@ -304,5 +362,5 @@ export function mateVirtunisms(a, b, rng) {
     const dist = (a.radius + b.radius) * 0.6;
     const midX = (a.x + b.x) / 2;
     const midY = (a.y + b.y) / 2;
-    return new Virtunism(childGenome, midX + Math.cos(angle) * dist, midY + Math.sin(angle) * dist, a.lineageId, Math.max(a.generation, b.generation) + 1, shareA + shareB, rng, a.isPlayerDesigned || b.isPlayerDesigned);
+    return new Virtunism(childGenome, midX + Math.cos(angle) * dist, midY + Math.sin(angle) * dist, a.lineageId, Math.max(a.generation, b.generation) + 1, shareA + shareB, rng, a.isPlayerDesigned || b.isPlayerDesigned, richMode);
 }

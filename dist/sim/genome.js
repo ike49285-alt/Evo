@@ -125,16 +125,27 @@ export function encodeUnit(unit, length) {
 export function genomeFromSequence(sequence, brain) {
     return { sequence, brain, ...decodePhenotype(sequence) };
 }
-// Real codon-translated protein genes land on peptidyl or protease
-// specifically (the two energy-capable classes) at a combined ~4.8%
-// (headless-verified — see NOTES.md). A single-digit reroll cap looked
-// reasonable on paper but measured at only ~32% actual success
-// ((1-0.048)^8) — nowhere near enough. Solving for a >99% success rate
-// at that hit rate needs ~94 independent attempts; 120 gives real margin.
-// Each attempt is one cheap gene draw + fold (a few hundred microseconds
-// total, one-time at construction), so the higher cap costs nothing that
-// matters.
-const MAX_FOUNDER_REROLL_ATTEMPTS = 120;
+// Real, single-random-protein-gene hit rates (headless-measured against
+// the actual class-score formula in chem/polymer.ts, 50,000-gene sample):
+// peptidyl ~0.6%, protease ~0.95%, motor ~0.24% — each real class only
+// wins the fold's argmax over a genuinely narrow slice of surface
+// compositions once all six classes compete fairly for it (see
+// polymer.ts's scores record and its comment on why motor needed its own
+// independent axis). At those rates a 120-attempt cap — calibrated
+// against an earlier, unbalanced version of that formula where two
+// classes (motor/lipidsynthase) were mutually exclusive by construction
+// and the other four effectively split a bigger remaining share — measured
+// at only ~59% actual success once the six-way competition was fixed to
+// be fair. A cap-vs-success-rate sweep (see NOTES.md) found 800 attempts
+// gets to ~99.8% and 1200 reaches 100% over a 5,000-trial sample; 1200 is
+// used here for real margin. Each attempt is one cheap gene draw + fold
+// (sub-millisecond), one-time at construction — the higher cap costs
+// nothing that matters, and the search itself is O(attempts), not
+// O(attempts²) (see ensureEnergyCapable's incremental viability tracking
+// below — an earlier version re-decoded the whole accumulated gene list
+// on every attempt, which was fine at 120 attempts and a real problem at
+// the low thousands).
+const MAX_FOUNDER_REROLL_ATTEMPTS = 1200;
 /** A freshly random genome needs a real, *reachable* way to get energy —
  * headless-verified this is stricter than just "has a peptidyl or
  * protease protein": a predator that can't move can't reliably catch
@@ -145,19 +156,44 @@ const MAX_FOUNDER_REROLL_ATTEMPTS = 120;
  * that took the whole founding population down together. Passive
  * energy-capture doesn't need mobility to work, so it alone is enough;
  * predation only counts alongside real motor power. */
-function isFounderViable(genes) {
-    const proteins = decodeProteins({ genes: [...genes] });
-    const hasEnergyCapture = proteins.some((p) => p.fold.catalysisClass === 'peptidyl');
-    const hasPredation = proteins.some((p) => p.fold.catalysisClass === 'protease');
-    const hasMotor = proteins.some((p) => p.fold.catalysisClass === 'motor');
+function isFounderViable(hasEnergyCapture, hasPredation, hasMotor) {
     return hasEnergyCapture || (hasPredation && hasMotor);
+}
+// The three classes isFounderViable actually cares about — not "any
+// functional class" (there are six now, and most of them don't help a
+// founder survive at all).
+const FOUNDER_VIABLE_CLASSES = new Set(['peptidyl', 'protease', 'motor']);
+/** Reorders protein genes so any whose class can satisfy founder
+ * viability (peptidyl/protease/motor) sort before everything else. This
+ * exists because of a real bug a headless run caught: trimToProteinCap's
+ * own "keep functional genes first" only means *any* of the six classes,
+ * and now that lipidsynthase/replicase/photoreceptor are all real,
+ * reachable outcomes too (lipidsynthase alone came out the single most
+ * common catalytic class in an ensemble sample — see NOTES.md), a long
+ * viability search accumulates plenty of those non-viability-relevant
+ * "functional" genes along the way. Left to trimToProteinCap's generic
+ * bucketing alone, the *one* gene that actually made isFounderViable true
+ * could land past the cap and get silently dropped by the very trim step
+ * that's supposed to preserve a successful search's result — measured
+ * directly: founder viability dropped to ~87% instead of the ~100% the
+ * search loop's own attempt-count calibration predicted, entirely because
+ * of this. Exported so chem/bridge.ts's bootstrap-founder search (which
+ * has the identical trim-after-search shape) gets the same guarantee. */
+export function prioritizeFounderGenes(genes) {
+    const priority = [];
+    const rest = [];
+    for (const g of genes) {
+        const cls = decodeProteinGene(g).fold.catalysisClass;
+        (cls !== null && FOUNDER_VIABLE_CLASSES.has(cls) ? priority : rest).push(g);
+    }
+    return [...priority, ...rest];
 }
 /** Appends fresh protein genes (never overwrites an existing one) until
  * the genome clears isFounderViable or the attempts run out — search
  * headroom is deliberately *not* capped by TRAIT_LIMITS.maxProteins here:
  * an earlier version was, and with a typical 6-12 starting protein count
  * that left only a handful of real attempts before hitting the cap,
- * nowhere near the ~94 needed for the intended >99% success rate at this
+ * nowhere near the number needed for a real >99% success rate at this
  * combined class hit rate. Search freely, then trim back down to the
  * ongoing cap afterward (see trimToProteinCap) so the constraint that
  * matters for gameplay is still respected, just not for this one-time
@@ -166,13 +202,40 @@ function isFounderViable(genes) {
  * while searching, and a real headless run caught it actually
  * *destroying* a genome's one working protein when that happened to be
  * the slot being overwritten, with no guaranteed replacement — leaving
- * the genome worse off than before the "fix" ran. */
+ * the genome worse off than before the "fix" ran.
+ *
+ * Tracks the three booleans incrementally instead of re-decoding every
+ * accumulated gene on every attempt — an earlier version did the latter
+ * (`decodeProteins` over the whole growing array each time) and it was
+ * quadratic in the attempt count purely by accident, never intentional:
+ * fine at the original cap of 120, but a real problem once a corrected
+ * class-score formula (see chem/polymer.ts) meant the cap had to grow by
+ * an order of magnitude to keep the same success rate — a real headless
+ * timing test is what caught this, not inspection. */
 function ensureEnergyCapable(sequence, rng) {
-    let genes = [...sequence.genes];
-    for (let attempt = 0; attempt < MAX_FOUNDER_REROLL_ATTEMPTS && !isFounderViable(genes); attempt++) {
-        genes = [...genes, randomGeneSequence(rng, 1).genes[CORE_GENE_COUNT]];
+    const genes = [...sequence.genes];
+    let hasEnergyCapture = false;
+    let hasPredation = false;
+    let hasMotor = false;
+    const scan = (gene) => {
+        const cls = decodeProteinGene(gene).fold.catalysisClass;
+        if (cls === 'peptidyl')
+            hasEnergyCapture = true;
+        else if (cls === 'protease')
+            hasPredation = true;
+        else if (cls === 'motor')
+            hasMotor = true;
+    };
+    for (let i = CORE_GENE_COUNT; i < genes.length; i++)
+        scan(genes[i]);
+    for (let attempt = 0; attempt < MAX_FOUNDER_REROLL_ATTEMPTS && !isFounderViable(hasEnergyCapture, hasPredation, hasMotor); attempt++) {
+        const gene = randomGeneSequence(rng, 1).genes[CORE_GENE_COUNT];
+        genes.push(gene);
+        scan(gene);
     }
-    return trimToProteinCap({ genes });
+    const core = genes.slice(0, CORE_GENE_COUNT);
+    const proteinGenes = prioritizeFounderGenes(genes.slice(CORE_GENE_COUNT));
+    return trimToProteinCap({ genes: [...core, ...proteinGenes] });
 }
 /** Brings a gene sequence back down to TRAIT_LIMITS.maxProteins protein
  * genes if a viability search grew it past that. Keeps every gene that
