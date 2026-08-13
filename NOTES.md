@@ -1,14 +1,25 @@
 # Evo — notes on the current design
 
-Two tiers now, not one. Stage 0 (`src/chem/`, the "Origins" screen) is a
-from-amino-acids abiogenesis sandbox; Stage 1 (`src/sim/`, the "Dish"
-screen) is the organelle/Virtunism ecosystem from the previous attempt,
-unchanged in spirit but no longer hand-seeded — it starts empty and only
-gets founders by bootstrapping a stabilized protocell out of Origins, or by
-hand-designing a species in the Designer tab. Both engines tick every
-frame regardless of which screen is on top.
+One continuous world, not two screens. `src/chem/` (the chemistry — free
+amino acids and nucleotides bonding, folding, catalyzing, replicating) and
+`src/sim/` (the organelle/Virtunism ecosystem from the previous attempt)
+are two separate engines, but they share one dish: the chemistry runs in a
+small, concentrated "primordial pool" region positioned *within* the same
+coordinate space the ecosystem lives in, drawn together on one canvas by
+one Renderer (see renderer.ts's `drawPool`). A protocell that proves
+itself doesn't get handed to a different screen — it spawns as a small
+founding population right at the pool, in the same frame, automatically
+(see main.ts's `autoBootstrap`). This replaced an earlier tab-switcher
+version (Origins/Dish as separate full-screen stages you manually clicked
+between) that read as two toys bolted together instead of one thing
+growing out of another — worth remembering if the temptation to re-split
+them ever comes back.
 
-## Stage 0: Origins — the core idea
+Both engines tick every frame; the Dish starts empty and only gets
+founders by a protocell bootstrapping out of the pool, or by hand-
+designing a species in the Designer tab.
+
+## The primordial pool — the core idea
 
 A small, concentrated primordial soup: free amino acids and nucleotides
 (the real 20/4-letter alphabets, real physicochemical properties, not
@@ -19,7 +30,7 @@ itself, mutations included. Lipids self-assemble into membranes for free —
 no energy or catalyst needed, real fatty-acid vesicle chemistry works this
 way — and a membrane that closes around a working replicator becomes a
 protocell with real heredity. Nothing here is scripted to succeed; a
-protocell has to actually earn its way to the Dish.
+protocell has to actually earn its way out into the wider dish.
 
 Same closed-loop philosophy as the Dish: matter (amino acids, nucleotides,
 lipids) is a fixed pool set at seed time and only ever gets rearranged.
@@ -27,7 +38,7 @@ The one thing that enters from outside is an abstracted energy flux (this
 stage's "sunlight") that condensation reactions consume and hydrolysis
 doesn't need.
 
-## Stage 0 mechanics
+## Pool mechanics
 
 - **Real chemistry tables**, not invented ones: Kyte-Doolittle hydropathy
   and Zamyatnin residue volume for all 20 amino acids; real RNA
@@ -115,16 +126,27 @@ doesn't need.
   the (much more common) free-floating completions — several
   verification runs reported "zero replication" when the real answer
   was "the stat can't see most of it."
-- **Not yet verified: a full bootstrap into the Dish.** This needs 2+
-  replication events *inside the same vesicle* plus that vesicle
-  surviving a division — a much rarer compound event than a single
-  free-floating completion. An extended run on the one seed that had
-  produced a completion (to 75k further ticks past its first) didn't
-  produce a second. Bootstrap is implemented and exercised in code
-  (`isBootstrapEligible` in vesicle.ts, `bridge.ts`'s translation) but
-  has not been directly witnessed completing end-to-end — don't claim
-  it works until it's actually seen, same discipline as everything
-  else in this file.
+- **Not yet verified: a full bootstrap occurring *naturally*.** This
+  needs 2+ replication events *inside the same vesicle* plus that
+  vesicle surviving a division — a much rarer compound event than a
+  single free-floating completion. An extended run on the one seed
+  that had produced a completion (to 75k further ticks past its first)
+  didn't produce a second, and a dedicated 200k-tick run afterward
+  produced zero. This is a real, unresolved rarity question, not a
+  bug — don't claim a natural bootstrap has been seen until one has.
+- **What *is* verified: the bootstrap-to-founder pipeline itself is
+  correct**, tested directly rather than waited on. Pushed a
+  synthetic-but-structurally-real `BootstrapCandidate` (built from
+  actual peptides/RNA the engine had produced) into a live Origin,
+  confirmed `autoBootstrap()` drains it, `translateBootstrapCandidate`
+  produces a valid genome, `World.addSpecies`'s new `spawnCenter`
+  places all 4 founders within the expected radius of the pool
+  location the candidate came from, and — the real test — the
+  resulting lineage isn't DOA: left running for 2000 more ticks, it
+  grew from 4 to 16 individuals, all alive. So: the machinery that
+  *would* fire on a natural bootstrap is confirmed sound; whether a
+  natural one is common enough to actually see in a normal play
+  session is the part still genuinely open.
 
 ## Performance lessons (reapplied + new)
 
@@ -156,7 +178,7 @@ doesn't need.
   never grew a polymer past 2 monomers in a 60k-tick, 5-seed run as a
   direct result.
 
-## Dish (Stage 1) — unchanged from the previous attempt
+## The wider dish — unchanged ecosystem mechanics
 
 Everything below carries over as-is; see git history for the original
 design rationale.
