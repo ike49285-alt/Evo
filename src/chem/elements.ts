@@ -98,6 +98,42 @@ export const NUCLEOTIDES: Record<NucleotideCode, Nucleotide> = {
 
 export const NUCLEOTIDE_CODES = Object.keys(NUCLEOTIDES) as NucleotideCode[];
 
+/**
+ * The real standard genetic code — not invented, the same 64-codon table
+ * every known organism (with rare exceptions) actually uses to translate
+ * RNA into protein. This is what makes a virtunism's protein genes a
+ * literal translation rather than an abstract decode: the same codon
+ * redundancy real biology has (several codons per amino acid) means some
+ * point mutations are silent at the protein level, and a mutation that
+ * introduces a premature STOP genuinely truncates the resulting protein —
+ * both real mutational classes that fall out of using the actual code,
+ * not something hand-tuned in.
+ */
+export type Codon = `${NucleotideCode}${NucleotideCode}${NucleotideCode}`;
+
+const CODON_TABLE_RAW: Record<Codon, AminoAcidCode | 'STOP'> = {
+  UUU: 'F', UUC: 'F', UUA: 'L', UUG: 'L',
+  CUU: 'L', CUC: 'L', CUA: 'L', CUG: 'L',
+  AUU: 'I', AUC: 'I', AUA: 'I', AUG: 'M',
+  GUU: 'V', GUC: 'V', GUA: 'V', GUG: 'V',
+
+  UCU: 'S', UCC: 'S', UCA: 'S', UCG: 'S',
+  CCU: 'P', CCC: 'P', CCA: 'P', CCG: 'P',
+  ACU: 'T', ACC: 'T', ACA: 'T', ACG: 'T',
+  GCU: 'A', GCC: 'A', GCA: 'A', GCG: 'A',
+
+  UAU: 'Y', UAC: 'Y', UAA: 'STOP', UAG: 'STOP',
+  CAU: 'H', CAC: 'H', CAA: 'Q', CAG: 'Q',
+  AAU: 'N', AAC: 'N', AAA: 'K', AAG: 'K',
+  GAU: 'D', GAC: 'D', GAA: 'E', GAG: 'E',
+
+  UGU: 'C', UGC: 'C', UGA: 'STOP', UGG: 'W',
+  CGU: 'R', CGC: 'R', CGA: 'R', CGG: 'R',
+  AGU: 'S', AGC: 'S', AGA: 'R', AGG: 'R',
+  GGU: 'G', GGC: 'G', GGA: 'G', GGG: 'G',
+};
+export const CODON_TABLE: ReadonlyMap<Codon, AminoAcidCode | 'STOP'> = new Map(Object.entries(CODON_TABLE_RAW) as [Codon, AminoAcidCode | 'STOP'][]);
+
 // ---------------------------------------------------------------------------
 
 /**

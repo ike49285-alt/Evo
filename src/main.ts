@@ -1,6 +1,6 @@
 import { Renderer } from './render/renderer.js';
 import { ReproductionMode } from './sim/types.js';
-import { StarterLoadout, TRAIT_LIMITS, deriveMouthPower, deriveChloroplastPower } from './sim/genome.js';
+import { deriveEnergyCapturePower, derivePredationPower, randomGenome } from './sim/genome.js';
 import { World } from './sim/world.js';
 import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
@@ -134,63 +134,27 @@ document.querySelectorAll<HTMLButtonElement>('#tab-rail .tab-btn').forEach((btn)
   });
 });
 
-// --- designer form --------------------------------------------------------
-const fSize = el<HTMLInputElement>('f-size');
-const fSense = el<HTMLInputElement>('f-sense');
-const fAge = el<HTMLInputElement>('f-age');
-const fHue = el<HTMLInputElement>('f-hue');
+// --- designer form (random-seed test tool) ---------------------------------
+// No body-plan fields anymore — there's no organelle catalog left to
+// hand-pick from, every functional part is a real folded protein (see
+// sim/genome.ts). This just releases a population founded on a fresh
+// randomGenome() — a way to seed a test population on demand rather than
+// wait on a natural bootstrap, not a design surface.
 const fCount = el<HTMLInputElement>('f-count');
 const fName = el<HTMLInputElement>('f-name');
-const hueSwatch = el<HTMLDivElement>('hue-swatch');
-
-const fFlagella = el<HTMLInputElement>('f-flagella');
-const fMouths = el<HTMLInputElement>('f-mouths');
-const fChloroplasts = el<HTMLInputElement>('f-chloroplasts');
-const fEyes = el<HTMLInputElement>('f-eyes');
-const fArmor = el<HTMLInputElement>('f-armor');
-const fBud = el<HTMLInputElement>('f-bud');
-const organelleInputs = [fFlagella, fMouths, fChloroplasts, fEyes, fArmor];
 
 function refreshDesignerLabels(): void {
-  el('v-size').textContent = Number(fSize.value).toFixed(2);
-  el('v-sense').textContent = `${fSense.value} u`;
-  el('v-age').textContent = fAge.value;
-  el('v-hue').textContent = `${fHue.value}°`;
   el('v-count').textContent = fCount.value;
-  hueSwatch.style.background = `hsl(${fHue.value}, 65%, 45%)`;
-
-  const total = organelleInputs.reduce((sum, input) => sum + Number(input.value), 0) + (fBud.checked ? 1 : 0);
-  el('v-organelle-total').textContent = `${total} / ${TRAIT_LIMITS.maxOrganelles}`;
 }
-[fSize, fSense, fAge, fHue, fCount, ...organelleInputs, fBud].forEach((input) =>
-  input.addEventListener('input', refreshDesignerLabels),
-);
+fCount.addEventListener('input', refreshDesignerLabels);
 refreshDesignerLabels();
 
 el<HTMLButtonElement>('btn-release').addEventListener('click', () => {
   const reproductionMode = (document.querySelector('input[name="repro"]:checked') as HTMLInputElement)
     ?.value as ReproductionMode;
   const name = fName.value.trim() || 'Unnamed Species';
-  const loadout: StarterLoadout = {
-    flagella: Number(fFlagella.value),
-    mouths: Number(fMouths.value),
-    chloroplasts: Number(fChloroplasts.value),
-    eyes: Number(fEyes.value),
-    armor: Number(fArmor.value),
-    bud: fBud.checked,
-  };
-  world.addSpecies(
-    {
-      reproductionMode,
-      size: Number(fSize.value),
-      senseRadius: Number(fSense.value),
-      maxAge: Number(fAge.value),
-      hue: Number(fHue.value),
-      loadout,
-    },
-    Number(fCount.value),
-    { name, isPlayerDesigned: true },
-  );
+  const seed = randomGenome(world.rng, reproductionMode);
+  world.addSpeciesFromSequence(seed.sequence, Number(fCount.value), { name, isPlayerDesigned: true });
 });
 
 // --- Origins: automatic bootstrap into the wider dish --------------------
@@ -291,23 +255,23 @@ function updateHudAndStats(): void {
   sSolo.textContent = String(live.soloCells);
   sMeat.textContent = String(live.meatFood);
   sRepro.textContent = `${live.sexual} / ${live.asexual}`;
-  sMouths.textContent = live.avgMouths.toFixed(2);
-  sEyes.textContent = live.avgEyes.toFixed(2);
-  sArmor.textContent = live.avgArmor.toFixed(2);
+  sMouths.textContent = live.avgPredation.toFixed(2);
+  sEyes.textContent = live.avgSensors.toFixed(2);
+  sArmor.textContent = live.avgStructure.toFixed(2);
 
   // Morph scatter: one dot per virtunism, not an average — shows a
-  // population actually splitting into distinct body plans (e.g. a
-  // plant-leaning cluster vs. a predator-leaning cluster) instead of
-  // hiding the split behind a single blended mean.
+  // population actually splitting into distinct body plans (e.g. an
+  // energy-capture-leaning cluster vs. a predation-leaning cluster)
+  // instead of hiding the split behind a single blended mean.
   const morphPoints: ScatterPoint[] = world.cells.map((c) => ({
     x: c.genome.size,
-    y: deriveMouthPower(c.genome) - deriveChloroplastPower(c.genome),
+    y: derivePredationPower(c.genome) - deriveEnergyCapturePower(c.genome),
     colorHsl: `hsl(${c.genome.hue}, 65%, 55%)`,
     ring: c.isPlayerDesigned,
   }));
   drawScatter(chartMorphs, morphPoints, {
     xLabel: 'size',
-    yLabel: 'diet: chloroplast ←→ mouth',
+    yLabel: 'diet: energy capture ←→ predation',
   });
 
   const history = world.history;
@@ -320,14 +284,14 @@ function updateHudAndStats(): void {
     drawSparkline(chartSize, history.map((h) => h.avgSize), '#4fe6a3');
     drawSparkline(chartSpeed, history.map((h) => h.avgSpeed), '#6fe67d');
     drawSparkline(chartSense, history.map((h) => h.avgSense), '#3fd0e6');
-    drawSparkline(chartFlagella, history.map((h) => h.avgFlagella), '#8fe66a');
-    drawSparkline(chartChloro, history.map((h) => h.avgChloroplasts), '#2fb894');
+    drawSparkline(chartFlagella, history.map((h) => h.avgMotor), '#8fe66a');
+    drawSparkline(chartChloro, history.map((h) => h.avgEnergyCapture), '#2fb894');
     cPopVal.textContent = String(live.population);
     cSizeVal.textContent = live.avgSize.toFixed(2);
     cSpeedVal.textContent = live.avgSpeed.toFixed(2);
     cSenseVal.textContent = live.avgSense.toFixed(0);
-    cFlagellaVal.textContent = live.avgFlagella.toFixed(2);
-    cChloroVal.textContent = live.avgChloroplasts.toFixed(2);
+    cFlagellaVal.textContent = live.avgMotor.toFixed(2);
+    cChloroVal.textContent = live.avgEnergyCapture.toFixed(2);
   }
 }
 
@@ -374,7 +338,7 @@ function updateSpeciesPanel(): void {
 
     const pop = document.createElement('div');
     pop.className = 'species-pop';
-    pop.textContent = `${s.population} alive · gen ${s.maxGeneration}${s.dominantOrganelle ? ` · mostly ${s.dominantOrganelle}` : ''}`;
+    pop.textContent = `${s.population} alive · gen ${s.maxGeneration}${s.dominantClass ? ` · mostly ${s.dominantClass}` : ''}`;
 
     const traits = document.createElement('div');
     traits.className = 'species-traits';

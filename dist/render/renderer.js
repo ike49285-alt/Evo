@@ -1,4 +1,5 @@
-import { ORGANELLE_COLORS } from '../sim/types.js';
+import { CATALYSIS_CLASS_COLORS } from '../sim/types.js';
+import { hasBud } from '../sim/genome.js';
 import { isHydrophobic } from '../chem/elements.js';
 function clamp(v, min, max) {
     return Math.min(max, Math.max(min, v));
@@ -16,6 +17,13 @@ const CATALYST_COLOR = {
     peptidyl: '#3fae5a',
     protease: '#e6584f',
     lipidsynthase: '#f5a623',
+    // motor/photoreceptor peptides can fold in the primordial pool same as
+    // any other (the fold doesn't know it's "supposed" to be a Virtunism-
+    // only class) — Stage 0's own reaction chemistry just never checks for
+    // these two, so they're cosmetically catalytic-looking but functionally
+    // inert there. Still needs a real color for this exhaustive lookup.
+    motor: '#cdd8ee',
+    photoreceptor: '#fefefe',
 };
 /**
  * One canvas, one camera, one continuous world. Life doesn't start on a
@@ -235,14 +243,16 @@ export class Renderer {
     }
     drawCell(cell, p, r, showVision) {
         const ctx = this.ctx;
-        // eyes: each eye's own vision cone, drawn behind the body as a faint
-        // headlight so a cell's actual coverage — not just a label — is visible.
+        // photoreceptor-class proteins: each one's own vision cone, drawn
+        // behind the body as a faint headlight so a cell's actual coverage —
+        // not just a label — is visible. Real fold-derived strength, not a
+        // hand-picked size, sets how wide the cone reads.
         if (showVision) {
-            for (const o of cell.genome.organelles) {
-                if (o.kind !== 'eye')
+            for (const pr of cell.genome.proteins) {
+                if (pr.fold.catalysisClass !== 'photoreceptor')
                     continue;
-                const halfFov = (((50 + o.size * 40) * Math.PI) / 180) * 0.5;
-                const mountAngle = cell.heading + o.angle;
+                const halfFov = (((50 + pr.fold.catalysisStrength * 40) * Math.PI) / 180) * 0.5;
+                const mountAngle = cell.heading + pr.angle;
                 const rangePx = cell.genome.senseRadius * this.camera.zoom;
                 ctx.beginPath();
                 ctx.moveTo(p.x, p.y);
@@ -255,23 +265,25 @@ export class Renderer {
                 ctx.stroke();
             }
         }
-        // flagella: wavy tails trailing the rim, wiggling faster the harder the
-        // cell is currently pushing.
+        // motor-class proteins: wavy tails trailing the rim, wiggling faster
+        // the harder the cell is currently pushing — same visual role
+        // flagella organelles used to play, now driven by real fold strength.
         const wiggleSpeed = 0.25 + cell.speed * 2.5;
-        for (const o of cell.genome.organelles) {
-            if (o.kind !== 'flagellum')
+        for (const pr of cell.genome.proteins) {
+            if (pr.fold.catalysisClass !== 'motor')
                 continue;
-            const mountAngle = cell.heading + o.angle;
+            const strength = pr.fold.catalysisStrength;
+            const mountAngle = cell.heading + pr.angle;
             const baseX = p.x + Math.cos(mountAngle) * r;
             const baseY = p.y + Math.sin(mountAngle) * r;
-            const length = r * (1.1 + o.size * 0.9);
-            const wag = Math.sin(this.animT * wiggleSpeed + o.angle * 3) * (0.25 + o.size * 0.2);
+            const length = r * (1.1 + strength * 0.9);
+            const wag = Math.sin(this.animT * wiggleSpeed + pr.angle * 3) * (0.25 + strength * 0.2);
             const perpAngle = mountAngle + Math.PI / 2;
             const tipX = baseX + Math.cos(mountAngle) * length + Math.cos(perpAngle) * wag * length * 0.35;
             const tipY = baseY + Math.sin(mountAngle) * length + Math.sin(perpAngle) * wag * length * 0.35;
             const midX = baseX + Math.cos(mountAngle) * length * 0.55 + Math.cos(perpAngle) * wag * length * 0.2;
             const midY = baseY + Math.sin(mountAngle) * length * 0.55 + Math.sin(perpAngle) * wag * length * 0.2;
-            ctx.strokeStyle = ORGANELLE_COLORS.flagellum;
+            ctx.strokeStyle = CATALYSIS_CLASS_COLORS.motor;
             ctx.lineWidth = Math.max(0.8, r * 0.12);
             ctx.beginPath();
             ctx.moveTo(baseX, baseY);
@@ -295,62 +307,70 @@ export class Renderer {
             ctx.arc(p.x, p.y, r + 2, 0, Math.PI * 2);
             ctx.stroke();
         }
-        // armor: a thicker rim segment centered on the organelle's mount angle
-        for (const o of cell.genome.organelles) {
-            if (o.kind !== 'armor')
+        // lipidsynthase-class proteins: a thicker rim segment centered on the
+        // protein's mount angle — real structural/membrane investment reading
+        // as armor, same visual role the old armor organelle played.
+        for (const pr of cell.genome.proteins) {
+            if (pr.fold.catalysisClass !== 'lipidsynthase')
                 continue;
-            const mountAngle = cell.heading + o.angle;
-            const arcHalf = 0.35 + o.size * 0.15;
-            ctx.strokeStyle = ORGANELLE_COLORS.armor;
-            ctx.lineWidth = Math.max(1.5, r * 0.32 * o.size);
+            const strength = pr.fold.catalysisStrength;
+            const mountAngle = cell.heading + pr.angle;
+            const arcHalf = 0.35 + strength * 0.15;
+            ctx.strokeStyle = CATALYSIS_CLASS_COLORS.lipidsynthase;
+            ctx.lineWidth = Math.max(1.5, r * 0.32 * strength);
             ctx.beginPath();
             ctx.arc(p.x, p.y, r * 0.92, mountAngle - arcHalf, mountAngle + arcHalf);
             ctx.stroke();
         }
-        // chloroplasts: small green discs embedded near the rim
-        for (const o of cell.genome.organelles) {
-            if (o.kind !== 'chloroplast')
+        // peptidyl-class proteins: small green discs embedded near the rim —
+        // real anabolic/energy-capture investment, same visual role
+        // chloroplasts used to play.
+        for (const pr of cell.genome.proteins) {
+            if (pr.fold.catalysisClass !== 'peptidyl')
                 continue;
-            const mountAngle = cell.heading + o.angle;
+            const strength = pr.fold.catalysisStrength;
+            const mountAngle = cell.heading + pr.angle;
             const cx = p.x + Math.cos(mountAngle) * r * 0.62;
             const cy = p.y + Math.sin(mountAngle) * r * 0.62;
             ctx.beginPath();
-            ctx.ellipse(cx, cy, r * 0.28 * o.size, r * 0.18 * o.size, mountAngle, 0, Math.PI * 2);
-            ctx.fillStyle = ORGANELLE_COLORS.chloroplast;
+            ctx.ellipse(cx, cy, r * 0.28 * strength, r * 0.18 * strength, mountAngle, 0, Math.PI * 2);
+            ctx.fillStyle = CATALYSIS_CLASS_COLORS.peptidyl;
             ctx.fill();
         }
-        // eyes: tiny dots at their mount point
-        for (const o of cell.genome.organelles) {
-            if (o.kind !== 'eye')
+        // photoreceptor-class proteins: tiny dots at their mount point
+        for (const pr of cell.genome.proteins) {
+            if (pr.fold.catalysisClass !== 'photoreceptor')
                 continue;
-            const mountAngle = cell.heading + o.angle;
+            const mountAngle = cell.heading + pr.angle;
             const ex = p.x + Math.cos(mountAngle) * r * 0.75;
             const ey = p.y + Math.sin(mountAngle) * r * 0.75;
             ctx.beginPath();
             ctx.arc(ex, ey, Math.max(0.9, r * 0.14), 0, Math.PI * 2);
-            ctx.fillStyle = ORGANELLE_COLORS.eye;
+            ctx.fillStyle = CATALYSIS_CLASS_COLORS.photoreceptor;
             ctx.fill();
         }
-        // bud gland: small marker showing this lineage can grow attached
-        // offspring — distinct from the sexual-mode "nucleus" marker below.
-        for (const o of cell.genome.organelles) {
-            if (o.kind !== 'bud')
-                continue;
-            const mountAngle = cell.heading + o.angle;
+        // budding capability: a whole-cell marker (hasBud is a threshold on
+        // aggregate replicase strength now, not a discrete organelle, so it
+        // isn't tied to any one protein's own mount angle).
+        if (hasBud(cell.genome)) {
+            const mountAngle = cell.heading + Math.PI * 0.85;
             const bx = p.x + Math.cos(mountAngle) * r * 0.7;
             const by = p.y + Math.sin(mountAngle) * r * 0.7;
             ctx.beginPath();
             ctx.arc(bx, by, Math.max(1, r * 0.16), 0, Math.PI * 2);
-            ctx.fillStyle = ORGANELLE_COLORS.bud;
+            ctx.fillStyle = CATALYSIS_CLASS_COLORS.replicase;
             ctx.fill();
         }
-        // mouths: a notch bitten into the rim at each mouth's mount angle
-        for (const o of cell.genome.organelles) {
-            if (o.kind !== 'mouth')
+        // protease-class proteins: a notch bitten into the rim at each one's
+        // mount angle — real predation investment, same visual role mouths
+        // used to play.
+        for (const pr of cell.genome.proteins) {
+            if (pr.fold.catalysisClass !== 'protease')
                 continue;
-            const mountAngle = cell.heading + o.angle;
-            const halfAngle = 0.16 + o.size * 0.12;
-            const depth = r * (0.35 + o.size * 0.25);
+            const strength = pr.fold.catalysisStrength;
+            const mountAngle = cell.heading + pr.angle;
+            const halfAngle = 0.16 + strength * 0.12;
+            const depth = r * (0.35 + strength * 0.25);
             const tipX = p.x + Math.cos(mountAngle) * (r + depth * 0.4);
             const tipY = p.y + Math.sin(mountAngle) * (r + depth * 0.4);
             const baseAX = p.x + Math.cos(mountAngle - halfAngle) * r;
@@ -362,7 +382,7 @@ export class Renderer {
             ctx.lineTo(tipX, tipY);
             ctx.lineTo(baseBX, baseBY);
             ctx.closePath();
-            ctx.fillStyle = ORGANELLE_COLORS.mouth;
+            ctx.fillStyle = CATALYSIS_CLASS_COLORS.protease;
             ctx.fill();
         }
         // sexual-reproduction marker: a small pale core, roughly a "nucleus"

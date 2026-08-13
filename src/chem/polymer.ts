@@ -22,7 +22,15 @@
  */
 import { AminoAcidCode, AMINO_ACIDS, isHydrophobic, NucleotideCode, NUCLEOTIDES } from './elements.js';
 
-export type CatalysisClass = 'replicase' | 'peptidyl' | 'lipidsynthase' | 'protease';
+// `motor` and `photoreceptor` exist for the Virtunism layer (see
+// sim/genome.ts) — Stage 0's own pool chemistry only ever checks for one
+// specific class per reaction (see origin.ts's `wantClass` checks), so a
+// peptide that folds into either of these is simply inert in the pool,
+// exactly as it should be (this soup has no use for a motor protein or a
+// photoreceptor — those are Virtunism-body capabilities, not prebiotic
+// reactions).
+export type CatalysisClass = 'replicase' | 'peptidyl' | 'lipidsynthase' | 'protease' | 'motor' | 'photoreceptor';
+export const CATALYSIS_CLASSES: readonly CatalysisClass[] = ['replicase', 'peptidyl', 'lipidsynthase', 'protease', 'motor', 'photoreceptor'];
 
 export interface PeptideFold {
   folded: boolean; // false = too short, or got boxed in before finishing
@@ -209,11 +217,30 @@ export function foldPeptide(sequence: readonly AminoAcidCode[]): PeptideFold {
     //  - peptidyl: Cys thioester chemistry and general acid/base catalysis
     //    (negative residues) are the classic path to activating a peptide
     //    bond for ligation.
+    //  - motor: real motor assemblies (flagellar motors, myosin/dynein-
+    //    type domains) are large, membrane-associated structural
+    //    complexes with a nucleotide-binding (ATP-hydrolyzing) site —
+    //    the same hydrophobic-face reasoning lipidsynthase uses, plus a
+    //    real positive-charge component (P-loop NTPase motifs are
+    //    characteristically Gly/Lys-rich) so it's not just lipidsynthase
+    //    under another name. Deliberately kept as a pure surface-count
+    //    score like every other class here, not weighted by `stability`
+    //    — headless-verified that multiplying by stability handicapped
+    //    it against the other classes' unweighted integer-count scores
+    //    in this same argmax comparison, so it almost never won even
+    //    when it should have (99% of sampled genomes had zero motor
+    //    protein at all before this fix).
+    //  - photoreceptor: real photoreceptor proteins (the rhodopsin
+    //    family) hold a light-absorbing chromophore in an aromatic-rich
+    //    binding pocket — aromatic surface exposure is the cheapest
+    //    honest proxy this fold model has for that.
     const scores: Record<CatalysisClass, number> = {
       replicase: posSurface * 2,
       protease: aromaticSurface * 1.5 + serineSurface + histidineSurface * 1.5,
       lipidsynthase: hydrophobicSurface,
       peptidyl: cysCount * 2 + negSurface,
+      motor: hydrophobicSurface * 1.2 + posSurface * 0.5,
+      photoreceptor: aromaticSurface * 2,
     };
     let best: CatalysisClass = 'replicase';
     let bestScore = -Infinity;

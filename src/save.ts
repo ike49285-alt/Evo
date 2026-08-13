@@ -24,8 +24,15 @@ const SAVE_KEY = 'evo-save-v2';
 // (checkSpeciation would crash on it), and the gene decode itself changed
 // from positional to sum-based, so even an old sequence that happened to
 // still have the right shape would silently decode to a different
-// phenotype than what was actually saved.)
-const SAVE_VERSION = 3;
+// phenotype than what was actually saved.
+// v4: organelles (a fixed kind/angle/size catalog) replaced entirely by
+// real protein genes (translated through a codon table, folded, and read
+// for real emergent function) — Genome.organelles doesn't exist anymore
+// (it's Genome.proteins, a different shape), and protein-coding genes are
+// PROTEIN_GENE_LENGTH symbols instead of the old organelle genes'
+// GENE_LENGTH, so a v3 sequence wouldn't even decode to the right gene
+// boundaries, let alone the right meaning.)
+const SAVE_VERSION = 4;
 
 interface SaveFile {
   version: number;

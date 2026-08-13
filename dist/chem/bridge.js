@@ -1,41 +1,27 @@
 /**
- * The handoff from Stage 0 (chemistry) to the existing organelle/Virtunism
- * dish: once a protocell in Origin clears the bootstrap bar (see
- * vesicle.ts's isBootstrapEligible), this turns *what it actually evolved*
- * — its own real RNA content, plus which catalyst classes its peptides
- * settled into — into a founding GeneSequence for World.addSpeciesFromSequence.
+ * The handoff from Stage 0 (chemistry) to the Virtunism dish: once a
+ * protocell in Origin clears the bootstrap bar (see vesicle.ts's
+ * isBootstrapEligible), its own real surviving RNA content becomes a
+ * founding GeneSequence directly — no heuristic translation layer in
+ * between. This got dramatically simpler than an earlier version once
+ * genome.ts stopped decoding genes into a fixed organelle catalog: there's
+ * nothing left to *lean* a founder's protein-gene count toward (no
+ * chloroplast/mouth/armor buckets to aim for), so this just wraps the
+ * protocell's real RNA into as many real protein genes as its own content
+ * actually supports, then lets translation + folding (see sim/genes.ts,
+ * chem/polymer.ts) decide what those genes are actually good for — same as
+ * every other genome in this dish.
  *
- * The genetic thread is literal, not just spatial: genes.ts's Gene is
- * already `NucleotideCode[]`, the exact same 4-letter alphabet Stage 0's
- * RNA is made of (see chem/elements.ts) — so a founder's genes here are
- * built by chunking its ancestral protocell's surviving RNA nucleotide
- * sequences directly into GENE_LENGTH-sized genes, not translated through
- * an abstract stat/loadout struct. "From abiogenesis through evolving
- * life" is meant to be an unbroken molecular sequence, not a resemblance.
- *
- * The catalyst-class reasoning from the original stat-translation design
- * isn't thrown away — it still decides *how many* organelle genes a
- * founder gets (a lineage that evolved strong replicase, protease, etc.
- * still earns a bigger body plan), it just no longer invents the gene
- * content itself:
- *  - `peptidyl` catalysts build biomass from raw monomers + ambient
- *    energy — the closest thing this soup has to anabolism, so they lean
- *    the organelle count toward more chloroplast-decoding genes surviving
- *    the cut.
- *  - `protease` catalysts break external polymers down into usable
- *    pieces — literal digestion, so they lean toward mouths.
- *  - `lipidsynthase` catalysts work at the membrane — structural
- *    upkeep, so they lean toward armor.
- *  - `replicase` catalysts are what made heredity possible at all; they
- *    don't map to a body part, they map to a small mobility baseline,
- *    since a lineage that solved replication well earns a real head
- *    start.
- * This is a deliberate, documented translation, not a claim that real
- * biology encodes a genetic code or codon translation this way (that gap
- * is exactly what NOTES.md's honesty section flags, not quietly assumes).
+ * The genetic thread is literal: `sim/genes.ts`'s `Gene` is
+ * `NucleotideCode[]`, the exact same 4-letter alphabet Stage 0's RNA is
+ * made of. A founder's genes here are chunks of its ancestral protocell's
+ * surviving RNA nucleotide sequence, read through the same codon table
+ * and folded by the same function every other virtunism's genes are.
+ * "From abiogenesis through evolving life" is an unbroken molecular
+ * sequence, not a resemblance.
  */
-import { encodeOrganelleGene, encodeUnit } from '../sim/genome.js';
-import { CORE_GENE_COUNT, GENE_LENGTH, LOCUS, decodeOrganelles } from '../sim/genes.js';
+import { encodeUnit, trimToProteinCap } from '../sim/genome.js';
+import { CORE_GENE_COUNT, decodeProteins, GENE_LENGTH, LOCUS, PROTEIN_GENE_LENGTH } from '../sim/genes.js';
 import { TRAIT_LIMITS } from '../sim/types.js';
 /** All of a protocell's real surviving RNA content, concatenated into one
  * symbol stream — the raw material every one of its founder's genes gets
@@ -48,83 +34,102 @@ function flattenRnaSymbols(candidate) {
         symbols.push(...r.sequence);
     return symbols;
 }
-/** Draws `count` real genes out of a symbol stream, wrapping back to the
- * start once it runs out. A short-lived protocell might only have a
- * handful of real nucleotides total (`MIN_TEMPLATE_LENGTH` is just 6,
- * well under one `GENE_LENGTH`-10 gene) — wrapping means every founder
- * still gets a full, valid gene sequence built entirely from its own real
+/** Draws `count` genes of `geneLength` symbols each out of a symbol
+ * stream, wrapping back to the start once it runs out. A short-lived
+ * protocell might only have a handful of real nucleotides total
+ * (`MIN_TEMPLATE_LENGTH` is just 6) — wrapping means every founder still
+ * gets a full, valid gene sequence built entirely from its own real
  * content, just re-read more than once, rather than ever padding with
  * invented symbols. `symbols` is guaranteed non-empty here: a candidate
  * only exists because `isBootstrapEligible` already required a live
  * replicator RNA inside the vesicle. */
-function drawGenesFromSymbols(symbols, count) {
+function drawGenesFromSymbols(symbols, count, geneLength, cursorStart = 0) {
     const genes = [];
-    let cursor = 0;
+    let cursor = cursorStart;
     for (let g = 0; g < count; g++) {
         const gene = [];
-        for (let i = 0; i < GENE_LENGTH; i++) {
+        for (let i = 0; i < geneLength; i++) {
             gene.push(symbols[cursor % symbols.length]);
             cursor++;
         }
         genes.push(gene);
     }
-    return genes;
+    return { genes, cursor };
 }
 export function translateBootstrapCandidate(candidate) {
-    const strength = {
-        replicase: 0,
-        peptidyl: 0,
-        lipidsynthase: 0,
-        protease: 0,
-    };
-    for (const p of candidate.peptides) {
-        if (p.fold.isCatalyst && p.fold.catalysisClass) {
-            strength[p.fold.catalysisClass] += p.fold.catalysisStrength;
-        }
-    }
-    for (const r of candidate.rnas) {
-        if (r.fold.isRibozyme)
-            strength.replicase += r.fold.catalysisStrength;
-    }
-    let chloroplastLean = Math.round(strength.peptidyl * 3);
-    let mouthLean = Math.round(strength.protease * 3);
-    const armorLean = Math.round(strength.lipidsynthase * 2);
-    const flagellaLean = 1 + (strength.replicase > 0.15 ? 1 : 0);
-    const eyeLean = 1; // minimal sensing from the start — a totally blind founder starves before selection gets a say
-    // A founder that can neither eat nor photosynthesize is a guaranteed,
-    // uninteresting extinction — not a real evolutionary outcome, just a
-    // translation-layer failure to seed anything workable.
-    if (chloroplastLean === 0 && mouthLean === 0)
-        chloroplastLean = 1;
-    const organelleGeneCount = Math.min(TRAIT_LIMITS.maxOrganelles, flagellaLean + mouthLean + chloroplastLean + eyeLean + armorLean);
     const rnaSymbols = flattenRnaSymbols(candidate);
-    const totalGenes = CORE_GENE_COUNT + organelleGeneCount;
-    const genes = drawGenesFromSymbols(rnaSymbols, totalGenes);
+    // How many real protein genes this founder gets is purely a function of
+    // how much real RNA content it actually has — a lineage that grew a
+    // longer, richer set of replicators earns a bigger genome, with no
+    // catalyst-class heuristic deciding the count anymore. Floored at 1 (a
+    // founder needs at least one protein-coding gene to have any function
+    // at all) and capped the same way every genome's protein count is.
+    const proteinGeneCount = Math.min(TRAIT_LIMITS.maxProteins, Math.max(1, Math.floor(rnaSymbols.length / PROTEIN_GENE_LENGTH)));
+    const core = drawGenesFromSymbols(rnaSymbols, CORE_GENE_COUNT, GENE_LENGTH);
+    const proteins = drawGenesFromSymbols(rnaSymbols, proteinGeneCount, PROTEIN_GENE_LENGTH, core.cursor);
+    const genes = [...core.genes, ...proteins.genes];
     // Bootstrap founders start asexual — sexual reproduction is a later
     // evolutionary innovation, not a Stage 0 starting point — overriding
     // just that one real-but-arbitrary locus rather than the rest of the
     // RNA-derived sequence.
     genes[LOCUS.reproductionMode] = encodeUnit(0.25, GENE_LENGTH);
-    // The catalyst-lean counts decided *how many* organelle genes this
-    // founder gets; the genes themselves are real RNA-derived content, so
-    // whatever kinds they actually decode to is what the protocell's own
-    // chemistry produced — not guaranteed to match the lean. Preserve just
-    // the one hard viability guarantee the original stat-translation had:
-    // a founder needs at least one way to get energy. If real content
-    // happened to decode to zero mouths and zero chloroplasts, patch the
-    // single most-redundant-looking organelle gene into a chloroplast
-    // rather than leaving a founder that starves on arrival no matter what
-    // it does.
-    const organelleGenes = genes.slice(CORE_GENE_COUNT);
-    const decoded = decodeOrganelles({ genes: organelleGenes });
-    const hasEnergyIntake = decoded.some((o) => o.kind === 'mouth' || o.kind === 'chloroplast');
-    if (!hasEnergyIntake && organelleGenes.length > 0) {
-        const patchIdx = CORE_GENE_COUNT + (organelleGenes.length - 1);
-        genes[patchIdx] = encodeOrganelleGene({ kind: 'chloroplast', angle: 0, size: 1 });
-    }
     const sequence = { genes };
+    // The one hard viability guarantee worth keeping: a founder needs a
+    // real, *reachable* way to get energy, or it's a guaranteed,
+    // uninteresting extinction — not a real evolutionary outcome, just bad
+    // luck in which RNA chunks happened to translate into which proteins.
+    // Headless-verified this needs to be stricter than "has a peptidyl or
+    // protease protein": a predator that can't move can't reliably catch
+    // anything (genome.ts's randomGenome hit this exact failure mode —
+    // real predation power, zero motor power, nothing to eat and no way to
+    // go find something — see NOTES.md). Passive energy-capture doesn't
+    // need mobility, so it alone is enough; predation only counts alongside
+    // real motor power. If real content didn't clear that bar, patch the
+    // single most-redundant-looking protein gene by pointing its cursor
+    // read at a different offset — still entirely real RNA content, just a
+    // different real slice of it, tried until one clears the bar or the
+    // attempts run out and the founder is released as translated (a real
+    // failure mode, not hidden). Real codon-translated genes land on
+    // peptidyl/protease at a combined ~4.8% (headless-verified), so a low
+    // attempt cap measured at nowhere near enough actual success;
+    // genome.ts's randomGenome needed ~120 attempts for >99% success —
+    // matched here, though a short-lived protocell's finite real RNA
+    // content means these attempts aren't fully independent draws the way
+    // a random genome's are (only so many distinct cursor offsets exist in
+    // a short symbol stream), so this is a best effort, not the same
+    // statistical guarantee.
+    const isViable = (seq) => {
+        const proteins = decodeProteins(seq);
+        const hasEnergyCapture = proteins.some((p) => p.fold.catalysisClass === 'peptidyl');
+        const hasPredation = proteins.some((p) => p.fold.catalysisClass === 'protease');
+        const hasMotor = proteins.some((p) => p.fold.catalysisClass === 'motor');
+        return hasEnergyCapture || (hasPredation && hasMotor);
+    };
+    // Appends fresh genes (never overwrites an existing one) — an earlier
+    // version overwrote the same last slot on every attempt and a real
+    // headless run caught it destroying a founder's one working protein
+    // that happened to live in that slot, with no guaranteed replacement.
+    // Appending means existing capability can only be added to, never
+    // lost. Search headroom is deliberately *not* capped by
+    // TRAIT_LIMITS.maxProteins here — genome.ts's randomGenome hit the
+    // same issue capped this way: with a typical starting protein count
+    // already using up most of the headroom to the cap, nowhere near the
+    // ~94 real attempts needed for >99% success ever actually ran. Search
+    // freely, then trim back down to the cap afterward (genome.ts's
+    // trimToProteinCap, which keeps every functional gene the search found
+    // first, so trimming can't undo the very search that just succeeded).
+    // `genes` is mutated in place (push, not reassignment) so
+    // `sequence.genes` — the same array reference — stays in sync for the
+    // isViable checks below.
+    const MAX_REROLL_ATTEMPTS = 120;
+    let attemptCursor = proteins.cursor;
+    for (let attempt = 0; attempt < MAX_REROLL_ATTEMPTS && !isViable(sequence); attempt++) {
+        const patch = drawGenesFromSymbols(rnaSymbols, 1, PROTEIN_GENE_LENGTH, attemptCursor);
+        genes.push(patch.genes[0]);
+        attemptCursor = patch.cursor;
+    }
     return {
-        sequence,
+        sequence: trimToProteinCap(sequence),
         originVesicleId: candidate.vesicleId,
     };
 }

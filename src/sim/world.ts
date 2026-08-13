@@ -7,36 +7,16 @@ import {
   Virtunism,
 } from './virtunism.js';
 import { createFood, Food, getNextFoodId, setNextFoodId } from './food.js';
-import {
-  buildGenome,
-  buildOrganelles,
-  deriveArmorMitigation,
-  deriveFlagellaPower,
-  deriveMaxSpeed,
-  deriveMouthPower,
-  encodeGeneSequence,
-  genomeFromSequence,
-  hasBud,
-  StarterLoadout,
-} from './genome.js';
+import { deriveMaxSpeed, deriveMotorPower, derivePredationPower, deriveStructureMitigation, genomeFromSequence, hasBud } from './genome.js';
 import { decodeCoreTraits, GeneSequence, geneticDistance, mutateGeneSequence } from './genes.js';
 import { generateSpeciesName } from './speciesNames.js';
 import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
-import { BRAIN_TOPOLOGY, OrganelleKind, ReproductionMode } from './types.js';
+import { BRAIN_TOPOLOGY, CatalysisClass } from './types.js';
 import { SpatialGrid } from './grid.js';
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
-}
-
-export interface SpeciesTemplate {
-  reproductionMode: ReproductionMode;
-  size: number;
-  senseRadius: number;
-  maxAge: number;
-  hue: number;
-  loadout: StarterLoadout;
 }
 
 export interface LineageInfo {
@@ -102,11 +82,11 @@ export interface StatsSnapshot {
   avgSize: number;
   avgSpeed: number;
   avgSense: number;
-  avgFlagella: number;
-  avgMouths: number;
-  avgChloroplasts: number;
-  avgEyes: number;
-  avgArmor: number;
+  avgMotor: number;
+  avgPredation: number;
+  avgEnergyCapture: number;
+  avgSensors: number;
+  avgStructure: number;
   avgAge: number;
   maxGeneration: number;
   meatFood: number;
@@ -130,10 +110,10 @@ export interface SpeciesSummary {
   avgSize: number;
   avgSpeed: number;
   avgSense: number;
-  /** The organelle kind most represented across this lineage's living
-   * members right now — not a fixed trait, just a cheap-to-show summary
-   * of what it currently leans toward. */
-  dominantOrganelle: OrganelleKind | null;
+  /** The functional class most represented across this lineage's living
+   * members' proteins right now — not a fixed trait, just a cheap-to-show
+   * summary of what it currently leans toward. */
+  dominantClass: CatalysisClass | null;
 }
 
 /** How long the *last* update() call actually took, in milliseconds — the
@@ -235,146 +215,18 @@ export class World {
     this.rng = new Rng(seed);
   }
 
-  static createDefault(width: number, height: number, seed: number): World {
-    const world = new World(width, height, seed);
-    world.seedBaseSpecies();
-    return world;
-  }
-
   /**
-   * A small starting population of plants and herbivores — nothing else.
-   * There is no hand-designed predator, scavenger, or "tree" — if this
-   * dish ever grows one, it's because mutation and selection actually
-   * found it, not because it was built in. Nothing here stops a rabbit
-   * lineage from drifting toward bigger and more predatory (a wolf), or a
-   * dandelion lineage toward bigger and more armored (a tree), or some
-   * branch of the predatory line specializing in carrion over live prey
-   * (a vulture) — the organelle system has no fixed "species" concept to
-   * prevent it. Whether any of that actually happens in a given run is a
-   * real, unscripted question, not a guaranteed outcome. Founding
-   * populations are small but not knife-edge minimal — every mechanic in
-   * this dish that starts from too few individuals has turned out to be
-   * one unlucky brain away from extinction before it ever gets a chance
-   * to evolve into anything.
+   * There is no hand-designed starter species anymore — no hard-coded
+   * loadout catalog to build one from. A dish starts genuinely empty:
+   * life enters either by actually evolving out of the primordial pool
+   * (see chem/bridge.ts + main.ts's autoBootstrap), or via the Designer
+   * tab's random-seed release (a fresh randomGeneSequence, not a
+   * hand-picked body plan — see main.ts). Nothing here stops a lineage
+   * from drifting toward bigger and more predatory, or more armored, or
+   * anything else evolution and selection actually find — there's no
+   * fixed "species" concept to prevent it, and now there's no fixed
+   * starting point to anchor it either.
    */
-  seedBaseSpecies(): void {
-    // Dandelions: the entire starting food supply. Pure photosynthesizer
-    // (no mouth). A little of its own mobility + a real body (multiple
-    // organelles, not just one) turns out to matter for more than just the
-    // dandelion itself — it's also what gives a still-naive rabbit brain
-    // enough of a target to actually close distance on. A single-organelle,
-    // zero-flagella "minimal" plant looked right on paper but consistently
-    // starved every predator population that depended on it in testing;
-    // this loadout is the one that's actually been verified to work.
-    this.addSpecies(
-      {
-        reproductionMode: 'asexual',
-        size: 0.9,
-        senseRadius: 150,
-        maxAge: 1000,
-        hue: 68,
-        loadout: { flagella: 2, chloroplasts: 3, eyes: 1 },
-      },
-      16,
-      { name: 'Dandelions', spread: true },
-    );
-    // Rabbits: sized with a deliberate, comfortable margin over a
-    // dandelion so eating one is mechanically reliable from tick one
-    // (predation eligibility is a real size-ratio check — too close a
-    // margin and hunting silently becomes nearly impossible regardless of
-    // behavior, a mistake worth not repeating here).
-    this.addSpecies(
-      {
-        reproductionMode: 'asexual',
-        size: 1.55,
-        senseRadius: 190,
-        maxAge: 900,
-        hue: 30,
-        loadout: { mouths: 1, flagella: 3, eyes: 1 },
-      },
-      12,
-      { name: 'Rabbits', spread: true },
-    );
-  }
-
-  /** Releases a new population built from a fixed body template (as
-   * designed in the editor) with independently-randomized brains and a
-   * little starting variation on each individual's organelle layout.
-   * Returns the new lineage id. */
-  addSpecies(
-    template: SpeciesTemplate,
-    count: number,
-    opts: { name?: string; isPlayerDesigned?: boolean; spread?: boolean; spawnCenter?: { x: number; y: number } } = {},
-  ): number {
-    const lineageId = this.nextLineageId++;
-    const baseOrganelles = buildOrganelles(template.loadout);
-    // The template's own encoded sequence is what every member of this
-    // founded species gets measured against for divergence — see
-    // checkSpeciation. It has no parent lineage; it *is* a root.
-    const referenceSequence = encodeGeneSequence(
-      {
-        reproductionMode: template.reproductionMode,
-        size: template.size,
-        senseRadius: template.senseRadius,
-        maxAge: template.maxAge,
-        hue: template.hue,
-      },
-      baseOrganelles,
-    );
-    this.lineages.set(lineageId, {
-      id: lineageId,
-      name: opts.name ?? `Species ${lineageId}`,
-      hue: template.hue,
-      isPlayerDesigned: !!opts.isPlayerDesigned,
-      createdTick: this.tick,
-      referenceSequence,
-      parentLineageId: null,
-    });
-
-    // A bootstrapped protocell has a real place it came from — spawn its
-    // founders right there (see main.ts) instead of the usual random
-    // cluster, so it visibly emerges from the pool rather than teleporting
-    // in from nowhere.
-    const clusterX = opts.spawnCenter?.x ?? this.rng.range(this.width * 0.2, this.width * 0.8);
-    const clusterY = opts.spawnCenter?.y ?? this.rng.range(this.height * 0.2, this.height * 0.8);
-    const jitterPct = (value: number, pct: number): number => Math.max(0.01, value * (1 + this.rng.gaussian(0, pct)));
-
-    for (let i = 0; i < count; i++) {
-      if (this.cells.length >= this.maxPopulation) break;
-      // Encoded into real genes (not assigned as a flat struct) so even a
-      // hand-designed or bootstrapped founder starts from an actual
-      // heritable sequence — see genome.ts's buildGenome.
-      const genome = buildGenome(
-        {
-          reproductionMode: template.reproductionMode,
-          size: jitterPct(template.size, 0.03),
-          senseRadius: jitterPct(template.senseRadius, 0.03),
-          maxAge: jitterPct(template.maxAge, 0.08),
-          hue: template.hue,
-        },
-        baseOrganelles.map((o) => ({
-          kind: o.kind,
-          angle: o.angle + this.rng.gaussian(0, 0.08),
-          size: clamp(o.size + this.rng.gaussian(0, 0.04), 0.5, 1.5),
-        })),
-        NeuralNet.random(BRAIN_TOPOLOGY, this.rng),
-      );
-      const x = opts.spread
-        ? this.rng.range(20, this.width - 20)
-        : clamp(clusterX + this.rng.gaussian(0, 90), 20, this.width - 20);
-      const y = opts.spread
-        ? this.rng.range(20, this.height - 20)
-        : clamp(clusterY + this.rng.gaussian(0, 90), 20, this.height - 20);
-      // Deliberately well below both reproduceThreshold (0.42 * maxEnergy)
-      // and the lower sexual matingThreshold (0.3 * maxEnergy) so a freshly
-      // released population always has to forage first.
-      const startEnergy = 12 * template.size;
-      const founder = new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned);
-      this.cells.push(founder);
-      this.recordBirth(founder, null, null);
-    }
-    return lineageId;
-  }
 
   /** Releases a new population founded directly from an already-real gene
    * sequence, skipping the loadout->buildOrganelles->encode round trip —
@@ -426,7 +278,7 @@ export class World {
   /** Registers a new individual as a tree-of-life node and links it under
    * its parent(s), propagating the +1 live-count up to the root so every
    * ancestor knows it still has a living descendant. `parentId: null`
-   * marks a root (a founder released via addSpecies). */
+   * marks a root (a founder released via addSpeciesFromSequence). */
   private recordBirth(child: Virtunism, parentId: number | null, secondParentId: number | null): void {
     const node: TreeNode = {
       id: child.id,
@@ -617,11 +469,11 @@ export class World {
     let sumSize = 0;
     let sumSpeed = 0;
     let sumSense = 0;
-    let sumFlagella = 0;
-    let sumMouths = 0;
-    let sumChloroplasts = 0;
-    let sumEyes = 0;
-    let sumArmor = 0;
+    let sumMotor = 0;
+    let sumPredation = 0;
+    let sumEnergyCapture = 0;
+    let sumSensors = 0;
+    let sumStructure = 0;
     let sumAge = 0;
     let maxGeneration = 0;
     let colonies = 0;
@@ -634,12 +486,13 @@ export class World {
       sumSize += c.genome.size;
       sumSpeed += deriveMaxSpeed(c.genome);
       sumSense += c.genome.senseRadius;
-      for (const o of c.genome.organelles) {
-        if (o.kind === 'flagellum') sumFlagella += o.size;
-        else if (o.kind === 'mouth') sumMouths += o.size;
-        else if (o.kind === 'chloroplast') sumChloroplasts += o.size;
-        else if (o.kind === 'eye') sumEyes += 1;
-        else if (o.kind === 'armor') sumArmor += o.size;
+      for (const p of c.genome.proteins) {
+        const strength = p.fold.catalysisStrength;
+        if (p.fold.catalysisClass === 'motor') sumMotor += strength;
+        else if (p.fold.catalysisClass === 'protease') sumPredation += strength;
+        else if (p.fold.catalysisClass === 'peptidyl') sumEnergyCapture += strength;
+        else if (p.fold.catalysisClass === 'photoreceptor') sumSensors += 1;
+        else if (p.fold.catalysisClass === 'lipidsynthase') sumStructure += strength;
       }
       sumAge += c.age;
       if (c.generation > maxGeneration) maxGeneration = c.generation;
@@ -664,11 +517,11 @@ export class World {
       avgSize: sumSize / n,
       avgSpeed: sumSpeed / n,
       avgSense: sumSense / n,
-      avgFlagella: sumFlagella / n,
-      avgMouths: sumMouths / n,
-      avgChloroplasts: sumChloroplasts / n,
-      avgEyes: sumEyes / n,
-      avgArmor: sumArmor / n,
+      avgMotor: sumMotor / n,
+      avgPredation: sumPredation / n,
+      avgEnergyCapture: sumEnergyCapture / n,
+      avgSensors: sumSensors / n,
+      avgStructure: sumStructure / n,
       avgAge: sumAge / n,
       maxGeneration,
       meatFood: this.meatFood.length,
@@ -692,13 +545,13 @@ export class World {
       sumSize: number;
       sumSpeed: number;
       sumSense: number;
-      organelleCounts: Partial<Record<OrganelleKind, number>>;
+      classCounts: Partial<Record<CatalysisClass, number>>;
     }
     const acc = new Map<number, Acc>();
     for (const c of this.cells) {
       let a = acc.get(c.lineageId);
       if (!a) {
-        a = { population: 0, maxGeneration: 0, sumSize: 0, sumSpeed: 0, sumSense: 0, organelleCounts: {} };
+        a = { population: 0, maxGeneration: 0, sumSize: 0, sumSpeed: 0, sumSense: 0, classCounts: {} };
         acc.set(c.lineageId, a);
       }
       a.population++;
@@ -706,7 +559,11 @@ export class World {
       a.sumSpeed += deriveMaxSpeed(c.genome);
       a.sumSense += c.genome.senseRadius;
       if (c.generation > a.maxGeneration) a.maxGeneration = c.generation;
-      for (const o of c.genome.organelles) a.organelleCounts[o.kind] = (a.organelleCounts[o.kind] ?? 0) + 1;
+      for (const p of c.genome.proteins) {
+        const cls = p.fold.catalysisClass;
+        if (cls === null) continue;
+        a.classCounts[cls] = (a.classCounts[cls] ?? 0) + 1;
+      }
     }
 
     const result: SpeciesSummary[] = [];
@@ -714,12 +571,12 @@ export class World {
       const info = this.lineages.get(lineageId);
       if (!info) continue; // every live cell's lineage is recorded at founding time
       const parent = info.parentLineageId !== null ? this.lineages.get(info.parentLineageId) : undefined;
-      let dominant: OrganelleKind | null = null;
+      let dominant: CatalysisClass | null = null;
       let dominantCount = 0;
-      for (const kind in a.organelleCounts) {
-        const count = a.organelleCounts[kind as OrganelleKind]!;
+      for (const cls in a.classCounts) {
+        const count = a.classCounts[cls as CatalysisClass]!;
         if (count > dominantCount) {
-          dominant = kind as OrganelleKind;
+          dominant = cls as CatalysisClass;
           dominantCount = count;
         }
       }
@@ -736,7 +593,7 @@ export class World {
         avgSize: a.sumSize / a.population,
         avgSpeed: a.sumSpeed / a.population,
         avgSense: a.sumSense / a.population,
-        dominantOrganelle: dominant,
+        dominantClass: dominant,
       });
     }
     result.sort((x, y) => y.population - x.population);
@@ -760,9 +617,10 @@ export class World {
   }
 
   /** True if world point (tx, ty) falls inside cell's field of view — a
-   * narrow always-on "chemoreception" cone plus the union of whatever eye
-   * organelles it's grown, each mounted at its own angle relative to its
-   * heading with a width set by that eye's size. */
+   * narrow always-on "chemoreception" cone plus the union of whatever
+   * photoreceptor-class proteins it's grown, each mounted at its own
+   * gene-encoded angle relative to its heading with a width set by that
+   * protein's real fold-derived catalytic strength. */
   private inFOV(cell: Virtunism, tx: number, ty: number): boolean {
     const angleToTarget = Math.atan2(ty - cell.y, tx - cell.x);
     const within = (mountAngle: number, halfWidth: number): boolean => {
@@ -772,10 +630,10 @@ export class World {
     };
     const baselineHalf = ((50 * Math.PI) / 180) * 0.5;
     if (within(0, baselineHalf)) return true;
-    for (const eye of cell.genome.organelles) {
-      if (eye.kind !== 'eye') continue;
-      const halfWidth = (((50 + eye.size * 40) * Math.PI) / 180) * 0.5;
-      if (within(eye.angle, halfWidth)) return true;
+    for (const p of cell.genome.proteins) {
+      if (p.fold.catalysisClass !== 'photoreceptor') continue;
+      const halfWidth = (((50 + p.fold.catalysisStrength * 40) * Math.PI) / 180) * 0.5;
+      if (within(p.angle, halfWidth)) return true;
     }
     return false;
   }
@@ -783,7 +641,7 @@ export class World {
   /** How far a predator's mouth investment stretches its max-prey-size
    * threshold — a bigger mouth can tackle relatively bigger prey. */
   private predatorReach(predator: Virtunism): number {
-    return clamp(0.7 + deriveMouthPower(predator.genome) * 0.15, 0.7, 1.4);
+    return clamp(0.7 + derivePredationPower(predator.genome) * 0.15, 0.7, 1.4);
   }
 
   /** Builds the fixed sensor vector consumed by Virtunism/NeuralNet (see
@@ -936,7 +794,7 @@ export class World {
     let weightSum = 0;
     let totalFlagellaPower = 0;
     for (const m of members) {
-      const power = deriveFlagellaPower(m.genome);
+      const power = deriveMotorPower(m.genome);
       totalFlagellaPower += power;
       if (power <= 0) continue;
       const turnOut = clamp(m.lastOutputs[0] ?? 0, -1, 1);
@@ -1011,7 +869,7 @@ export class World {
   private handleEating(): void {
     for (const cell of this.cells) {
       if (!cell.alive || !cell.canEat) continue;
-      const reach = cell.radius + (deriveMouthPower(cell.genome) - 1) * 4;
+      const reach = cell.radius + (derivePredationPower(cell.genome) - 1) * 4;
       const yieldMult = cell.biteYield;
       const nearbyCarrion = this.carrionGrid.queryRadius(cell.x, cell.y, reach + 10);
       for (const f of nearbyCarrion) {
@@ -1035,7 +893,7 @@ export class World {
       // evolve. Same lesson as foraging and mate-finding before it: a
       // mechanic that's only winnable once you're already good at it never
       // gets the chance to be learned at all.
-      const reach = predator.radius + 6 + (deriveMouthPower(predator.genome) - 1) * 4;
+      const reach = predator.radius + 6 + (derivePredationPower(predator.genome) - 1) * 4;
       const nearby = this.virtunismGrid.queryRadius(predator.x, predator.y, reach + 30);
       for (const prey of nearby) {
         if (prey === predator || !prey.alive) continue;
@@ -1048,7 +906,7 @@ export class World {
           // than it can recover, overshoot, and crash the whole dish (prey
           // hunted to extinction, then predators starve with nothing
           // left) instead of settling into an oscillating equilibrium.
-          const mitigation = deriveArmorMitigation(prey.genome);
+          const mitigation = deriveStructureMitigation(prey.genome);
           const bite = prey.energy * 0.35 * clamp(predator.biteYield, 0.4, 1.6) * (1 - mitigation);
           predator.eat(bite);
           const corpseEnergy = Math.max(0, prey.energy - bite);

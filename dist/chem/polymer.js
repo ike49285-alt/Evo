@@ -21,6 +21,7 @@
  * dynamic-programming predictor.
  */
 import { AMINO_ACIDS, isHydrophobic, NUCLEOTIDES } from './elements.js';
+export const CATALYSIS_CLASSES = ['replicase', 'peptidyl', 'lipidsynthase', 'protease', 'motor', 'photoreceptor'];
 const MIN_FOLD_LENGTH = 8;
 // Calibrated empirically against what the (fixed — see the turn-bias
 // comment below) greedy walk actually produces: a 2000-sequence sample
@@ -195,11 +196,30 @@ export function foldPeptide(sequence) {
         //  - peptidyl: Cys thioester chemistry and general acid/base catalysis
         //    (negative residues) are the classic path to activating a peptide
         //    bond for ligation.
+        //  - motor: real motor assemblies (flagellar motors, myosin/dynein-
+        //    type domains) are large, membrane-associated structural
+        //    complexes with a nucleotide-binding (ATP-hydrolyzing) site —
+        //    the same hydrophobic-face reasoning lipidsynthase uses, plus a
+        //    real positive-charge component (P-loop NTPase motifs are
+        //    characteristically Gly/Lys-rich) so it's not just lipidsynthase
+        //    under another name. Deliberately kept as a pure surface-count
+        //    score like every other class here, not weighted by `stability`
+        //    — headless-verified that multiplying by stability handicapped
+        //    it against the other classes' unweighted integer-count scores
+        //    in this same argmax comparison, so it almost never won even
+        //    when it should have (99% of sampled genomes had zero motor
+        //    protein at all before this fix).
+        //  - photoreceptor: real photoreceptor proteins (the rhodopsin
+        //    family) hold a light-absorbing chromophore in an aromatic-rich
+        //    binding pocket — aromatic surface exposure is the cheapest
+        //    honest proxy this fold model has for that.
         const scores = {
             replicase: posSurface * 2,
             protease: aromaticSurface * 1.5 + serineSurface + histidineSurface * 1.5,
             lipidsynthase: hydrophobicSurface,
             peptidyl: cysCount * 2 + negSurface,
+            motor: hydrophobicSurface * 1.2 + posSurface * 0.5,
+            photoreceptor: aromaticSurface * 2,
         };
         let best = 'replicase';
         let bestScore = -Infinity;

@@ -1,4 +1,4 @@
-import { crossoverGenome, deriveArmorBonus, deriveMaxSpeed, deriveMouthCount, deriveMouthPower, deriveTurnRate, derivePhotosynthesis, deserializeGenome, mutateGenome, serializeGenome, } from './genome.js';
+import { crossoverGenome, deriveEnergyCapture, deriveEnergyCapturePower, deriveMaxSpeed, deriveMotorPower, derivePredationCount, derivePredationPower, deriveSensors, deriveStructureBonus, deriveStructurePower, deriveTurnRate, deserializeGenome, mutateGenome, serializeGenome, } from './genome.js';
 import { Rng } from './rng.js';
 let nextId = 1;
 /** The module-level id counter is process-global, not per-World — a saved
@@ -56,10 +56,10 @@ export class Virtunism {
         this.isPlayerDesigned = isPlayerDesigned;
     }
     get radius() {
-        return 5 + this.genome.size * 5 + this.genome.organelles.length * 0.55;
+        return 5 + this.genome.size * 5 + this.genome.proteins.length * 0.55;
     }
     get maxEnergy() {
-        return 60 * this.genome.size + this.genome.organelles.length * 3;
+        return 60 * this.genome.size + this.genome.proteins.length * 3;
     }
     get reproduceThreshold() {
         return this.maxEnergy * 0.42;
@@ -120,37 +120,29 @@ export class Virtunism {
                 this.heading = -this.heading;
         }
     }
-    /** Burns upkeep + movement energy and ages by one tick. Every organelle
-     * has a real running cost — a bigger loadout is never free, it's a bet
-     * that what it does is worth what it burns. Photosynthesis income is
-     * handled separately by World (see photosynthesize()) since — unlike
-     * upkeep, which is purely a function of this virtunism's own body — it
-     * has to be weighed against every other photosynthesizer competing for
-     * the same finite sunlight. */
+    /** Burns upkeep + movement energy and ages by one tick. Every protein
+     * has a real running cost — a bigger genome is never free, it's a bet
+     * that what its proteins do is worth what they burn. Energy-capture
+     * income is handled separately by World (see photosynthesize()) since —
+     * unlike upkeep, which is purely a function of this virtunism's own
+     * body — it has to be weighed against every other energy-capturer
+     * competing for the same finite sunlight. */
     metabolize(dt) {
         const size = this.genome.size;
-        const organelles = this.genome.organelles;
-        let flagellaPower = 0;
-        let mouthPower = 0;
-        let chloroplastPower = 0;
-        let eyeCount = 0;
-        let armorPower = 0;
-        for (const o of organelles) {
-            if (o.kind === 'flagellum')
-                flagellaPower += o.size;
-            else if (o.kind === 'mouth')
-                mouthPower += o.size;
-            else if (o.kind === 'chloroplast')
-                chloroplastPower += o.size;
-            else if (o.kind === 'eye')
-                eyeCount += 1;
-            else if (o.kind === 'armor')
-                armorPower += o.size;
-        }
+        // Read the same scaled power figures every other formula (max speed,
+        // bite yield, energy income) reads — computing this independently
+        // inline used to skip the gene-expression scale genome.ts's derive*
+        // functions apply, silently making upkeep cheaper than it should be
+        // relative to income.
+        const motorPower = deriveMotorPower(this.genome);
+        const predationPower = derivePredationPower(this.genome);
+        const energyCapturePower = deriveEnergyCapturePower(this.genome);
+        const sensorCount = deriveSensors(this.genome).length;
+        const structurePower = deriveStructurePower(this.genome);
         const baseUpkeep = 0.002 + 0.005 * size * size + 0.0008 * (this.genome.senseRadius / 100);
-        const organelleUpkeep = 0.0035 * flagellaPower + 0.0025 * mouthPower + 0.0015 * chloroplastPower + 0.0006 * eyeCount + 0.002 * armorPower;
+        const proteinUpkeep = 0.0035 * motorPower + 0.0025 * predationPower + 0.0015 * energyCapturePower + 0.0006 * sensorCount + 0.002 * structurePower;
         const moveCost = 0.005 * this.speed * size;
-        this.energy -= (baseUpkeep + organelleUpkeep + moveCost) * dt;
+        this.energy -= (baseUpkeep + proteinUpkeep + moveCost) * dt;
         this.age += dt;
         if (this.reproCooldown > 0)
             this.reproCooldown = Math.max(0, this.reproCooldown - dt);
@@ -158,7 +150,7 @@ export class Virtunism {
     /** This virtunism's uncontested share of sunlight — World scales this by
      * a dish-wide availability multiplier before actually granting it. */
     get baseSunlightDemand() {
-        return derivePhotosynthesis(this.genome);
+        return deriveEnergyCapture(this.genome);
     }
     photosynthesize(dt, availabilityMultiplier) {
         this.energy += this.baseSunlightDemand * availabilityMultiplier * dt;
@@ -166,17 +158,17 @@ export class Virtunism {
     eat(energy) {
         this.energy = Math.min(this.maxEnergy, this.energy + energy);
     }
-    /** How much energy a bite yields, scaled by total mouth investment. */
+    /** How much energy a bite yields, scaled by total predation investment. */
     get biteYield() {
-        return 0.4 + deriveMouthPower(this.genome) * 0.5;
+        return 0.4 + derivePredationPower(this.genome) * 0.5;
     }
     get canEat() {
-        return deriveMouthCount(this.genome) > 0;
+        return derivePredationCount(this.genome) > 0;
     }
     /** Effective size for predation purposes — armor counts without costing
      * full chassis growth. */
     get effectiveDefenseSize() {
-        return this.genome.size * deriveArmorBonus(this.genome);
+        return this.genome.size * deriveStructureBonus(this.genome);
     }
     canReproduce() {
         return (this.alive &&

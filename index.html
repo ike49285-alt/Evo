@@ -51,10 +51,14 @@
               occasionally bond, fold into catalysts, and a lucky
               self-replicator sealed inside a lipid membrane becomes a
               protocell that swims out as a real founding lineage, no
-              button required. You can also design a body plan by hand
-              here and release it anywhere in the dish. Either way, its
-              brain starts random — evolution shapes how it actually
-              behaves over the generations that follow.
+              button required. There's no body-plan editor here — every
+              functional part traces back to a real folded protein (see
+              the Species tab), so there's nothing left to hand-pick.
+              This releases a population from a fresh, fully random gene
+              sequence instead — a way to seed a test population without
+              waiting on a natural bootstrap, not a design tool. Its
+              brain starts random either way — evolution shapes how it
+              actually behaves over the generations that follow.
             </p>
 
             <label class="field">
@@ -76,69 +80,6 @@
               mutated. Harder to pull off, more genetic mixing.
             </p>
 
-            <fieldset class="field">
-              <legend>Organelles <em id="v-organelle-total">0 / 10</em></legend>
-              <div class="organelle-grid">
-                <label class="organelle-row">
-                  <span class="organelle-swatch" data-organelle="flagellum"></span>
-                  <span class="organelle-name">Flagella<small>speed &amp; agility</small></span>
-                  <input id="f-flagella" type="number" min="0" max="6" step="1" value="2" />
-                </label>
-                <label class="organelle-row">
-                  <span class="organelle-swatch" data-organelle="mouth"></span>
-                  <span class="organelle-name">Mouths<small>eat carrion &amp; smaller virtunisms (incl. photosynthesizers)</small></span>
-                  <input id="f-mouths" type="number" min="0" max="6" step="1" value="1" />
-                </label>
-                <label class="organelle-row">
-                  <span class="organelle-swatch" data-organelle="chloroplast"></span>
-                  <span class="organelle-name">Chloroplasts<small>passive energy from light</small></span>
-                  <input id="f-chloroplasts" type="number" min="0" max="6" step="1" value="0" />
-                </label>
-                <label class="organelle-row">
-                  <span class="organelle-swatch" data-organelle="eye"></span>
-                  <span class="organelle-name">Eyes<small>each adds its own vision cone</small></span>
-                  <input id="f-eyes" type="number" min="0" max="6" step="1" value="1" />
-                </label>
-                <label class="organelle-row">
-                  <span class="organelle-swatch" data-organelle="armor"></span>
-                  <span class="organelle-name">Armor<small>harder to catch &amp; eat</small></span>
-                  <input id="f-armor" type="number" min="0" max="6" step="1" value="0" />
-                </label>
-              </div>
-              <label class="organelle-row bud-row">
-                <span class="organelle-swatch" data-organelle="bud"></span>
-                <span class="organelle-name">Bud gland<small>offspring stay attached &amp; grow into a colony</small></span>
-                <input id="f-bud" type="checkbox" />
-              </label>
-            </fieldset>
-            <p class="panel-hint">
-              Every organelle has a running energy cost, so a loadout is a bet,
-              not a free upgrade — evolution will prune what doesn't pay for
-              itself. A virtunism with zero mouths and zero chloroplasts can't
-              feed itself at all.
-            </p>
-
-            <label class="field slider-field">
-              <span>Size <em id="v-size"></em></span>
-              <input id="f-size" type="range" min="0.5" max="3.2" step="0.05" value="1.1" />
-            </label>
-
-            <label class="field slider-field">
-              <span>Sense radius <em id="v-sense"></em></span>
-              <input id="f-sense" type="range" min="40" max="320" step="5" value="170" />
-            </label>
-
-            <label class="field slider-field">
-              <span>Lifespan (ticks) <em id="v-age"></em></span>
-              <input id="f-age" type="range" min="400" max="2400" step="20" value="1100" />
-            </label>
-
-            <label class="field slider-field">
-              <span>Hue <em id="v-hue"></em></span>
-              <input id="f-hue" type="range" min="0" max="360" step="1" value="200" />
-            </label>
-            <div id="hue-swatch"></div>
-
             <label class="field slider-field">
               <span>Population to release <em id="v-count"></em></span>
               <input id="f-count" type="range" min="1" max="40" step="1" value="26" />
@@ -150,7 +91,7 @@
               for the same food.
             </p>
 
-            <button id="btn-release" class="btn primary wide">Release into Dish</button>
+            <button id="btn-release" class="btn primary wide">Release Random Population</button>
           </section>
 
           <section id="tab-species" class="tab-panel">
@@ -176,9 +117,9 @@
               <div class="stat"><span class="stat-label">Solo virtunisms</span><span id="s-solo">0</span></div>
               <div class="stat"><span class="stat-label">Meat / carrion</span><span id="s-meat">0</span></div>
               <div class="stat"><span class="stat-label">Sexual / asexual</span><span id="s-repro">0 / 0</span></div>
-              <div class="stat"><span class="stat-label">Avg. mouths</span><span id="s-mouths">0</span></div>
-              <div class="stat"><span class="stat-label">Avg. eyes</span><span id="s-eyes">0</span></div>
-              <div class="stat"><span class="stat-label">Avg. armor</span><span id="s-armor">0</span></div>
+              <div class="stat"><span class="stat-label">Avg. predation</span><span id="s-mouths">0</span></div>
+              <div class="stat"><span class="stat-label">Avg. sensors</span><span id="s-eyes">0</span></div>
+              <div class="stat"><span class="stat-label">Avg. structure</span><span id="s-armor">0</span></div>
             </div>
 
             <div class="chart-grid">
@@ -203,11 +144,11 @@
                 <canvas class="chart" id="chart-sense" height="60"></canvas>
               </div>
               <div class="chart-block">
-                <div class="chart-title">Avg. flagella <em id="c-flagella-val"></em></div>
+                <div class="chart-title">Avg. motor power <em id="c-flagella-val"></em></div>
                 <canvas class="chart" id="chart-flagella" height="60"></canvas>
               </div>
               <div class="chart-block">
-                <div class="chart-title">Avg. chloroplasts <em id="c-chloro-val"></em></div>
+                <div class="chart-title">Avg. energy capture <em id="c-chloro-val"></em></div>
                 <canvas class="chart" id="chart-chloro" height="60"></canvas>
               </div>
             </div>
