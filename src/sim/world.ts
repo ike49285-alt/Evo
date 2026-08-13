@@ -234,7 +234,11 @@ export class World {
    * designed in the editor) with independently-randomized brains and a
    * little starting variation on each individual's organelle layout.
    * Returns the new lineage id. */
-  addSpecies(template: SpeciesTemplate, count: number, opts: { name?: string; isPlayerDesigned?: boolean; spread?: boolean } = {}): number {
+  addSpecies(
+    template: SpeciesTemplate,
+    count: number,
+    opts: { name?: string; isPlayerDesigned?: boolean; spread?: boolean; spawnCenter?: { x: number; y: number } } = {},
+  ): number {
     const lineageId = this.nextLineageId++;
     this.lineages.set(lineageId, {
       id: lineageId,
@@ -245,8 +249,12 @@ export class World {
     });
 
     const baseOrganelles = buildOrganelles(template.loadout);
-    const clusterX = this.rng.range(this.width * 0.2, this.width * 0.8);
-    const clusterY = this.rng.range(this.height * 0.2, this.height * 0.8);
+    // A bootstrapped protocell has a real place it came from — spawn its
+    // founders right there (see main.ts) instead of the usual random
+    // cluster, so it visibly emerges from the pool rather than teleporting
+    // in from nowhere.
+    const clusterX = opts.spawnCenter?.x ?? this.rng.range(this.width * 0.2, this.width * 0.8);
+    const clusterY = opts.spawnCenter?.y ?? this.rng.range(this.height * 0.2, this.height * 0.8);
     const jitterPct = (value: number, pct: number): number => Math.max(0.01, value * (1 + this.rng.gaussian(0, pct)));
 
     for (let i = 0; i < count; i++) {

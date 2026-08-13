@@ -71,6 +71,8 @@ export interface OriginStatsSnapshot {
 export interface BootstrapCandidate {
   vesicleId: number;
   tick: number;
+  x: number; // local to this Origin's own coordinate space — the pool's position within the wider dish is main.ts's concern, not this engine's
+  y: number;
   radius: number;
   peptides: PeptideParticle[];
   rnas: RnaParticle[];
@@ -883,6 +885,8 @@ export class Origin {
           this.bootstrapCandidates.push({
             vesicleId: v.id,
             tick: this.tick,
+            x: v.x,
+            y: v.y,
             radius: v.radius,
             peptides,
             rnas,

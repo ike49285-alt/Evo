@@ -1,6 +1,9 @@
 import { World } from '../sim/world.js';
 import { ORGANELLE_COLORS } from '../sim/types.js';
 import { Virtunism } from '../sim/virtunism.js';
+import { Origin } from '../chem/origin.js';
+import { isHydrophobic } from '../chem/elements.js';
+import { CatalysisClass } from '../chem/polymer.js';
 
 interface Camera {
   x: number; // world-space point shown at screen center
@@ -12,11 +15,36 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
+const NUCLEOTIDE_COLOR: Record<string, string> = {
+  // A common nucleotide-viewer convention (green/red/blue/yellow), not
+  // invented for this project.
+  A: '#5ad46a',
+  U: '#e6584f',
+  G: '#4f8cff',
+  C: '#f5c542',
+};
+
+const CATALYST_COLOR: Record<CatalysisClass, string> = {
+  replicase: '#c77dff',
+  peptidyl: '#3fae5a',
+  protease: '#e6584f',
+  lipidsynthase: '#f5a623',
+};
+
+/**
+ * One canvas, one camera, one continuous world. Life doesn't start on a
+ * different screen from the one it goes on to live in — the primordial
+ * pool (Origin's chemistry) is drawn as a real region *within* the dish,
+ * at `poolOffset`, and whatever emerges from it just keeps existing in
+ * the same space, swimming out into the wider dish as an ordinary
+ * Virtunism. See main.ts for where a bootstrapped protocell actually
+ * gets placed relative to the pool.
+ */
 export class Renderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private dpr = 1;
-  private animT = 0; // free-running frame counter, drives flagella wiggle
+  private animT = 0; // free-running frame counter, drives flagella wiggle / energy pulse
   camera: Camera = { x: 0, y: 0, zoom: 1 };
 
   constructor(canvas: HTMLCanvasElement) {
@@ -77,7 +105,12 @@ export class Renderer {
     };
   }
 
-  draw(world: World, options: { showVision?: boolean; highlightId?: number | null } = {}): void {
+  draw(
+    world: World,
+    origin: Origin,
+    poolOffset: { x: number; y: number },
+    options: { showVision?: boolean; highlightId?: number | null } = {},
+  ): void {
     const ctx = this.ctx;
     this.animT += 1;
     ctx.save();
@@ -94,6 +127,8 @@ export class Renderer {
     ctx.strokeStyle = 'rgba(120,160,220,0.35)';
     ctx.lineWidth = 2;
     ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+
+    this.drawPool(origin, poolOffset);
 
     // carrion — the only discrete food item; there's no ambient plant food
     ctx.fillStyle = '#b5502f';
@@ -140,6 +175,96 @@ export class Renderer {
     }
 
     ctx.restore();
+  }
+
+  /** The primordial pool: a real region within the same dish, not a
+   * separate world. Amino acids, nucleotides, lipids and everything they
+   * build sit here at `poolOffset` + their own local coordinates. */
+  private drawPool(origin: Origin, poolOffset: { x: number; y: number }): void {
+    const ctx = this.ctx;
+    const topLeft = this.worldToScreen(poolOffset.x, poolOffset.y);
+    const bottomRight = this.worldToScreen(poolOffset.x + origin.width, poolOffset.y + origin.height);
+    const w = bottomRight.x - topLeft.x;
+    const h = bottomRight.y - topLeft.y;
+    if (topLeft.x > this.viewportWidth || topLeft.y > this.viewportHeight || bottomRight.x < 0 || bottomRight.y < 0) return;
+
+    ctx.fillStyle = 'rgba(120, 90, 40, 0.12)';
+    ctx.fillRect(topLeft.x, topLeft.y, w, h);
+    ctx.strokeStyle = 'rgba(245, 200, 120, 0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(topLeft.x, topLeft.y, w, h);
+
+    for (const v of origin.vesicles.values()) {
+      const p = this.worldToScreen(poolOffset.x + v.x, poolOffset.y + v.y);
+      const r = v.radius * this.camera.zoom;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(245, 220, 160, 0.05)';
+      ctx.fill();
+      ctx.strokeStyle = v.replicationEvents > 0 ? 'rgba(199, 125, 255, 0.55)' : 'rgba(245, 220, 160, 0.35)';
+      ctx.lineWidth = Math.max(1, 1.5 * this.camera.zoom * 0.3);
+      ctx.stroke();
+    }
+
+    for (const p of origin.particles.values()) {
+      const s = this.worldToScreen(poolOffset.x + p.x, poolOffset.y + p.y);
+      if (s.x < topLeft.x - 5 || s.y < topLeft.y - 5 || s.x > bottomRight.x + 5 || s.y > bottomRight.y + 5) continue;
+
+      if (p.kind === 'aa') {
+        const r = Math.max(1, 1.6 * this.camera.zoom * 0.4);
+        ctx.fillStyle = isHydrophobic(p.code) ? 'rgba(230,140,90,0.85)' : 'rgba(120,170,235,0.85)';
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === 'nt') {
+        const r = Math.max(1, 1.6 * this.camera.zoom * 0.4);
+        ctx.fillStyle = NUCLEOTIDE_COLOR[p.code] ?? '#ccc';
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === 'lipid') {
+        const r = Math.max(1, 1.4 * this.camera.zoom * 0.4);
+        ctx.fillStyle = 'rgba(245, 220, 160, 0.75)';
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === 'energy') {
+        const r = Math.max(1, 1.3 * this.camera.zoom * 0.4);
+        const pulse = 0.6 + 0.4 * Math.sin(this.animT * 0.3 + p.id);
+        ctx.fillStyle = `rgba(255, 240, 120, ${0.4 + pulse * 0.5})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === 'peptide') {
+        const r = Math.max(1.5, (2 + Math.sqrt(p.sequence.length)) * this.camera.zoom * 0.4);
+        const color = p.fold.isCatalyst && p.fold.catalysisClass ? CATALYST_COLOR[p.fold.catalysisClass] : 'rgba(180,180,190,0.7)';
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        if (p.fold.isCatalyst) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      } else if (p.kind === 'rna') {
+        const r = Math.max(1.5, (2 + Math.sqrt(p.sequence.length)) * this.camera.zoom * 0.4);
+        ctx.fillStyle = p.fold.isRibozyme ? 'rgba(199, 125, 255, 0.95)' : 'rgba(180, 150, 210, 0.6)';
+        ctx.beginPath();
+        // A small diamond distinguishes RNA from the round peptide dots at a glance.
+        ctx.moveTo(s.x, s.y - r);
+        ctx.lineTo(s.x + r, s.y);
+        ctx.lineTo(s.x, s.y + r);
+        ctx.lineTo(s.x - r, s.y);
+        ctx.closePath();
+        ctx.fill();
+        if (p.copying) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+    }
   }
 
   private drawCell(cell: Virtunism, p: { x: number; y: number }, r: number, showVision: boolean): void {

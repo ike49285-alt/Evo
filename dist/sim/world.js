@@ -131,8 +131,12 @@ export class World {
             createdTick: this.tick,
         });
         const baseOrganelles = buildOrganelles(template.loadout);
-        const clusterX = this.rng.range(this.width * 0.2, this.width * 0.8);
-        const clusterY = this.rng.range(this.height * 0.2, this.height * 0.8);
+        // A bootstrapped protocell has a real place it came from — spawn its
+        // founders right there (see main.ts) instead of the usual random
+        // cluster, so it visibly emerges from the pool rather than teleporting
+        // in from nowhere.
+        const clusterX = opts.spawnCenter?.x ?? this.rng.range(this.width * 0.2, this.width * 0.8);
+        const clusterY = opts.spawnCenter?.y ?? this.rng.range(this.height * 0.2, this.height * 0.8);
         const jitterPct = (value, pct) => Math.max(0.01, value * (1 + this.rng.gaussian(0, pct)));
         for (let i = 0; i < count; i++) {
             if (this.cells.length >= this.maxPopulation)

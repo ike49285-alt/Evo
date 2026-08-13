@@ -838,6 +838,8 @@ export class Origin {
                     this.bootstrapCandidates.push({
                         vesicleId: v.id,
                         tick: this.tick,
+                        x: v.x,
+                        y: v.y,
                         radius: v.radius,
                         peptides,
                         rnas,

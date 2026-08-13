@@ -1,5 +1,4 @@
 import { Renderer } from './render/renderer.js';
-import { OriginRenderer } from './render/originRenderer.js';
 import { ReproductionMode } from './sim/types.js';
 import { StarterLoadout, TRAIT_LIMITS, deriveMouthPower, deriveChloroplastPower } from './sim/genome.js';
 import { World } from './sim/world.js';
@@ -7,18 +6,20 @@ import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
 import { drawSparkline, drawScatter, ScatterPoint } from './ui/chart.js';
 import { drawTree, hitTestTree, TreeNodeScreenPos } from './ui/treeview.js';
-import { loadGame, saveGame, Stage } from './save.js';
+import { loadGame, saveGame } from './save.js';
 
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 1500;
-// A small, concentrated "tide pool" rather than a thin ocean — real
+// A small, concentrated "primordial pool" rather than a thin ocean — real
 // dilute-solution prebiotic chemistry runs into a genuine, well-known
 // "concentration problem" (see origin.ts's bondRadius comment); a denser
 // pool is the same fix real hypotheses reach for (tide pools, mineral
 // surfaces, evaporating basins concentrating solutes) rather than a purely
-// game-y shortcut.
+// game-y shortcut. It's a *region within* the same dish, not a separate
+// world — see renderer.ts's drawPool and POOL_OFFSET below.
 const ORIGIN_WIDTH = 800;
 const ORIGIN_HEIGHT = 500;
+const POOL_OFFSET = { x: (WORLD_WIDTH - ORIGIN_WIDTH) / 2, y: WORLD_HEIGHT - ORIGIN_HEIGHT - 100 };
 
 function el<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -26,28 +27,23 @@ function el<T extends HTMLElement>(id: string): T {
   return found as T;
 }
 
-// --- two coexisting top-level stages ---------------------------------
-// Origins is where life actually starts (see src/chem/) — the Dish (the
-// original organelle/Virtunism ecosystem) begins completely empty, and
-// only gets founders either by bootstrapping a stabilized protocell out
-// of Origins or by hand-designing one in the Designer tab. Both engines
-// keep ticking in the background regardless of which is on screen, so
-// switching tabs doesn't pause the one you're not looking at.
+// --- one continuous world --------------------------------------------
+// Origins (the chemistry — see src/chem/) and the Dish (the organelle/
+// Virtunism ecosystem) are two engines, but one world: the primordial pool
+// is a real region within the same dish (see POOL_OFFSET), not a separate
+// screen. A protocell that clears the bootstrap bar spawns its founders
+// automatically, right at the pool, with no button to click and nowhere
+// else to teleport to — see autoBootstrap() in the main loop.
 //
 // Both engines' state autosaves to localStorage every 5s (see save.ts)
 // and gets restored here on load if a save exists — a page reload or an
 // accidentally-closed tab doesn't cost you a run.
 const restored = loadGame();
-let stage: Stage = restored?.stage ?? 'origins';
-document.body.dataset.stage = stage; // don't rely solely on the static HTML attribute for this
-
-const originCanvas = el<HTMLCanvasElement>('origins-canvas');
-const originRenderer = new OriginRenderer(originCanvas);
 let origin = restored?.origin ?? Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
+let world = restored?.world ?? new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
 
 const canvas = el<HTMLCanvasElement>('sim-canvas');
 const renderer = new Renderer(canvas);
-let world = restored?.world ?? new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
 
 let paused = false;
 let speed = 1;
@@ -55,44 +51,38 @@ let speed = 1;
 // --- resize / camera -------------------------------------------------
 function handleResize(): void {
   renderer.resize();
-  originRenderer.resize();
 }
 window.addEventListener('resize', handleResize);
 handleResize();
 renderer.fitToWorld(world);
-originRenderer.fitToWorld(origin);
 
-function setupPanZoom(canvasEl: HTMLCanvasElement, target: { panByScreenDelta(dx: number, dy: number): void; zoomAt(x: number, y: number, f: number): void }): void {
-  let dragging = false;
-  let lastPointer = { x: 0, y: 0 };
-  canvasEl.addEventListener('pointerdown', (e) => {
-    dragging = true;
-    lastPointer = { x: e.clientX, y: e.clientY };
-    canvasEl.setPointerCapture(e.pointerId);
-  });
-  canvasEl.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const dx = e.clientX - lastPointer.x;
-    const dy = e.clientY - lastPointer.y;
-    lastPointer = { x: e.clientX, y: e.clientY };
-    target.panByScreenDelta(dx, dy);
-  });
-  window.addEventListener('pointerup', () => {
-    dragging = false;
-  });
-  canvasEl.addEventListener(
-    'wheel',
-    (e) => {
-      e.preventDefault();
-      const rect = canvasEl.getBoundingClientRect();
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      target.zoomAt(e.clientX - rect.left, e.clientY - rect.top, factor);
-    },
-    { passive: false },
-  );
-}
-setupPanZoom(canvas, renderer);
-setupPanZoom(originCanvas, originRenderer);
+let dragging = false;
+let lastPointer = { x: 0, y: 0 };
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  lastPointer = { x: e.clientX, y: e.clientY };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const dx = e.clientX - lastPointer.x;
+  const dy = e.clientY - lastPointer.y;
+  lastPointer = { x: e.clientX, y: e.clientY };
+  renderer.panByScreenDelta(dx, dy);
+});
+window.addEventListener('pointerup', () => {
+  dragging = false;
+});
+canvas.addEventListener(
+  'wheel',
+  (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    renderer.zoomAt(e.clientX - rect.left, e.clientY - rect.top, factor);
+  },
+  { passive: false },
+);
 
 // --- top bar controls --------------------------------------------------
 const btnPlay = el<HTMLButtonElement>('btn-play');
@@ -110,19 +100,15 @@ document.querySelectorAll<HTMLButtonElement>('.speed-btn').forEach((btn) => {
 });
 
 el<HTMLButtonElement>('btn-fit').addEventListener('click', () => {
-  if (stage === 'dish') renderer.fitToWorld(world);
-  else originRenderer.fitToWorld(origin);
+  renderer.fitToWorld(world);
 });
 
 el<HTMLButtonElement>('btn-reset').addEventListener('click', () => {
+  if (!confirm('Reset the whole world — wipe the pool and every evolved lineage, and start over from scratch?')) return;
+  origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
   world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
   renderer.fitToWorld(world);
   selectedIndividualId = null;
-});
-
-el<HTMLButtonElement>('btn-reset-origins').addEventListener('click', () => {
-  origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
-  originRenderer.fitToWorld(origin);
 });
 
 let showVision = false;
@@ -132,29 +118,7 @@ btnVision.addEventListener('click', () => {
   btnVision.classList.toggle('active', showVision);
 });
 
-// --- stage switcher -----------------------------------------------------
-function switchStage(next: Stage): void {
-  stage = next;
-  document.body.dataset.stage = stage;
-  document.querySelectorAll('.stage-btn').forEach((b) => b.classList.toggle('active', (b as HTMLElement).dataset.stage === stage));
-  document.querySelectorAll('.stage-view').forEach((v) => v.classList.remove('active'));
-  el(`${stage}-stage`).classList.add('active');
-  // A canvas that was display:none reports zero size, so its backing
-  // buffer and camera fit need to be redone the moment it becomes visible.
-  handleResize();
-  if (stage === 'dish') renderer.fitToWorld(world);
-  else originRenderer.fitToWorld(origin);
-}
-
-document.querySelectorAll<HTMLButtonElement>('.stage-btn').forEach((btn) => {
-  btn.addEventListener('click', () => switchStage(btn.dataset.stage as Stage));
-});
-
-// A restored save might have left off on the Dish — the static HTML/CSS
-// always assumes Origins is the active view on load, so sync it here.
-if (stage === 'dish') switchStage('dish');
-
-// --- sub-tabs (Designer / Ecosystem, inside the Dish stage) ------------
+// --- sidebar tabs (Designer / Ecosystem / Chemistry) --------------------
 document.querySelectorAll<HTMLButtonElement>('.tab-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
@@ -223,26 +187,36 @@ el<HTMLButtonElement>('btn-release').addEventListener('click', () => {
   );
 });
 
-// --- Origins: bootstrap into the Dish ------------------------------------
-const btnBootstrap = el<HTMLButtonElement>('btn-bootstrap');
-const bootstrapHint = el('bootstrap-hint');
-const FOUNDER_COUNT = 16; // a single evolved lineage still needs a real founding population in the Dish's own genetics — see world.ts's seedBaseSpecies note on why knife-edge-minimal founders keep failing
+// --- Origins: automatic bootstrap into the wider dish --------------------
+// No button, no screen change — a protocell that clears the bar just
+// starts existing as an ordinary founding lineage, spawned right where its
+// vesicle actually was in the pool. A single protocell is one lucky origin
+// event, not a designed species, so it gets a small founding handful (not
+// the Designer's larger release) — small enough to feel like "this one
+// thing made it," large enough not to be a coin-flip extinction the moment
+// it starts (see world.ts's seedBaseSpecies note on knife-edge founders).
+const BOOTSTRAP_FOUNDER_COUNT = 4;
+let totalBootstraps = 0;
 
-btnBootstrap.addEventListener('click', () => {
-  const candidate = origin.bootstrapCandidates.pop();
-  if (!candidate) return;
-  const translated = translateBootstrapCandidate(candidate);
-  world.addSpecies(translated.template, FOUNDER_COUNT, { name: translated.name, isPlayerDesigned: false });
-  switchStage('dish');
-});
+function autoBootstrap(): void {
+  while (origin.bootstrapCandidates.length > 0) {
+    const candidate = origin.bootstrapCandidates.shift();
+    if (!candidate) break;
+    const translated = translateBootstrapCandidate(candidate);
+    world.addSpecies(translated.template, BOOTSTRAP_FOUNDER_COUNT, {
+      name: translated.name,
+      isPlayerDesigned: false,
+      spawnCenter: { x: POOL_OFFSET.x + candidate.x, y: POOL_OFFSET.y + candidate.y },
+    });
+    totalBootstraps++;
+  }
+}
 
-function updateOriginsPanel(): void {
+// --- chemistry stats panel ------------------------------------------------
+function updateChemistryPanel(): void {
   const s = origin.getStats();
-  el('ohud-tick').textContent = String(s.tick);
-  el('ohud-vesicles').textContent = String(s.vesicleCount);
-  el('ohud-ready').textContent = String(origin.bootstrapCandidates.length);
-  el('ohud-perf').textContent = `${origin.perf.lastTickMs.toFixed(2)}ms`;
-
+  el('os-tick').textContent = String(s.tick);
+  el('os-bootstraps').textContent = String(totalBootstraps);
   el('os-aa').textContent = String(s.freeAminoAcids);
   el('os-nt').textContent = String(s.freeNucleotides);
   el('os-lipid').textContent = String(s.freeLipids);
@@ -255,19 +229,13 @@ function updateOriginsPanel(): void {
   el('os-longrna').textContent = String(s.longestRna);
   el('os-vesicles').textContent = String(s.vesicleCount);
   el('os-replevents').textContent = String(s.totalReplicationEvents);
-
-  const ready = origin.bootstrapCandidates.length;
-  btnBootstrap.disabled = ready === 0;
-  bootstrapHint.textContent =
-    ready > 0
-      ? `${ready} protocell${ready === 1 ? '' : 's'} ready — click to release its evolved chemistry as a founding species in the Dish.`
-      : 'No protocell has stabilized yet — one needs an active catalyst, at least two completed self-replication events, and to have survived a division with a replicator still inside. Once one qualifies, this releases its evolved chemistry as a founding species in the Dish.';
 }
 
 // --- HUD + stats panel ----------------------------------------------------
 const hudTick = el('hud-tick');
 const hudPop = el('hud-pop');
 const hudGen = el('hud-gen');
+const hudVesicles = el('hud-vesicles');
 const hudPerf = el('hud-perf');
 
 const sPop = el('s-pop');
@@ -301,7 +269,8 @@ function updateHudAndStats(): void {
   hudTick.textContent = String(live.tick);
   hudPop.textContent = String(live.population);
   hudGen.textContent = String(live.maxGeneration);
-  hudPerf.textContent = `${world.perf.lastTickMs.toFixed(2)}ms`;
+  hudVesicles.textContent = String(origin.vesicles.size);
+  hudPerf.textContent = `${(world.perf.lastTickMs + origin.perf.lastTickMs).toFixed(2)}ms`;
 
   sPop.textContent = String(live.population);
   sGen.textContent = String(live.maxGeneration);
@@ -416,8 +385,8 @@ function updateTree(): void {
 // running ticks: if it hits the budget partway through the requested
 // `speed` ticks, it just stops early and picks up next frame. A busy tick
 // degrades to a lower effective speed instead of freezing the tab. Both
-// engines share this one budget — Origins keeps evolving in the
-// background while you're watching the Dish, and vice versa.
+// engines share this one budget and always run together — there's no
+// screen to be "away from" that would pause one of them.
 const TICK_TIME_BUDGET_MS = 18;
 
 function frame(): void {
@@ -426,17 +395,14 @@ function frame(): void {
     for (let i = 0; i < speed; i++) {
       origin.update(1);
       world.update(1);
+      autoBootstrap();
       if (performance.now() - frameStart > TICK_TIME_BUDGET_MS) break;
     }
   }
-  if (stage === 'dish') {
-    renderer.draw(world, { showVision, highlightId: selectedIndividualId });
-    updateHudAndStats();
-    updateTree();
-  } else {
-    originRenderer.draw(origin);
-    updateOriginsPanel();
-  }
+  renderer.draw(world, origin, POOL_OFFSET, { showVision, highlightId: selectedIndividualId });
+  updateHudAndStats();
+  updateChemistryPanel();
+  updateTree();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -446,8 +412,8 @@ requestAnimationFrame(frame);
 // (covers the common "closed the tab before the next 5s tick" case that a
 // bare interval alone would miss — `visibilitychange` fires reliably on
 // tab close/switch, `beforeunload` is a backstop for browsers that skip it).
-setInterval(() => saveGame(origin, world, stage), 5000);
+setInterval(() => saveGame(origin, world), 5000);
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) saveGame(origin, world, stage);
+  if (document.hidden) saveGame(origin, world);
 });
-window.addEventListener('beforeunload', () => saveGame(origin, world, stage));
+window.addEventListener('beforeunload', () => saveGame(origin, world));
