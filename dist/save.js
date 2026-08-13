@@ -17,8 +17,14 @@ const SAVE_KEY = 'evo-save-v2';
 // the whole safety net — an old save that doesn't match just gets
 // discarded (fresh start) instead of half-loading into a corrupt state.
 // (v2: dropped the `stage` field when Origins/Dish merged into one
-// continuous world — there's no separate screen to remember anymore.)
-const SAVE_VERSION = 2;
+// continuous world — there's no separate screen to remember anymore.
+// v3: real gene-sequence genomes replaced the flat trait struct —
+// LineageInfo now requires a referenceSequence a v2 save wouldn't have
+// (checkSpeciation would crash on it), and the gene decode itself changed
+// from positional to sum-based, so even an old sequence that happened to
+// still have the right shape would silently decode to a different
+// phenotype than what was actually saved.)
+const SAVE_VERSION = 3;
 export function saveGame(origin, world) {
     try {
         const payload = {

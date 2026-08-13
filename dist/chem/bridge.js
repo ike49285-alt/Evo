@@ -36,6 +36,7 @@
  */
 import { encodeOrganelleGene, encodeUnit } from '../sim/genome.js';
 import { CORE_GENE_COUNT, GENE_LENGTH, LOCUS, decodeOrganelles } from '../sim/genes.js';
+import { TRAIT_LIMITS } from '../sim/types.js';
 /** All of a protocell's real surviving RNA content, concatenated into one
  * symbol stream — the raw material every one of its founder's genes gets
  * built from. Order follows `candidate.rnas` (insertion order into the
@@ -95,8 +96,7 @@ export function translateBootstrapCandidate(candidate) {
     // translation-layer failure to seed anything workable.
     if (chloroplastLean === 0 && mouthLean === 0)
         chloroplastLean = 1;
-    const organelleGeneCount = Math.min(10, // TRAIT_LIMITS.maxOrganelles, mirrored here to avoid importing genome.ts's whole constant table for one number
-    flagellaLean + mouthLean + chloroplastLean + eyeLean + armorLean);
+    const organelleGeneCount = Math.min(TRAIT_LIMITS.maxOrganelles, flagellaLean + mouthLean + chloroplastLean + eyeLean + armorLean);
     const rnaSymbols = flattenRnaSymbols(candidate);
     const totalGenes = CORE_GENE_COUNT + organelleGeneCount;
     const genes = drawGenesFromSymbols(rnaSymbols, totalGenes);

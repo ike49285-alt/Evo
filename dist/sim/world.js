@@ -54,15 +54,28 @@ export class World {
         this.maxLineageShare = 0.65;
         // Genetic-distance threshold (see genes.ts's geneticDistance, 0..1-ish
         // scale) past which a diverged individual founds its own species rather
-        // than staying counted under its parent lineage. Picked from an offline
-        // ensemble measurement (30-trial average per generation count, mutation
-        // operators as currently tuned): ~0.13 at 10 generations of drift, ~0.31
-        // at 50, saturating around 0.35-0.39 — 0.22 sits past the noise floor of
-        // a handful of mutations but well before the saturation ceiling, so it's
-        // reachable by real sustained drift without either firing on every birth
-        // or never firing at all. Not a rigorously derived constant — a tuned
-        // one, documented as such.
-        this.speciationThreshold = 0.22;
+        // than staying counted under its parent lineage. An earlier 0.22 (picked
+        // from an offline single-lineage ensemble average — 30 trials/generation
+        // count, ~0.13 at 10 generations, ~0.31 at 50) turned out badly wrong at
+        // population scale: headless-verified at 126 speciation events in 20k
+        // ticks (avg gap 132 ticks) against a capped, continuously-reproducing
+        // 320-individual population — an ensemble *average* doesn't see that
+        // hundreds of reproduction attempts per tick means even a modest per-
+        // individual chance of crossing a low bar fires constantly in aggregate.
+        // Recalibrated with a direct population-scale sweep instead (same 320-
+        // cap scenario, 20k ticks each): 0.22 -> 126 events/first@3479, 0.28 ->
+        // 21/first@15484, 0.32 -> 25/first@10332, 0.36 -> 9/first@16031, avg gap
+        // 485. 0.34 sits in that rare-but-reachable band — first event doesn't
+        // land until a population's had real sustained generations to drift
+        // through, not the first few hundred ticks. Note for future reading:
+        // this will still show recurring events in a long enough run even at a
+        // high threshold — a promoted lineage's reference resets to 0 distance,
+        // and geneticDistance itself saturates (doesn't grow unboundedly), so
+        // *any* threshold below the saturation ceiling is eventually crossed by
+        // a deep-enough lineage again. That's an inherent property of a bounded-
+        // metric random walk with reference-reset, not a bug — the tuning
+        // question is the steady-state cadence, not eliminating recurrence.
+        this.speciationThreshold = 0.34;
         this.predationSizeRatio = 0.88; // prey must be <= predator.size * this
         this.statsSampleInterval = 10;
         this.maxHistory = 400;
