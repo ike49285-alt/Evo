@@ -1,4 +1,4 @@
-import { crossoverGenome, deriveEnergyCapture, deriveEnergyCapturePower, deriveMaxSpeed, deriveMotorPower, derivePredationCount, derivePredationPower, deriveSensors, deriveStructureBonus, deriveStructurePower, deriveTurnRate, deserializeGenome, mutateGenome, serializeGenome, } from './genome.js';
+import { crossoverGenome, deriveCanEat, deriveEnergyCapture, deriveEnergyCapturePower, deriveMaxSpeed, deriveMotorPower, derivePredationPower, deriveSensorCount, deriveStructureBonus, deriveStructurePower, deriveTurnRate, deserializeGenome, mutateGenome, serializeGenome, } from './genome.js';
 import { Rng } from './rng.js';
 let nextId = 1;
 /** The module-level id counter is process-global, not per-World — a saved
@@ -180,7 +180,7 @@ export class Virtunism {
         const motorPower = deriveMotorPower(this.genome) * mult;
         const predationPower = derivePredationPower(this.genome) * mult;
         const energyCapturePower = deriveEnergyCapturePower(this.genome) * mult;
-        const sensorCount = deriveSensors(this.genome).length;
+        const sensorCount = deriveSensorCount(this.genome);
         const structurePower = deriveStructurePower(this.genome) * mult;
         const baseUpkeep = 0.002 + 0.005 * size * size + 0.0008 * (this.genome.senseRadius / 100);
         const proteinUpkeep = 0.0035 * motorPower + 0.0025 * predationPower + 0.0015 * energyCapturePower + 0.0006 * sensorCount + 0.002 * structurePower;
@@ -206,7 +206,7 @@ export class Virtunism {
         return 0.4 + derivePredationPower(this.genome) * this.expressionMultiplier * 0.5;
     }
     get canEat() {
-        return derivePredationCount(this.genome) > 0;
+        return deriveCanEat(this.genome);
     }
     /** Effective size for predation purposes — armor counts without costing
      * full chassis growth. */

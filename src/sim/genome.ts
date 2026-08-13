@@ -13,6 +13,7 @@ import {
   mutateGeneSequence,
   randomGeneSequence,
 } from './genes.js';
+import { CATALYSIS_CLASSES } from '../chem/polymer.js';
 import { NUCLEOTIDE_CODES } from '../chem/elements.js';
 
 export { TRAIT_LIMITS };
@@ -36,20 +37,26 @@ export interface Genome {
   hue: number; // 0-360, cosmetic + lets you track lineages visually
   proteins: ProteinPhenotype[];
   brain: NeuralNet;
+  // Precomputed once here, not re-derived per call — genome.proteins never
+  // changes after construction (mutation/crossover always build a *new*
+  // Genome via genomeFromSequence, never mutate an existing one in place),
+  // but classPower()/hasClass() used to re-scan the whole proteins array
+  // on every single call. A real headless profile (see NOTES.md) found
+  // that scan — specifically Virtunism.canEat, called for every nearby
+  // individual a virtunism senses, every tick, for every cell — was the
+  // single dominant per-tick cost once genomes routinely carried 10+
+  // proteins (~25% of total runtime on its own, more than the actual
+  // physics: distance math, neural net forward passes, everything else
+  // combined). Not part of the public "trait" vocabulary (deliberately
+  // not documented alongside size/senseRadius/etc above) — an internal
+  // cache, read only through classPower()/countOfClass()/hasClass()
+  // below, never touched directly by callers outside this file.
+  readonly classPowerCache: Readonly<Record<CatalysisClass, number>>;
+  readonly classCountCache: Readonly<Record<CatalysisClass, number>>;
 }
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
-}
-
-function decodePhenotype(sequence: GeneSequence): Omit<Genome, 'sequence' | 'brain'> {
-  return { ...decodeCoreTraits(sequence), proteins: decodeProteins(sequence) };
-}
-
-// ---- derived physical stats (computed from real protein folds, not looked up) --------
-
-function proteinsOf(genome: Genome, cls: CatalysisClass): ProteinPhenotype[] {
-  return genome.proteins.filter((p) => p.fold.catalysisClass === cls);
 }
 
 // A single fold's catalysisStrength is one molecule's worth of activity —
@@ -65,14 +72,61 @@ function proteinsOf(genome: Genome, cls: CatalysisClass): ProteinPhenotype[] {
 // measurement of the fold's real quality.
 const GENE_EXPRESSION_SCALE = 12;
 
+/** Single pass over a genome's real proteins, building both per-class
+ * caches at once (power-sum and raw count) — see Genome.classPowerCache's
+ * comment for why this exists at all instead of being recomputed on
+ * every classPower()/hasClass() call. */
+function computeClassCaches(proteins: readonly ProteinPhenotype[]): {
+  classPowerCache: Record<CatalysisClass, number>;
+  classCountCache: Record<CatalysisClass, number>;
+} {
+  const classPowerCache = {} as Record<CatalysisClass, number>;
+  const classCountCache = {} as Record<CatalysisClass, number>;
+  for (const cls of CATALYSIS_CLASSES) {
+    classPowerCache[cls] = 0;
+    classCountCache[cls] = 0;
+  }
+  for (const p of proteins) {
+    const cls = p.fold.catalysisClass;
+    if (cls === null) continue;
+    classPowerCache[cls] += p.fold.catalysisStrength;
+    classCountCache[cls] += 1;
+  }
+  for (const cls of CATALYSIS_CLASSES) classPowerCache[cls] *= GENE_EXPRESSION_SCALE;
+  return { classPowerCache, classCountCache };
+}
+
+function decodePhenotype(sequence: GeneSequence): Omit<Genome, 'sequence' | 'brain'> {
+  const core = decodeCoreTraits(sequence);
+  const proteins = decodeProteins(sequence);
+  const { classPowerCache, classCountCache } = computeClassCaches(proteins);
+  return { ...core, proteins, classPowerCache, classCountCache };
+}
+
+// ---- derived physical stats (computed from real protein folds, not looked up) --------
+
+function proteinsOf(genome: Genome, cls: CatalysisClass): ProteinPhenotype[] {
+  return genome.proteins.filter((p) => p.fold.catalysisClass === cls);
+}
+
+/** O(1) — reads Genome.classCountCache, computed once at construction. */
+function countOfClass(genome: Genome, cls: CatalysisClass): number {
+  return genome.classCountCache[cls];
+}
+
+/** O(1) — same cache, just compared against zero. */
+function hasClass(genome: Genome, cls: CatalysisClass): boolean {
+  return genome.classCountCache[cls] > 0;
+}
+
 /** Total real catalytic strength across every protein that folded into
  * this class, scaled by gene expression — the emergent replacement for
  * "sum of organelle sizes of kind X". A genome can carry any number of
- * proteins contributing to any class; there's no slot system. */
+ * proteins contributing to any class; there's no slot system. O(1): reads
+ * Genome.classPowerCache, computed once at construction (see its
+ * comment) rather than re-summing genome.proteins on every call. */
 function classPower(genome: Genome, cls: CatalysisClass): number {
-  let sum = 0;
-  for (const p of genome.proteins) if (p.fold.catalysisClass === cls) sum += p.fold.catalysisStrength;
-  return sum * GENE_EXPRESSION_SCALE;
+  return genome.classPowerCache[cls];
 }
 
 /** Top speed a virtunism's motor-class proteins can push it to. Zero
@@ -84,7 +138,7 @@ export function deriveMaxSpeed(genome: Genome): number {
 
 /** More motor proteins spread around the rim = a more maneuverable body. */
 export function deriveTurnRate(genome: Genome): number {
-  return 0.08 + Math.min(0.25, proteinsOf(genome, 'motor').length * 0.03);
+  return 0.08 + Math.min(0.25, countOfClass(genome, 'motor') * 0.03);
 }
 
 export function deriveMotorPower(genome: Genome): number {
@@ -92,7 +146,17 @@ export function deriveMotorPower(genome: Genome): number {
 }
 
 export function derivePredationCount(genome: Genome): number {
-  return proteinsOf(genome, 'protease').length;
+  return countOfClass(genome, 'protease');
+}
+
+/** Whether this genome has *any* real predation capability at all — a
+ * cheap yes/no a lot of per-tick, per-neighbor checks only ever need
+ * (see Virtunism.canEat). Kept as its own function rather than routed
+ * through derivePredationCount()'s full count so those call sites get
+ * the early-exit, allocation-free path instead of paying for a count
+ * they were only going to compare against zero. */
+export function deriveCanEat(genome: Genome): boolean {
+  return hasClass(genome, 'protease');
 }
 
 export function derivePredationPower(genome: Genome): number {
@@ -135,6 +199,13 @@ export function deriveStructureMitigation(genome: Genome): number {
  * to provide, just keyed off real fold class instead of a kind label. */
 export function deriveSensors(genome: Genome): ProteinPhenotype[] {
   return proteinsOf(genome, 'photoreceptor');
+}
+
+/** Allocation-free count for callers (Virtunism.metabolize's upkeep term)
+ * that only need how many, not the sensors themselves — see
+ * countOfClass's comment for why this distinction is worth having. */
+export function deriveSensorCount(genome: Genome): number {
+  return countOfClass(genome, 'photoreceptor');
 }
 
 // A real replication-machinery investment is what a real lineage would

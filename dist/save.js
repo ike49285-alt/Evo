@@ -30,8 +30,17 @@ const SAVE_KEY = 'evo-save-v2';
 // (it's Genome.proteins, a different shape), and protein-coding genes are
 // PROTEIN_GENE_LENGTH symbols instead of the old organelle genes'
 // GENE_LENGTH, so a v3 sequence wouldn't even decode to the right gene
-// boundaries, let alone the right meaning.)
-const SAVE_VERSION = 4;
+// boundaries, let alone the right meaning.
+// v5: Genome gained classPowerCache/classCountCache (a real-headless-
+// profile-driven perf fix — see genome.ts's comment on Genome — computed
+// once at construction instead of re-scanning genome.proteins on every
+// classPower()/hasClass() call). serializeGenome spreads the whole
+// Genome object as-is, so these ride along for free on a *new* save, but
+// a v4 save predates them entirely — deserializing one would hand
+// classPower()/hasClass() `undefined[cls]` and crash immediately, not
+// silently misbehave, so this has to be a hard version bump like the
+// others rather than something patched over on load.)
+const SAVE_VERSION = 5;
 export function saveGame(origin, world) {
     try {
         const payload = {

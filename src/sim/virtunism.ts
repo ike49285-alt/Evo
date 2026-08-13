@@ -1,12 +1,12 @@
 import {
   crossoverGenome,
+  deriveCanEat,
   deriveEnergyCapture,
   deriveEnergyCapturePower,
   deriveMaxSpeed,
   deriveMotorPower,
-  derivePredationCount,
   derivePredationPower,
-  deriveSensors,
+  deriveSensorCount,
   deriveStructureBonus,
   deriveStructurePower,
   deriveTurnRate,
@@ -244,7 +244,7 @@ export class Virtunism implements GridPoint {
     const motorPower = deriveMotorPower(this.genome) * mult;
     const predationPower = derivePredationPower(this.genome) * mult;
     const energyCapturePower = deriveEnergyCapturePower(this.genome) * mult;
-    const sensorCount = deriveSensors(this.genome).length;
+    const sensorCount = deriveSensorCount(this.genome);
     const structurePower = deriveStructurePower(this.genome) * mult;
 
     const baseUpkeep = 0.002 + 0.005 * size * size + 0.0008 * (this.genome.senseRadius / 100);
@@ -278,7 +278,7 @@ export class Virtunism implements GridPoint {
   }
 
   get canEat(): boolean {
-    return derivePredationCount(this.genome) > 0;
+    return deriveCanEat(this.genome);
   }
 
   /** Effective size for predation purposes — armor counts without costing
