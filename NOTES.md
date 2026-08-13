@@ -123,15 +123,14 @@ founding time and never anything the simulation itself discovered.
 - **Emergent speciation** (`World.checkSpeciation`, called right before an
   individual actually reproduces — not at birth, so a one-off mutant that
   never passes anything on doesn't get to register as a "species"): if a
-  cell's genome has diverged past `speciationThreshold` (0.22) from its
+  cell's genome has diverged past `speciationThreshold` (0.34) from its
   lineage's `referenceSequence`, it founds a brand-new lineage right
   there — new id, its own genome becomes the new reference,
   `parentLineageId` set to the old lineage, itself and its descendants
-  reassigned. Threshold picked from an offline ensemble measurement (30
-  trials/generation-count, current mutation tuning): ~0.13 average
-  distance at 10 generations of drift, ~0.31 at 50, saturating around
-  0.35-0.39 — 0.22 sits past the noise floor of a handful of mutations
-  but under the saturation ceiling.
+  reassigned. Threshold (0.34) came from a direct population-scale sweep,
+  not the offline single-lineage ensemble average that was tried first —
+  see the verification section below for why the ensemble approach
+  under-predicted the real firing rate by over an order of magnitude.
 - **`geneticDistance`** is an explicitly documented proxy, not a rigorous
   population-genetics statistic: 0.5× per-locus core-trait distance +
   0.5× an alignment-free organelle-kind histogram distance. Real sequence
@@ -146,6 +145,70 @@ founding time and never anything the simulation itself discovered.
   edge (dashed, colored by the new lineage's hue) and a dashed ring
   around the founding node, instead of an ordinary parent→child line —
   see `TreeNode.isSpeciationEvent` / `ui/treeview.ts`.
+
+### Genes/speciation — verified, including a real bug caught and fixed
+
+- **Gene mutation/crossover stress-tested at scale**: 20,000+ random
+  mutation/crossover cycles, including deliberately adversarial edge
+  cases (0-organelle and 1-organelle genomes run through 2,000
+  consecutive mutation generations each) — organelle count always stayed
+  within `TRAIT_LIMITS.maxOrganelles`, decoded traits always stayed
+  in-bounds, zero crashes. `geneticDistance` sanity-checked over 2,000
+  random pairs: symmetric, 0 for identical genomes, bounded to [0,1].
+- **A real bug, caught by headless verification, not guessed at**: the
+  first `checkSpeciation` implementation used a threshold (0.22) picked
+  from an offline *ensemble average* of genetic distance after N
+  generations of drift on a single isolated lineage. At actual population
+  scale it was wrong by over an order of magnitude — 126 speciation
+  events in 20,000 ticks against a capped, continuously-reproducing
+  320-individual population, a new species roughly every 132 ticks. Root
+  cause: the gene decode was positional base-4 (place-value), so a single
+  point mutation to a gene's *first* symbol could swing a decoded trait
+  by up to 75% of its whole range in one generation — an ensemble
+  *average* doesn't surface that kind of heavy-tailed single-mutation
+  jump, and hundreds of reproduction attempts per tick turned even a
+  modest per-individual chance of a big jump into near-constant firing.
+  Fixed by switching `decodeUnitFromSymbols` to sum-based decoding, where
+  every symbol contributes equally and boundedly (~1/`GENE_LENGTH` of the
+  range) — also a more realistic many-small-effect-loci model than one
+  dominant digit.
+- **Threshold recalibrated against real population dynamics**, not
+  re-guessed: a direct sweep (same 320-cap scenario, 20k ticks each) —
+  0.22 → 126 events, first@3479; 0.28 → 21, first@15484; 0.32 → 25,
+  first@10332; 0.36 → 9, first@16031. Settled on 0.34.
+- **Longer-horizon, multi-seed confirmation at the final threshold**
+  (60k ticks, 3 seeds): speciation fired reliably in all three (first
+  event between tick 6,589 and 10,332 — never absent, never instant).
+  Total historical founding events were high (111-237 over the run) but
+  almost all of those newly-founded lineages went extinct shortly after
+  — expected, since a promoted individual isn't handed a safety-net
+  founder population the way `addSpecies`/bootstrap founders are, it's
+  just the one diverged individual and whatever it manages to reproduce.
+  What actually matters for the player-facing "Living species" stat is
+  *standing* diversity, not historical churn: it settled to 8-22
+  concurrently-living species across the three seeds by tick 60,000 (the
+  Tree of Life view is already pruned to living lineages + their
+  ancestors, so this churn doesn't clutter it either). Worth flagging
+  honestly for future reading: this model doesn't converge to a fixed
+  species count — `geneticDistance` itself saturates rather than growing
+  unboundedly, and a promoted lineage's reference resets to 0 distance,
+  so *any* threshold below the saturation ceiling is eventually crossed
+  again by a deep-enough lineage. Recurring speciation waves in a very
+  long run are an inherent property of this design, not a bug; the
+  tuning question was the steady-state cadence, not eliminating
+  recurrence entirely.
+- **Bootstrap founder genes verified against synthetic-but-structurally-
+  real `BootstrapCandidate`s**: confirmed deterministic (same candidate →
+  same sequence), confirmed the wraparound path produces a valid full
+  gene sequence even from RNA content shorter than one gene's worth of
+  symbols, and confirmed the one preserved viability guarantee (a founder
+  never decodes to zero mouths *and* zero chloroplasts) held across
+  catalyst-rich, catalyst-poor, and zero-catalyst synthetic candidates.
+  **Not yet verified: a bootstrap-derived founder's genes surviving and
+  visibly evolving over a long run** — the translation pipeline itself is
+  confirmed correct and deterministic, but whether a real RNA-derived
+  starting sequence behaves any differently in practice from a
+  hand-designed one over thousands of generations is still open.
 
 ## What was actually verified this round (be honest about this again)
 
