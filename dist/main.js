@@ -24,6 +24,41 @@ function el(id) {
         throw new Error(`Missing element #${id}`);
     return found;
 }
+// --- in-page confirmation ------------------------------------------------
+// Deliberately not window.confirm(): this app also ships bundled as a
+// single-file Artifact, rendered inside a sandboxed iframe — and native
+// browser dialogs are commonly blocked or silently return `false` in
+// that context (mobile Safari in particular). A blocked confirm() made
+// Reset World look completely broken: `if (!confirm(...)) return;` bails
+// out instantly and silently the moment confirm() can't actually show
+// anything, with no error and no visible dialog to explain why nothing
+// happened. This is a real DOM-built substitute, immune to that.
+const confirmOverlay = el('confirm-overlay');
+const confirmMessage = el('confirm-message');
+const confirmOkBtn = el('confirm-ok');
+const confirmCancelBtn = el('confirm-cancel');
+function confirmDialog(message) {
+    confirmMessage.textContent = message;
+    confirmOverlay.hidden = false;
+    return new Promise((resolve) => {
+        const cleanup = (result) => {
+            confirmOverlay.hidden = true;
+            confirmOkBtn.removeEventListener('click', onOk);
+            confirmCancelBtn.removeEventListener('click', onCancel);
+            confirmOverlay.removeEventListener('click', onOverlayClick);
+            resolve(result);
+        };
+        const onOk = () => cleanup(true);
+        const onCancel = () => cleanup(false);
+        const onOverlayClick = (e) => {
+            if (e.target === confirmOverlay)
+                cleanup(false);
+        };
+        confirmOkBtn.addEventListener('click', onOk);
+        confirmCancelBtn.addEventListener('click', onCancel);
+        confirmOverlay.addEventListener('click', onOverlayClick);
+    });
+}
 // --- one continuous world --------------------------------------------
 // Origins (the chemistry — see src/chem/) and the Dish (the organelle/
 // Virtunism ecosystem) are two engines, but one world: the primordial pool
@@ -89,8 +124,9 @@ document.querySelectorAll('.speed-btn').forEach((btn) => {
 el('btn-fit').addEventListener('click', () => {
     renderer.fitToWorld(world);
 });
-el('btn-reset').addEventListener('click', () => {
-    if (!confirm('Reset the whole world — wipe the pool and every evolved lineage, and start over from scratch?'))
+el('btn-reset').addEventListener('click', async () => {
+    const ok = await confirmDialog('Reset the whole world — wipe the pool and every evolved lineage, and start over from scratch?');
+    if (!ok)
         return;
     origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
     world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);

@@ -114,6 +114,40 @@ html, body {
 .btn.wide { width: 100%; padding: 10px; font-weight: 600; }
 .btn.active { background: var(--accent); border-color: var(--accent); color: var(--ink); }
 
+/* In-page confirmation, not window.confirm() — a real bug, not
+   precaution: this app also ships as a bundled single-file Artifact
+   rendered inside a sandboxed iframe, and native browser dialogs
+   (confirm/alert/prompt) are commonly blocked or silently return false
+   in that context, especially on mobile Safari. A blocked confirm()
+   made Reset World look completely broken — the guard clause bailed
+   out immediately with no visible dialog and no error, since a
+   suppressed confirm() just returns false. */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 10, 8, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.confirm-overlay[hidden] { display: none; }
+.confirm-box {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  max-width: 340px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.confirm-box p {
+  margin: 0 0 16px;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--text);
+}
+.confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
 .speed-group { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .speed-btn {
   background: var(--btn-bg); color: var(--text-dim); border: none;

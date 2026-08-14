@@ -243,6 +243,16 @@
     </main>
   </div>
 
+  <div id="confirm-overlay" class="confirm-overlay" hidden>
+    <div class="confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="confirm-message">
+      <p id="confirm-message"></p>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" class="btn">Cancel</button>
+        <button id="confirm-ok" class="btn danger">Reset World</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="dist/main.js"></script>
 </body>
 </html>
