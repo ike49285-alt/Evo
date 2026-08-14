@@ -160,7 +160,15 @@ html, body {
 main { flex: 1 1 auto; display: flex; min-height: 0; }
 
 .canvas-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
-#sim-canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+/* touch-action: none is load-bearing, not decorative — without it the
+   browser's own native touch gesture handling (page pinch-zoom, page
+   pan/scroll) claims two-finger and drag gestures on the canvas before
+   any JS handler sees them, regardless of preventDefault() in a
+   pointermove/touchmove listener. That's the actual cause of "zoom only
+   works on the page, not the box": there was no pinch handling here at
+   all, so a two-finger gesture had nothing *but* the browser's native
+   page-zoom to fall back to. */
+#sim-canvas { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 #sim-canvas:active { cursor: grabbing; }
 
 .hud {

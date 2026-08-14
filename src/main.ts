@@ -92,23 +92,85 @@ window.addEventListener('resize', handleResize);
 handleResize();
 renderer.fitToWorld(world);
 
-let dragging = false;
-let lastPointer = { x: 0, y: 0 };
+// Drag-to-pan (mouse, or one finger) and pinch-to-zoom (two fingers) share
+// one pointer-tracking map keyed by pointerId — a pinch is two
+// independent pointers moving at once, not a single gesture object the
+// way native browser chrome hands it to you, so it has to be built from
+// the raw Pointer Events stream. touch-action: none on #sim-canvas (see
+// style.css) is what actually stops the browser's own page pinch-zoom/
+// pan from claiming these touches before this code ever sees them —
+// without it, a real gap: there was no pinch handling here at all, so a
+// two-finger gesture had nothing but the browser's native page-zoom to
+// fall back to, which is exactly "zoom works on the page, not the box."
+const activePointers = new Map<number, { x: number; y: number }>();
+let lastPinchDist: number | null = null;
+
+function canvasPoint(e: PointerEvent): { x: number; y: number } {
+  const rect = canvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function pinchState(): { midX: number; midY: number; dist: number } | null {
+  if (activePointers.size !== 2) return null;
+  const [a, b] = [...activePointers.values()];
+  return { midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) };
+}
+
 canvas.addEventListener('pointerdown', (e) => {
-  dragging = true;
-  lastPointer = { x: e.clientX, y: e.clientY };
-  canvas.setPointerCapture(e.pointerId);
+  // Capture is a nice-to-have (keeps a drag/pinch tracking correctly even
+  // if a finger slides past the canvas edge) — not required for the
+  // tracking logic below to work at all, so a capture failure shouldn't
+  // be able to take the whole gesture system down with it. Real
+  // headless-verified failure mode, not a defensive guess: synthetic
+  // pointer events (and apparently some real-world edge cases too) can
+  // make setPointerCapture throw "no active pointer with the given id",
+  // and an uncaught throw here aborted the rest of this handler —
+  // activePointers never got the new pointer, silently desyncing every
+  // pinch/pan computed from it afterward.
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {
+    // ignored — see above
+  }
+  activePointers.set(e.pointerId, canvasPoint(e));
+  // A second finger landing establishes the pinch's starting distance —
+  // the very next pointermove diffs against this instead of jumping.
+  lastPinchDist = pinchState()?.dist ?? null;
 });
+
 canvas.addEventListener('pointermove', (e) => {
-  if (!dragging) return;
-  const dx = e.clientX - lastPointer.x;
-  const dy = e.clientY - lastPointer.y;
-  lastPointer = { x: e.clientX, y: e.clientY };
-  renderer.panByScreenDelta(dx, dy);
+  if (!activePointers.has(e.pointerId)) return;
+  const prev = activePointers.get(e.pointerId)!;
+  const next = canvasPoint(e);
+  activePointers.set(e.pointerId, next);
+
+  const pinch = pinchState();
+  if (pinch) {
+    // Two fingers down: pinch-to-zoom, anchored at their midpoint — the
+    // touch equivalent of the wheel handler's cursor-anchored zoom below.
+    // Single-finger panning is suspended for the duration of a pinch;
+    // recomputing both from the same two points at once just fights.
+    if (lastPinchDist !== null && lastPinchDist > 0) {
+      renderer.zoomAt(pinch.midX, pinch.midY, pinch.dist / lastPinchDist);
+    }
+    lastPinchDist = pinch.dist;
+    return;
+  }
+
+  if (activePointers.size === 1) {
+    renderer.panByScreenDelta(next.x - prev.x, next.y - prev.y);
+  }
 });
-window.addEventListener('pointerup', () => {
-  dragging = false;
-});
+
+function releasePointer(e: PointerEvent): void {
+  activePointers.delete(e.pointerId);
+  // Dropping back to one finger (or zero) needs a fresh pinch baseline
+  // next time a second finger lands, not a stale distance from before.
+  lastPinchDist = pinchState()?.dist ?? null;
+}
+canvas.addEventListener('pointerup', releasePointer);
+canvas.addEventListener('pointercancel', releasePointer);
+
 canvas.addEventListener(
   'wheel',
   (e) => {
