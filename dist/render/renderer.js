@@ -103,6 +103,38 @@ export class Renderer {
         ctx.strokeStyle = 'rgba(120,160,220,0.35)';
         ctx.lineWidth = 2;
         ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+        // A faint reference grid, clipped to the dish — the dish's own fill
+        // (`#0f1c30`) is only barely lighter than the canvas background behind
+        // it (`#0b1220`), so a zoomed-in view of any genuinely empty stretch of
+        // the dish (there's a lot of one early on: the population starts at
+        // zero and the pool itself only covers a fraction of the space) reads
+        // as flat, featureless nothing — indistinguishable from having scrolled
+        // clean off the world, even though the camera math is working
+        // correctly. This exists purely so "empty" still visibly reads as
+        // "inside the dish, currently empty" at any zoom level, not "did
+        // something break." Spaced at a fixed *world* interval (not a fixed
+        // screen interval) so it also doubles as a real distance reference:
+        // the physical size of a grid cell doesn't change as you zoom.
+        const gridStep = 200;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+        ctx.clip();
+        ctx.strokeStyle = 'rgba(120,160,220,0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let gx = 0; gx <= world.width; gx += gridStep) {
+            const p = this.worldToScreen(gx, 0);
+            ctx.moveTo(p.x, topLeft.y);
+            ctx.lineTo(p.x, bottomRight.y);
+        }
+        for (let gy = 0; gy <= world.height; gy += gridStep) {
+            const p = this.worldToScreen(0, gy);
+            ctx.moveTo(topLeft.x, p.y);
+            ctx.lineTo(bottomRight.x, p.y);
+        }
+        ctx.stroke();
+        ctx.restore();
         this.drawPool(origin, poolOffset);
         // carrion — the only discrete food item; there's no ambient plant food
         ctx.fillStyle = '#b5502f';

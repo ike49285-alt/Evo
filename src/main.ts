@@ -109,6 +109,29 @@ el<HTMLButtonElement>('btn-reset').addEventListener('click', () => {
   world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
   renderer.fitToWorld(world);
   selectedIndividualId = null;
+  // Session-level bookkeeping that isn't part of origin/world themselves
+  // still needs a real reset here, or a reset after Stage 0 had already
+  // retired (the common case — retirement fires in a few thousand ticks,
+  // so most real reset clicks happen after it) hands the brand-new,
+  // empty pool a `stage0Retired = true` it never earned: the fresh
+  // world's own population is 0, so updateStage0Retirement()'s extinction
+  // check would normally un-latch it on the very next tick anyway, but
+  // that's an accident of the current threshold logic, not something to
+  // depend on — reset explicitly instead of hoping the next tick's check
+  // happens to cover it.
+  stage0Retired = false;
+  sustainedAboveThresholdTicks = 0;
+  totalBootstraps = 0;
+  osRetiredNotice.style.display = 'none';
+  // Persist the reset immediately rather than waiting for the next 5s
+  // autosave tick — a real bug, not a hypothetical: reload the page
+  // inside that window (easy to do right after a deliberate reset, e.g.
+  // to double-check it "took") and loadGame() hands back the *previous*
+  // save, since the fresh empty world was never written to storage yet.
+  // From the player's side that reads as "I hit Reset and my old
+  // population just came back" — indistinguishable from Reset silently
+  // not working at all.
+  saveGame(origin, world);
 });
 
 let showVision = false;
