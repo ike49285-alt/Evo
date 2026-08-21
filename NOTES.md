@@ -257,14 +257,68 @@ founding time and never anything the simulation itself discovered.
   the (much more common) free-floating completions — several
   verification runs reported "zero replication" when the real answer
   was "the stat can't see most of it."
-- **Not yet verified: a full bootstrap occurring *naturally*.** This
-  needs 2+ replication events *inside the same vesicle* plus that
-  vesicle surviving a division — a much rarer compound event than a
-  single free-floating completion. An extended run on the one seed
-  that had produced a completion (to 75k further ticks past its first)
-  didn't produce a second, and a dedicated 200k-tick run afterward
-  produced zero. This is a real, unresolved rarity question, not a
-  bug — don't claim a natural bootstrap has been seen until one has.
+- **A sixth mass-conservation bug, caught by the same discipline,
+  during the later abiogenesis-tuning session**: `templatedReplication`
+  had no `consumed`-id tracking within its own single pass —
+  `condensePolymers` already has this exact pattern (a `Set` of ids
+  used so far this pass), it just was never applied here. Since the
+  grid snapshot a pass reads from isn't rebuilt *within* a single pass
+  (only between passes — see #3 above), two different templates in the
+  same tick could target the same free nucleotide or energy particle;
+  the second one's `removeParticle()` on an already-gone id is a
+  harmless no-op, but `p.copying.built.push()` ran regardless, silently
+  minting a nucleotide-equivalent with no real free particle behind it.
+  Invisible at the old (lower) reaction rates; a direct mass-ledger
+  check (free + in-polymer + mid-copy-built counts, tracked every 2000
+  ticks) caught +5 phantom nucleotides over 30k ticks the moment rates
+  were raised as part of the "make natural abiogenesis actually
+  reachable" pass. Fixed with the same `consumed`-Set pattern
+  `condensePolymers` already uses; re-verified as exactly zero drift
+  (aa/nt/lipid all held constant) over the same 30k-tick run.
+- **Still not verified: a full bootstrap occurring *naturally* — but
+  the reason changed, and it's worth recording precisely.** A later
+  session ("make natural abiogenesis actually reachable") found and
+  fixed a real structural bug: `divideVesicle()` hard-reset
+  `replicationEvents: 0` on both daughters, while `isBootstrapEligible`
+  requires `replicationEvents >= 2 && divisions >= 1` on the *same*
+  vesicle object — meaning a vesicle was structurally incapable of ever
+  qualifying on replication it completed before its first split; the
+  instant it divided, both daughters needed two brand-new completions
+  specifically timed *after* that division. Fixed by carrying the count
+  through division in full (a lineage's replicative track record
+  belongs to both branches equally — real daughter cells inherit
+  working machinery, they don't re-earn it), verified in isolation with
+  a synthetic vesicle (5 pre-division replicationEvents → both
+  daughters correctly inherit 5, and the daughter that keeps its
+  catalyst+replicator together becomes eligible immediately, no further
+  replication needed). Paired with a modest (~1.5-2x) concentration/rate
+  nudge — same 800x500 footprint, more copies of everything, higher
+  condensation/catalyst-boost/replication-start/replication-extension
+  rates, more energy throughput to match — chosen deliberately modest
+  rather than aggressive.
+
+  Headless-verified the *result* honestly, not assumed: across a
+  10-seed x 80,000-tick sweep (800,000 total ticks), every single seed
+  now reaches at least one real division (most within 10k-26k ticks,
+  2 of 10 reaching a second division) — a dramatic, measured
+  improvement in that specific milestone's reliability. But zero of the
+  10 seeds reached a full natural bootstrap. A dedicated diagnostic
+  pass on top (tracking, tick by tick, whether *any* vesicle ever
+  simultaneously held `replicationEvents >= 2 && divisions >= 1`) found
+  that gate was never once cleared in an 80,000-tick seed — meaning the
+  fixed division-reset bug, real as it was, was not actually the
+  proximate bottleneck in practice: the dominant rare event is still
+  just getting 2 full templated copies to complete *specifically while
+  the template is trapped inside a vesicle*, independent of division
+  entirely. This lines up with what the file already documented above —
+  the overwhelming majority of real completions happen free-floating in
+  the open soup, not inside membranes — and explains why raising
+  concentration/rates alone (which helped every *other* milestone
+  measurably) didn't move this one enough on its own. A further,
+  bigger push specifically on in-vesicle replication odds (or accepting
+  a much longer real-world time horizon) is the honest next lever, not
+  anything more with the division logic, which is now demonstrably
+  correct.
 - **What *is* verified: the bootstrap-to-founder pipeline itself is
   correct**, tested directly rather than waited on. Pushed a
   synthetic-but-structurally-real `BootstrapCandidate` (built from
