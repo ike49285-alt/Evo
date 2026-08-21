@@ -126,12 +126,23 @@ export class Origin {
   // dilute-solution abiogenesis is dogged by exactly this "concentration
   // problem", but a soup this thin doesn't make an interesting sandbox.
   readonly catalystRadius = 26;
-  readonly baseCondensationRate = 0.05;
+  // Raised from 0.05 as part of a modest, deliberate "make natural
+  // abiogenesis actually reachable" calibration pass — see NOTES.md.
+  // Left roughly 2x rather than pushed further so this stays a real
+  // rare-event simulation, not a guaranteed-outcome one.
+  readonly baseCondensationRate = 0.1;
   readonly baseHydrolysisRate = 0.0018;
-  readonly catalystBoost = 10; // a strong nearby catalyst multiplies bonding odds up to ~11x
+  // Raised from 10 (up to ~16x now) as part of the same pass — a bigger
+  // reward for a catalyst actually being present, without changing what
+  // "present" means or how catalysts form in the first place.
+  readonly catalystBoost = 15; // a strong nearby catalyst multiplies bonding odds up to ~16x
   readonly mutationRate = 0.03; // per-base chance a templated copy mispairs
-  readonly energyCapacity = 140;
-  readonly energyFluxPerTick = 1.6; // expected new energy particles/tick (fractional, accumulated)
+  // Both raised together (not just the reaction rates above) — pushing
+  // condensation/replication rates up without more energy throughput
+  // would just shift the bottleneck onto energy availability instead of
+  // actually removing it.
+  readonly energyCapacity = 200;
+  readonly energyFluxPerTick = 2.5; // expected new energy particles/tick (fractional, accumulated)
   readonly lipidAssemblyRadius = 7;
   readonly membranePermeability = 0.02; // per-tick chance a small molecule crosses a nearby membrane
   // A *per-base* allowance rather than one flat number — headless
@@ -166,14 +177,20 @@ export class Origin {
     const o = new Origin(width, height, seed);
     // Every canonical amino acid and nucleotide gets a real shot at being
     // in the soup — no thumb on the scale toward whichever ones happen to
-    // fold well. ~9 copies of each of the 20 real amino acids and ~35
+    // fold well. ~18 copies of each of the 20 real amino acids and ~70
     // copies of each of the 4 real nucleotides, plus a lipid bath dense
     // enough that membrane self-assembly is actually reachable in a
-    // headless run rather than a multi-million-tick rare event.
-    for (const code of AMINO_ACID_CODES) for (let i = 0; i < 9; i++) o.spawnAminoAcid(code);
-    for (const code of NUCLEOTIDE_CODES) for (let i = 0; i < 35; i++) o.spawnNucleotide(code);
-    for (let i = 0; i < 160; i++) o.spawnLipid();
-    for (let i = 0; i < 30; i++) o.spawnEnergy();
+    // headless run rather than a multi-million-tick rare event. Roughly
+    // doubled from an earlier calibration as part of a deliberate "make
+    // natural abiogenesis actually reachable" pass — the same real
+    // "concentration problem" bondRadius's own comment already documents
+    // (dilute-solution prebiotic chemistry struggles to react at all),
+    // leaned into further rather than in a new direction. Same 800x500
+    // footprint — this raises density, not area.
+    for (const code of AMINO_ACID_CODES) for (let i = 0; i < 18; i++) o.spawnAminoAcid(code);
+    for (const code of NUCLEOTIDE_CODES) for (let i = 0; i < 70; i++) o.spawnNucleotide(code);
+    for (let i = 0; i < 240; i++) o.spawnLipid();
+    for (let i = 0; i < 60; i++) o.spawnEnergy();
     return o;
   }
 
@@ -511,6 +528,22 @@ export class Origin {
 
   // --- templated RNA replication (the actual heredity mechanism) ---------
   private templatedReplication(): void {
+    // Guards against two different templates picking the *same* free
+    // nucleotide (or the same energy particle) within this one pass —
+    // mirrors condensePolymers()'s own `consumed` Set, which this
+    // function was missing. The grid snapshot this pass reads from isn't
+    // rebuilt between templates (only between whole passes — see
+    // tickOnce()'s comment on why), so without this, a later template in
+    // the same tick can still "find" a nucleotide/energy particle an
+    // earlier template already removed a few iterations ago: removing an
+    // already-gone id is a harmless no-op, but `p.copying.built.push(...)`
+    // still runs regardless, silently minting a nucleotide-equivalent
+    // that was never actually backed by a real free particle. A real
+    // headless mass-conservation run caught this directly — a modest
+    // rate increase (see NOTES.md) was enough to make the within-pass
+    // collision non-negligible, where at the old, lower rates it had
+    // apparently never fired often enough to show up.
+    const consumed = new Set<number>();
     for (const p of [...this.particles.values()]) {
       if (p.kind !== 'rna') continue;
       // The minimum-length bar only gates *starting* a new copy — an
@@ -529,7 +562,14 @@ export class Origin {
         // large fitness advantage once one exists.
         const selfBoost = p.fold.isRibozyme ? 1 + p.fold.catalysisStrength * this.catalystBoost : 1;
         const transBoost = this.nearbyCatalystBoost(p.x, p.y, 'replicase');
-        const startRate = 0.0015 * Math.max(selfBoost, transBoost);
+        // Raised from 0.0015 as part of the "make natural abiogenesis
+        // actually reachable" calibration pass (see NOTES.md) — this was
+        // the single rarest roll in the whole pipeline (an eligible RNA
+        // only had a 0.15%/tick shot at ever starting to copy at all,
+        // before any of the downstream per-base extension odds even come
+        // into play), so it's the one constant in this pass raised a
+        // full 2x rather than a fraction of that.
+        const startRate = 0.003 * Math.max(selfBoost, transBoost);
         if (this.rng.bool(startRate)) p.copying = { built: [], startedTick: this.tick };
         continue;
       }
@@ -580,7 +620,7 @@ export class Origin {
       // timeout, not one.
       const near = this.grid
         .queryRadius(p.x, p.y, this.substrateRadius)
-        .filter((o): o is NucleotideParticle => o.kind === 'nt' && o.vesicleId === p.vesicleId);
+        .filter((o): o is NucleotideParticle => o.kind === 'nt' && o.vesicleId === p.vesicleId && !consumed.has(o.id));
       if (near.length === 0) continue;
       const correct = near.filter((n) => n.code === correctBase);
       // Only actually attempt a mismatch when there's a wrong base on hand
@@ -595,17 +635,21 @@ export class Origin {
       // free pass just for having a template to work from.
       const energyNearby = this.grid
         .queryRadius(p.x, p.y, this.catalystRadius)
-        .find((o) => o.kind === 'energy' && o.vesicleId === p.vesicleId);
+        .find((o) => o.kind === 'energy' && o.vesicleId === p.vesicleId && !consumed.has(o.id));
       if (!energyNearby) continue;
 
-      // Calibrated up from an initial 0.04: headless verification showed
-      // copies routinely stalling at ~15-20% of their template length
-      // before hitting the stall timeout even with an active ribozyme
-      // nearby — the base rate, not just catalysis, was too low to
-      // realistically finish a 6-9-base copy inside a ~1000-tick window.
+      // Calibrated up from an initial 0.04, then again from 0.12 as part
+      // of the "make natural abiogenesis actually reachable" pass (see
+      // NOTES.md): headless verification showed copies routinely
+      // stalling at ~15-20% of their template length before hitting the
+      // stall timeout even with an active ribozyme nearby — the base
+      // rate, not just catalysis, was too low to realistically finish a
+      // 6-9-base copy inside a ~1000-tick window.
       const boost = this.nearbyCatalystBoost(p.x, p.y, 'replicase') * (p.fold.isRibozyme ? 1 + p.fold.catalysisStrength * 4 : 1);
-      if (!this.rng.bool(Math.min(0.9, 0.12 * boost))) continue;
+      if (!this.rng.bool(Math.min(0.9, 0.2 * boost))) continue;
 
+      consumed.add(energyNearby.id);
+      consumed.add(chosen.id);
       this.removeParticle(energyNearby.id);
       p.copying.built.push(chosen.code);
       this.removeParticle(chosen.id);
@@ -790,6 +834,28 @@ export class Origin {
     const ca = centroidOf(groupA);
     const cb = centroidOf(groupB);
 
+    // Both daughters inherit the parent's full replicationEvents count,
+    // not split or reset — a lineage's replicative track record belongs
+    // to both branches of a division equally, the same way a real
+    // daughter cell inherits its parent's actual working molecular
+    // machinery (ribosomes, enzymes, genetic material) rather than
+    // re-earning replication capability from a cold start. This doesn't
+    // weaken isBootstrapEligible's real gate: hasActiveCatalyst/
+    // hasReplicatorNow are still checked live, fresh from whatever's
+    // physically inside each specific vesicle at the moment it's
+    // evaluated — a daughter that ends up with the catalyst separated
+    // from the replicator (division partitions purely by spatial
+    // proximity to each new centroid; real protocells at this stage have
+    // no active segregation machinery, so this stays passive on purpose)
+    // still fails that check immediately either way. What this removes
+    // is the previous, structural requirement that a vesicle complete
+    // *two more* full replication events specifically timed after its
+    // first division before it could ever qualify — on top of already
+    // having proven it could replicate before splitting at all. That
+    // compounding of two independently-rare events in a specific order
+    // is the likely reason a natural bootstrap was never once observed
+    // in 200,000+ verification ticks despite every individual mechanism
+    // (folding, catalysis, replication, division) working on its own.
     const daughterA: Vesicle = {
       id: this.nextVesicleId++,
       x: ca.x,
@@ -799,7 +865,7 @@ export class Origin {
       memberIds: new Set(groupA.map((l) => l.id)),
       createdTick: this.tick,
       divisions: v.divisions + 1,
-      replicationEvents: 0,
+      replicationEvents: v.replicationEvents,
     };
     const daughterB: Vesicle = {
       id: this.nextVesicleId++,
@@ -810,7 +876,7 @@ export class Origin {
       memberIds: new Set(groupB.map((l) => l.id)),
       createdTick: this.tick,
       divisions: v.divisions + 1,
-      replicationEvents: 0,
+      replicationEvents: v.replicationEvents,
     };
     for (const l of groupA) l.vesicleId = daughterA.id;
     for (const l of groupB) l.vesicleId = daughterB.id;
