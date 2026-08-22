@@ -264,20 +264,37 @@ export class Origin {
     const o = new Origin(width, height, seed);
     // Every canonical amino acid and nucleotide gets a real shot at being
     // in the soup — no thumb on the scale toward whichever ones happen to
-    // fold well. ~18 copies of each of the 20 real amino acids and ~70
-    // copies of each of the 4 real nucleotides, plus a lipid bath dense
-    // enough that membrane self-assembly is actually reachable in a
-    // headless run rather than a multi-million-tick rare event. Roughly
-    // doubled from an earlier calibration as part of a deliberate "make
-    // natural abiogenesis actually reachable" pass — the same real
-    // "concentration problem" bondRadius's own comment already documents
-    // (dilute-solution prebiotic chemistry struggles to react at all),
-    // leaned into further rather than in a new direction. Same 800x500
-    // footprint — this raises density, not area.
-    for (const code of AMINO_ACID_CODES) for (let i = 0; i < 18; i++) o.spawnAminoAcid(code);
-    for (const code of NUCLEOTIDE_CODES) for (let i = 0; i < 70; i++) o.spawnNucleotide(code);
-    for (let i = 0; i < 240; i++) o.spawnLipid();
-    for (let i = 0; i < 60; i++) o.spawnEnergy();
+    // fold well. Base composition (~18 copies of each of the 20 real amino
+    // acids, ~70 of each of the 4 real nucleotides, a matching lipid/energy
+    // bath) times SOUP_DENSITY_MULTIPLIER — the same "concentration
+    // problem" bondRadius's own comment documents, leaned into hard this
+    // time rather than the earlier modest doublings.
+    //
+    // This is a deliberate scale-not-odds choice, not another rate/
+    // threshold nudge: headless investigation this round (see NOTES.md)
+    // found the actual catalytic-fold acceptance rates (~7-20% for
+    // peptides, comparably rare for RNA at the lengths it realistically
+    // reaches) are already *more generous* than real biology — spontaneous
+    // catalytic folding from a random sequence is astronomically rare in
+    // reality, not 1-in-10. Loosening those thresholds further to make
+    // bootstrap more likely would trade away realism for reachability.
+    // Instead, since real abiogenesis got there through sheer scale (an
+    // entire ocean, hundreds of millions of years), this raises the number
+    // of simultaneous independent "attempts" instead: a density scan found
+    // a real, more-than-linear payoff (3x density: catalytic peptides
+    // 0.40→2.14 average; 5x: ribozymes 0.00→0.96 average, appearing at all
+    // for the first time) — denser soup means faster growth to
+    // fold-eligible length too, not just more molecules, so the effect
+    // compounds. 8x is a real "fill the dish" move, not a token increase;
+    // the resulting heavier per-tick cost is accepted deliberately, since
+    // Stage 0 deactivates once a population sustains (see main.ts's
+    // retirement logic) rather than needing to run indefinitely at this
+    // density.
+    const SOUP_DENSITY_MULTIPLIER = 8;
+    for (const code of AMINO_ACID_CODES) for (let i = 0; i < 18 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnAminoAcid(code);
+    for (const code of NUCLEOTIDE_CODES) for (let i = 0; i < 70 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnNucleotide(code);
+    for (let i = 0; i < 240 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnLipid();
+    for (let i = 0; i < 60 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnEnergy();
     return o;
   }
 
