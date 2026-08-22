@@ -428,6 +428,103 @@ founding time and never anything the simulation itself discovered.
   user directly rather than assumed whether to chase that now; the
   answer was to ship this round's real, verified work and stop there —
   so it's documented, not built.
+- **Fourth pass: fixed the actual mechanism behind catalyst scarcity —
+  real improvement, still not enough alone.** Diagnosed *why* catalysts
+  vanish so fast: tracked 32 catalytic particles (peptide `isCatalyst` /
+  RNA `isRibozyme`) across 5 seeds x 30,000 ticks and found 0 were ever
+  hydrolyzed to nothing — 17 of 19 losses came from a *single* ordinary
+  hydrolysis event trimming one residue, which is enough to flip fold
+  classification because the fold walk has no memory of a previous fold
+  (any sequence change re-derives the whole structure from scratch).
+  Fixed with `catalyticFoldProtection = 0.4`, an additional hydrolysis-
+  resistance multiplier specifically for already-catalytic molecules —
+  grounded in real biochemistry (limited-proteolysis assays exploit
+  exactly this: folded domains resist protease cleavage, unstructured
+  loops don't; RNase-protection assays are the RNA analog). Deliberately
+  investigated growth-driven loss first and found it was the wrong
+  target (only 2 of 19 losses) before building the shrink-side fix —
+  worth noting since the mental model offered mid-session ("growth
+  rerolls the whole fold") turned out to be wrong on inspection: the
+  fold geometry is actually preserved almost every time a molecule grows
+  by one residue (tested directly), it's `stability = contacts/length`
+  diluting under a fixed threshold that does the damage, not reshuffled
+  geometry.
+
+  Verified: still-catalytic-at-run's-end went from 41% to 53% (real,
+  meaningful). But the full 10-seed x 80,000-tick sweep still produced
+  **zero** natural bootstraps, and catalysts still never appeared inside
+  a single vesicle across a 30,000-tick check (0.000%, unchanged). Living
+  longer doesn't help if there's usually no catalyst *anywhere* in the
+  dish to live longer in the first place — persistence and formation
+  rate are separate problems, and this only fixed the first one.
+- **Fifth pass: stopped tuning rates entirely and scaled soup density
+  8x instead — this is the one that worked.** Investigated formation
+  rate directly rather than guessing. "Add more raw materials": checked
+  against data first — attempts weren't scarce (3.7-3.8 fold-eligible
+  molecules, peptide length ≥8 or RNA length ≥9, already existed at any
+  given moment), so pure throughput looked like it'd have diminishing
+  returns. "Loosen the acceptance threshold": checked the real gate
+  breakdown directly (5,000-sequence clean samples, decoupled from
+  simulation dynamics) — peptide catalytic rate is genuinely
+  length-invariant (~7-20%, matching the original design comment,
+  rejected almost entirely by the stability threshold, not the
+  active-site-class step which barely rejects anything once stable);
+  RNA's rate looked wildly more permissive at first (44.6% vs 11.3% in a
+  blended 8-30nt sample) but that was a length-sampling artifact — RNA's
+  `isRibozyme` bar isn't length-normalized, so it's dominated by long
+  sequences that are rare to actually reach; at realistic in-dish
+  lengths (9-15nt) RNA's real rate is 3.6%-33%, comparable to peptides.
+  Conclusion: both acceptance rates are already *more generous* than
+  real biology (spontaneous catalytic folding from a random sequence is
+  astronomically rare in reality, not 1-in-10) — loosening them further
+  would trade realism for reachability, and the thresholds aren't
+  actually the bottleneck once measured fairly.
+
+  So the real lever was scale, not odds — matching how real abiogenesis
+  actually happened (an entire ocean, hundreds of millions of years: more
+  independent attempts, not better odds per attempt). A density scan
+  (1x/3x/5x, `SOUP_DENSITY_MULTIPLIER` in `seedPrimordialSoup()`) found a
+  more-than-linear payoff — 5x density took ribozymes from 0.00 to 0.96
+  average present at once, appearing at all for the first time — because
+  denser soup means faster growth to fold-eligible length too, not just
+  more molecules. Shipped at 8x, an explicit "fill the dish" move, not a
+  token increase; accepted the heavier per-tick cost (~20-37ms vs 2.2ms
+  baseline) deliberately since Stage 0 deactivates once a population
+  sustains rather than needing to run indefinitely at this density.
+  Flagged the resulting vesicle-count jump (35→106, vs. single digits
+  baseline) to the user before proceeding, per standing "check in on
+  massive effects" instruction — confirmed as the intended goal (more
+  parallel bootstrap opportunities), not a bug.
+
+  Verified: mass conservation exact (zero drift, 30,000 ticks). The old
+  80,000-tick sweep horizon was no longer practical at this density
+  (would take 8+ hours for 10 seeds) — resized to 40,000 ticks, justified
+  by ramp data showing every milestone landing 2-4x earlier than baseline
+  (first catalyst 2,949 vs 1,890-15,420; first division 500 vs
+  1,722-19,933). Playwright (3 live-app trials, non-deterministic seeds):
+  zero console errors, generally healthy/growing vesicle counts; one
+  trial showed a vesicle count crash (36→1) that didn't reproduce across
+  2 follow-up trials — noted as observed-but-not-reproduced rather than
+  chased further, and plausibly the same fusion-consolidation dynamic
+  that shows up in the successful sweep seeds below (bootstrapped seeds
+  ended with as few as 1 surviving vesicle).
+
+  **Full 10-seed x 40,000-tick sweep result: 4 of 10 seeds achieved a
+  natural bootstrap** (seed 3 at tick 28,802; seed 7 at 34,730; seed 9
+  at 31,189; seed 10 at just 4,928 — and seed 10 never formed a ribozyme
+  at all, so that bootstrap came from a peptide catalyst + RNA replicator
+  pairing, not RNA-world-style self-catalysis). This is the first natural
+  bootstrap observed across five rounds of tuning this session. Every
+  prior mechanism (in-vesicle replication boost, fusion, nucleation bias,
+  catalyst persistence) was real, correctly implemented, and individually
+  verified insufficient at 1x density — the honest read is that they
+  likely all still mattered here (more vesicles to draw on from fusion,
+  catalysts surviving long enough to matter from the persistence fix),
+  just none of them were sufficient alone; density was the missing
+  scale factor the whole pipeline needed. The other 6 of 10 seeds did not
+  bootstrap within the 40,000-tick horizon — a real, meaningful rate to
+  report honestly, not "solved," and some of those 6 might well clear the
+  bar given more ticks than this session had time to run.
 - **The Chemistry tab now shows real bootstrap-progress detail, plus a
   heuristic "chance of life" estimate — deliberately not a real
   simulated probability.** A true Monte Carlo estimate (clone the live
