@@ -319,6 +319,64 @@ founding time and never anything the simulation itself discovered.
   a much longer real-world time horizon) is the honest next lever, not
   anything more with the division logic, which is now demonstrably
   correct.
+- **Second tuning pass, following that lever, also didn't clear the
+  bar — and found the lever itself was aimed at the wrong stage of the
+  pipeline.** Added a real, targeted `inVesicleReplicationBoost` (1.75x
+  on both the copy start-rate and per-base extension rate, active only
+  when a template is inside a vesicle) plus a `membranePermeability`
+  raise (0.02 → 0.035, so interior substrate can resupply from outside
+  instead of stalling on local depletion) — grounded in real protocell
+  theory: compartmentalization is supposed to concentrate and protect
+  reactants, which the model previously represented only as a
+  constraint (smaller same-vesicle reaction pool), never as a benefit.
+  Mass conservation re-verified exactly held at the new rates.
+
+  Result, headless-verified honestly: another 10-seed x 80,000-tick
+  sweep still produced **zero** natural bootstraps (9 of 10 seeds
+  divided at least once, matching the first pass). Rerunning the exact
+  `replicationEvents >= 2 && divisions >= 1` diagnostic found that gate
+  *still* never cleared once, identical to the pre-boost baseline — and
+  a separate, even more granular check (sampling *every single tick*,
+  not just periodically, across a fresh 30,000-tick run) found a live
+  catalyst **and** a live replicator never once existed inside the same
+  vesicle *at the same time*, for the entire run. That's the real
+  finding: a rate multiplier on replication can't help when replication
+  never gets a chance to run at all, because the actual bottleneck is
+  one level upstream — getting a real catalytic peptide and a real
+  replicator-length RNA *encapsulated together* in the first place, not
+  how fast they replicate once that's true. `inVesicleReplicationBoost`
+  is real, correct, and kept (it's not wrong, just insufficient on its
+  own — see the Chemistry tab's "closest to bootstrap" detail, which
+  will show this live gate directly once it does happen), but the next
+  real lever is about encapsulation composition and/or the survival of
+  a trapped catalyst+replicator pair against hydrolysis, not replication
+  rate constants — those have now been pushed twice without addressing
+  the actual constraint.
+- **The Chemistry tab now shows real bootstrap-progress detail, plus a
+  heuristic "chance of life" estimate — deliberately not a real
+  simulated probability.** A true Monte Carlo estimate (clone the live
+  dish, fast-forward many independent trials, count how many bootstrap)
+  is the only way to get an actually-accurate number, but this session's
+  own headless timing put a single 10,000-tick trial at ~10-15s — too
+  slow to recompute live even across parallel Web Workers. Discussed
+  directly with the user, who chose a cheap always-live heuristic
+  instead: `Origin.estimateBootstrapChance()` reuses the exact real
+  formulas `templatedReplication()` itself rolls against (start-rate,
+  extension-rate, the same catalyst/ribozyme/in-vesicle boosts) for
+  whichever vesicle is currently ranked closest (`findLeadingVesicle()`),
+  and projects forward with a Poisson approximation for "enough
+  completions in the next N ticks," combined with a coarse lipid-count-
+  vs-`DIVISION_LIPID_COUNT` proxy for division readiness. Verified
+  against synthetic vesicle states (0% with no vesicles; increases with
+  replicationEvents, lipid progress, and fewer needed completions —
+  the last one specifically needed a shorter horizon to observe, since
+  at the default 10,000-tick horizon this particular test vesicle's
+  chance had already saturated near 1.0 regardless of needing 1 vs 2
+  more completions — confirmed as genuinely correct Poisson behavior,
+  not a bug, by checking shorter horizons directly). Given the finding
+  above, expect this to show 0% in most real play sessions right now —
+  that's the honest, correct answer given the current bottleneck, not a
+  UI defect.
 - **What *is* verified: the bootstrap-to-founder pipeline itself is
   correct**, tested directly rather than waited on. Pushed a
   synthetic-but-structurally-real `BootstrapCandidate` (built from
