@@ -142,6 +142,26 @@ export class Origin {
         // copyStallTimeoutFloor) — long enough for a boosted in-vesicle
         // replication to plausibly complete before the membrane can split again.
         this.divisionCooldownTicks = 500;
+        // Headless-diagnosed (see NOTES.md): catalysts weren't being destroyed
+        // outright — across 32 catalytic particles sampled over 5 seeds, 0 were
+        // hydrolyzed to nothing, but 17 lost their catalytic classification from
+        // a single ordinary hydrolysis event trimming one residue. The fold walk
+        // has no memory of a previous fold — any sequence change re-derives the
+        // whole structure from scratch — so losing even one residue is enough to
+        // drop a molecule below CATALYTIC_STABILITY_THRESHOLD or MIN_STEM. The
+        // existing stability-scaled resistance in hydrolyze() already reduces
+        // this somewhat, but real biochemistry supports going further
+        // specifically for a molecule that's *already* folded into something
+        // functional: limited-proteolysis assays exploit exactly this (folded
+        // domains resist protease cleavage; unstructured loops don't), and
+        // RNase-protection assays rely on the RNA analog (paired/structured
+        // regions resist single-strand-specific nucleases far better than
+        // unstructured ones). This is an additional multiplier stacking with the
+        // existing stability/stem-length term, not a replacement for it — a
+        // real catalytic fold is measurably more protected than a merely
+        // "stable" one at the same stability score, not just immune once it
+        // clears the bar.
+        this.catalyticFoldProtection = 0.4;
         // A *per-base* allowance rather than one flat number — headless
         // verification found RNA strands growing past 30nt via ordinary
         // condensation (which has no completion requirement) while a fixed
@@ -376,7 +396,8 @@ export class Origin {
         for (const p of [...this.particles.values()]) {
             if (p.kind === 'peptide') {
                 const resistance = 1 - p.fold.stability * 0.8;
-                if (this.rng.bool(this.baseHydrolysisRate * resistance))
+                const foldedProtection = p.fold.isCatalyst ? this.catalyticFoldProtection : 1;
+                if (this.rng.bool(this.baseHydrolysisRate * resistance * foldedProtection))
                     this.shrinkPeptide(p);
             }
             else if (p.kind === 'rna') {
@@ -392,7 +413,8 @@ export class Origin {
                 if (p.copying)
                     continue;
                 const resistance = 1 - Math.min(0.85, p.fold.stemLength / Math.max(4, p.sequence.length));
-                if (this.rng.bool(this.baseHydrolysisRate * resistance))
+                const foldedProtection = p.fold.isRibozyme ? this.catalyticFoldProtection : 1;
+                if (this.rng.bool(this.baseHydrolysisRate * resistance * foldedProtection))
                     this.shrinkRna(p);
             }
         }
