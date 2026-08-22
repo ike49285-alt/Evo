@@ -176,6 +176,33 @@ export class Origin {
   // applied only in templatedReplication(), only when the template
   // currently has a vesicleId.
   readonly inVesicleReplicationBoost = 1.75;
+  // Real fatty-acid protocells fuse on contact about as readily as they
+  // divide (Zhu & Szostak 2009; Budin & Szostak 2011 growth/division
+  // dynamics) — fission and fusion are both normal parts of real protocell
+  // population dynamics, not just growth-then-split. Without this, two
+  // protocells that each independently captured half of what a real
+  // bootstrap needs (one a catalyst, one a replicator) had no way to ever
+  // combine — a headless diagnostic (see NOTES.md) found a live catalyst
+  // and a live replicator never once co-occurred inside the same vesicle
+  // across a full run, which is the real bottleneck this targets. Kept
+  // well under 1 (a real membrane-fusion event is stochastic even at
+  // close range, not certain on first contact) so this stays a real rare-
+  // event mechanism rather than an instant merge-on-touch shortcut.
+  readonly vesicleFusionChance = 0.05; // per-tick chance two touching vesicles fuse
+  // Real precedent: surfaces that concentrate prebiotic chemistry —
+  // montmorillonite clay in particular (Hanczyc, Fujikawa & Szostak 2003)
+  // — are documented to also nucleate vesicle formation around themselves,
+  // and amphipathic peptides co-assemble with lipids rather than staying
+  // chemically inert to membrane formation. Today's lipidAssembly() only
+  // attracts free lipids to other free lipids, so *where* a vesicle closes
+  // has zero correlation with where the dish's rare active chemistry
+  // happens to be — a second, independent contributor to the same
+  // co-occurrence bottleneck vesicleFusionChance targets. This is a soft
+  // bias, not a guarantee: about half the strength of the lipid-lipid pull
+  // it stacks with, so a vesicle can still close around empty soup most of
+  // the time, same as reality.
+  readonly nucleationSeedRadius = 14; // catalyst/RNA search radius during lipid clustering — 2x lipidAssemblyRadius, a "seed" pulls in lipids from further out than a same-species neighbor would
+  readonly nucleationBiasStrength = 0.01;
   // A *per-base* allowance rather than one flat number — headless
   // verification found RNA strands growing past 30nt via ordinary
   // condensation (which has no completion requirement) while a fixed
@@ -292,6 +319,17 @@ export class Origin {
     this.perf.lastTickMs = performance.now() - start;
   }
 
+  // tickOnce() is a flat, ordered list of small, independently-tunable,
+  // commented private methods, each running against a freshly rebuilt grid.
+  // That's the deliberate "bolt-on" shape for this file: a new mechanism —
+  // another environmental or chemical dimension — is just one more method
+  // in this list plus its own named constants above, grounded the same way
+  // every existing one is (a real citation or a headless-verified reason,
+  // not an arbitrary knob). Candidates that fit this pattern without any
+  // further design change: wet-dry/concentration cycling (the Damer &
+  // Deamer hot-spring hypothesis — periodic evaporation pulses that
+  // concentrate reactants and reorganize vesicles), mineral-surface
+  // catalysis, UV-driven mutagenesis.
   private tickOnce(): void {
     this.tick++;
     this.grid.rebuild([...this.particles.values()]);
@@ -326,6 +364,8 @@ export class Origin {
     this.lipidAssembly();
     this.grid.rebuild([...this.particles.values()]);
     this.recruitAndDivideVesicles();
+    this.grid.rebuild([...this.particles.values()]);
+    this.fuseVesicles();
     this.grid.rebuild([...this.particles.values()]);
     this.membraneDiffusion();
 
@@ -735,6 +775,30 @@ export class Origin {
       }
       l.vx += (ax / near.length) * 0.02;
       l.vy += (ay / near.length) * 0.02;
+
+      // A second, independent attractor: catalytically active peptides and
+      // long-enough RNA also draw nearby free lipids in — real membrane
+      // nucleation isn't blind to what's already there (see
+      // nucleationBiasStrength's comment above for the citations). This is
+      // what lets a *newly forming* vesicle land on top of active
+      // chemistry instead of a uniformly random patch of empty soup.
+      const seeds = this.grid
+        .queryRadius(l.x, l.y, this.nucleationSeedRadius)
+        .filter(
+          (o): o is PeptideParticle | RnaParticle =>
+            (o.kind === 'peptide' && o.fold.isCatalyst) ||
+            (o.kind === 'rna' && (o.fold.isRibozyme || o.sequence.length >= MIN_TEMPLATE_LENGTH)),
+        );
+      if (seeds.length > 0) {
+        let sx = 0;
+        let sy = 0;
+        for (const s of seeds) {
+          sx += s.x - l.x;
+          sy += s.y - l.y;
+        }
+        l.vx += (sx / seeds.length) * this.nucleationBiasStrength;
+        l.vy += (sy / seeds.length) * this.nucleationBiasStrength;
+      }
     }
 
     // A dense-enough free-lipid cluster spontaneously closes into a
@@ -931,6 +995,69 @@ export class Origin {
     this.vesicles.delete(v.id);
     this.vesicles.set(daughterA.id, daughterA);
     this.vesicles.set(daughterB.id, daughterB);
+  }
+
+  // --- vesicle fusion ------------------------------------------------------
+  // See vesicleFusionChance's comment (with this.tunables above) for the
+  // real precedent and why this exists: without it, a protocell holding a
+  // catalyst and one holding a replicator can drift side by side forever
+  // and never combine into a single bootstrap-eligible unit.
+  private fuseVesicles(): void {
+    const list = [...this.vesicles.values()];
+    const consumed = new Set<number>();
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (consumed.has(a.id) || !this.vesicles.has(a.id)) continue;
+      for (let j = i + 1; j < list.length; j++) {
+        const b = list[j];
+        if (consumed.has(b.id) || !this.vesicles.has(b.id)) continue;
+        if (Math.hypot(a.x - b.x, a.y - b.y) > a.radius + b.radius) continue; // membranes not touching
+        if (!this.rng.bool(this.vesicleFusionChance)) continue; // contact alone isn't instant fusion
+        const [big, small] = a.lipidIds.length >= b.lipidIds.length ? [a, b] : [b, a];
+        this.mergeVesicles(big, small);
+        consumed.add(small.id);
+        if (small.id === a.id) break; // a was absorbed — nothing left to pair it with this tick
+      }
+    }
+  }
+
+  /** Merges `absorbed` into `keep` — both membranes' full contents end up
+   * in one combined vesicle. `keep` happens to be whichever one had more
+   * lipids at the moment of contact (arbitrary as a matter of bookkeeping;
+   * physically the two membranes contribute equally). */
+  private mergeVesicles(keep: Vesicle, absorbed: Vesicle): void {
+    for (const id of absorbed.memberIds) {
+      const p = this.particles.get(id);
+      if (p) p.vesicleId = keep.id;
+      keep.memberIds.add(id);
+    }
+    keep.lipidIds.push(...absorbed.lipidIds);
+    // The more evolved lineage's track record carries forward — same
+    // inheritance principle already used for division (see divideVesicle's
+    // comment above): a merged protocell's real molecular machinery is
+    // whichever parent actually had it, not reset to zero because it
+    // arrived by fusion instead of by growth.
+    keep.replicationEvents = Math.max(keep.replicationEvents, absorbed.replicationEvents);
+    keep.divisions = Math.max(keep.divisions, absorbed.divisions);
+    // Recompute the merged membrane's centroid/radius now rather than
+    // waiting for the next recruitAndDivideVesicles pass, so
+    // detectBootstrap() sees accurate state in the same tick fusion happens.
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const id of keep.lipidIds) {
+      const p = this.particles.get(id);
+      if (!p) continue;
+      cx += p.x;
+      cy += p.y;
+      n++;
+    }
+    if (n > 0) {
+      keep.x = cx / n;
+      keep.y = cy / n;
+    }
+    keep.radius = radiusForLipidCount(keep.lipidIds.length);
+    this.vesicles.delete(absorbed.id);
   }
 
   // --- membrane permeability ---------------------------------------------
