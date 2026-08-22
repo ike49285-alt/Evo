@@ -133,6 +133,15 @@ export class Origin {
         // the time, same as reality.
         this.nucleationSeedRadius = 14; // catalyst/RNA search radius during lipid clustering — 2x lipidAssemblyRadius, a "seed" pulls in lipids from further out than a same-species neighbor would
         this.nucleationBiasStrength = 0.01;
+        // A membrane that just crossed DIVISION_LIPID_COUNT — whether by
+        // ordinary growth or by fusing with another vesicle — needs real time
+        // to reorganize before it's structurally ready to fission again; real
+        // fatty-acid vesicle growth/division cycles run on a physical timescale,
+        // not an instantaneous threshold trigger. Set on the same order as this
+        // file's other multi-hundred-tick process timescales (copyStallTicksPerBase,
+        // copyStallTimeoutFloor) — long enough for a boosted in-vesicle
+        // replication to plausibly complete before the membrane can split again.
+        this.divisionCooldownTicks = 500;
         // A *per-base* allowance rather than one flat number — headless
         // verification found RNA strands growing past 30nt via ordinary
         // condensation (which has no completion requirement) while a fixed
@@ -831,8 +840,21 @@ export class Origin {
             }
             if (nearbyFree.length > 0)
                 v.radius = radiusForLipidCount(v.lipidIds.length);
-            if (v.lipidIds.length >= DIVISION_LIPID_COUNT)
+            // Real vesicle fission isn't instant the moment a size threshold is
+            // crossed — a membrane needs real time to reorganize before it's
+            // structurally ready to split again (see divisionCooldownTicks'
+            // comment above). Without this, a freshly fused vesicle — already
+            // at or past DIVISION_LIPID_COUNT the instant two ~equal-sized
+            // vesicles combine — was re-dividing on literally the very next
+            // tick, undoing the merge (and re-separating whatever it had just
+            // brought together) before any chemistry had a chance to happen: a
+            // headless diagnostic found 86 real fusion events in one 30,000-tick
+            // seed and still zero ticks of catalyst+replicator co-occurrence,
+            // with division counts exploding 30-50x versus the pre-fusion
+            // baseline — the smoking gun for fuse-then-instantly-re-split churn.
+            if (v.lipidIds.length >= DIVISION_LIPID_COUNT && this.tick - v.createdTick >= this.divisionCooldownTicks) {
                 this.divideVesicle(v);
+            }
         }
     }
     divideVesicle(v) {
@@ -973,6 +995,10 @@ export class Origin {
         // arrived by fusion instead of by growth.
         keep.replicationEvents = Math.max(keep.replicationEvents, absorbed.replicationEvents);
         keep.divisions = Math.max(keep.divisions, absorbed.divisions);
+        // Reset the merge clock — see divisionCooldownTicks — so the newly
+        // combined membrane gets its own settling period before it's eligible
+        // to divide again, same as a freshly formed or freshly divided one.
+        keep.createdTick = this.tick;
         // Recompute the merged membrane's centroid/radius now rather than
         // waiting for the next recruitAndDivideVesicles pass, so
         // detectBootstrap() sees accurate state in the same tick fusion happens.
