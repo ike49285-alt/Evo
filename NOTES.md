@@ -352,6 +352,82 @@ founding time and never anything the simulation itself discovered.
   a trapped catalyst+replicator pair against hydrolysis, not replication
   rate constants — those have now been pushed twice without addressing
   the actual constraint.
+- **Third pass: attacked encapsulation directly with two real,
+  literature-grounded mechanisms — found and fixed a self-defeating bug
+  they created together — and ended up pinpointing a sharper root cause
+  one level further upstream than "encapsulation is hard."** Asked
+  directly by the user for more realism and a codebase that stays easy
+  to extend; `Origin.tickOnce()` was already the right shape for that
+  (a flat, ordered list of small, independently-tunable, commented
+  private methods, each grid-rebuilt between passes) and is now
+  documented as the deliberate pattern, with wet-dry cycling and
+  mineral-surface catalysis named as future candidates that fit it
+  without further design work.
+
+  Added `fuseVesicles()`: two touching vesicles fuse stochastically
+  (`vesicleFusionChance = 0.05`/tick on contact), same as real
+  fatty-acid protocells (Zhu & Szostak 2009; Budin & Szostak 2011) —
+  fission and fusion are both normal parts of real protocell population
+  dynamics. Merges are real merges (`mergeVesicles()`): membership,
+  `vesicleId` re-keying, radius, and — same inheritance principle as
+  division — `replicationEvents`/`divisions` take the max of the two,
+  not a reset. Also gave catalytically-active peptides and replicator-
+  length RNA a weak, documented-as-soft pull on nearby free lipids
+  during `lipidAssembly()`'s clustering step (real precedent: Hanczyc,
+  Fujikawa & Szostak 2003 — surfaces that concentrate prebiotic
+  chemistry also nucleate membrane formation around themselves), so a
+  *newly forming* vesicle is somewhat more likely to close around real
+  chemistry instead of empty soup. Verified fusion works correctly in
+  isolation: a synthetic catalyst-only vesicle and replicator-only
+  vesicle, forced into contact, merge into one vesicle whose live gates
+  both flip true (9/9 checks: membership, re-keying, max-of counters,
+  no particle loss).
+
+  Full-sweep verification caught a real bug fusion introduced: fusing
+  two typically-sized vesicles almost always pushed the combined lipid
+  count straight past `DIVISION_LIPID_COUNT`, and division fired the
+  very next tick with no memory of how recently the vesicle had last
+  split — so a fusion would immediately undo itself, re-separating
+  whatever it had just brought together before any chemistry could
+  happen. Headless-caught, not assumed: `maxDivisions` per seed jumped
+  from a 1-2 baseline to 32-113, and a 30,000-tick instrumented run
+  found 86 real fusion events with *still* zero ticks of catalyst+
+  replicator co-occurrence — the smoking gun for fuse-then-instantly-
+  re-split churn, confirmed to have nothing to do with RNA/replication
+  (in-vesicle `replicationEvents` stayed at 0 throughout, unaffected).
+  Fixed with `divisionCooldownTicks = 500`: a vesicle needs real
+  settling time since its last division *or* fusion before it's
+  eligible to divide again — grounded the same way, real membrane
+  fission isn't instantaneous the moment a size threshold is crossed.
+  Deliberately not "just raise `DIVISION_LIPID_COUNT`": that would only
+  make the same instant-undo failure rarer, not close it structurally,
+  and would risk undoing last round's careful lipid-economy calibration
+  of that exact constant. Re-verified after the fix: fusion events per
+  30k ticks dropped 86→16, `maxDivisions` came down to a real 11-40
+  range across the full sweep, fusion sanity re-confirmed still 9/9.
+
+  Final honest result, full 10-seed x 80,000-tick sweep with the fix in
+  place: **still zero natural bootstraps.** But the diagnostic work this
+  round found something sharper than "encapsulation is hard in
+  general": catalytic peptides are the actual rare ingredient, not RNA.
+  Across a 30,000-tick instrumented run, replicator-length RNA averaged
+  13.8 present in the dish at once (up to 18); catalytic peptides
+  averaged 0.55, maxing out at just **1** in the entire dish at any
+  sampled moment — roughly 25x rarer. And of that already-scarce
+  supply, 0% of catalytic peptides ever ended up inside any vesicle at
+  all, versus ~12% of replicators. Fusion and the nucleation bias are
+  real, correctly implemented, and would help — *if* a catalyst existed
+  nearby for either mechanism to act on. With at most one in the whole
+  dish at a time, there's usually nothing there. This reframes the
+  bottleneck one level further upstream than encapsulation mechanics
+  (which is what this round targeted, and which — per this same
+  diagnostic work — is demonstrably no longer the binding constraint on
+  its own): peptide-catalysis *supply*, i.e. why `foldPeptide()` makes a
+  catalytic fold so much rarer than an RNA merely reaching
+  `MIN_TEMPLATE_LENGTH`. Named here as the honest next lever. Asked the
+  user directly rather than assumed whether to chase that now; the
+  answer was to ship this round's real, verified work and stop there —
+  so it's documented, not built.
 - **The Chemistry tab now shows real bootstrap-progress detail, plus a
   heuristic "chance of life" estimate — deliberately not a real
   simulated probability.** A true Monte Carlo estimate (clone the live
