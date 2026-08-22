@@ -179,6 +179,30 @@
               stopped.
             </p>
 
+            <div id="os-live-progress">
+              <div class="vitals-row">
+                <div class="stat vital"><span class="stat-label">Est. chance of life in 10k ticks</span><span id="os-chance">0%</span></div>
+                <div class="stat vital"><span class="stat-label">Bootstrap candidates ready</span><span id="os-ready">0</span></div>
+              </div>
+              <p class="panel-hint">
+                The chance figure is a rough, formula-based estimate, not
+                a real simulated probability — an honest Monte Carlo
+                answer would mean actually fast-forwarding the dish many
+                times over, far too slow to keep live. It's built from
+                the same real replication-rate formulas the pool itself
+                rolls against, evaluated for whichever vesicle is
+                currently closest to a bootstrap.
+              </p>
+
+              <p class="stat-label" style="margin-bottom:6px">Closest to bootstrap</p>
+              <div class="stat-grid">
+                <div class="stat"><span class="stat-label">Live catalyst</span><span id="os-closest-catalyst">—</span></div>
+                <div class="stat"><span class="stat-label">Live replicator</span><span id="os-closest-replicator">—</span></div>
+                <div class="stat"><span class="stat-label">Replication progress</span><span id="os-closest-replication">—</span></div>
+                <div class="stat"><span class="stat-label">Division progress</span><span id="os-closest-division">—</span></div>
+              </div>
+            </div>
+
             <div class="stat-grid">
               <div class="stat"><span class="stat-label">Pool tick</span><span id="os-tick">0</span></div>
               <div class="stat"><span class="stat-label">Origins so far</span><span id="os-bootstraps">0</span></div>

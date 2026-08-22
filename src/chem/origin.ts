@@ -67,6 +67,17 @@ export interface OriginStatsSnapshot {
   bootstrapReady: number;
 }
 
+/** The single vesicle currently closest to clearing isBootstrapEligible —
+ * what the Chemistry tab's "closest to bootstrap" detail actually shows.
+ * Real, currently-observable state, not a prediction. */
+export interface BootstrapProgress {
+  hasActiveCatalyst: boolean;
+  hasReplicatorNow: boolean;
+  replicationEvents: number;
+  divisionsSoFar: number;
+  lipidCount: number;
+}
+
 /** What a stabilized protocell hands off to the next stage — see bridge.ts. */
 export interface BootstrapCandidate {
   vesicleId: number;
@@ -144,7 +155,27 @@ export class Origin {
   readonly energyCapacity = 200;
   readonly energyFluxPerTick = 2.5; // expected new energy particles/tick (fractional, accumulated)
   readonly lipidAssemblyRadius = 7;
-  readonly membranePermeability = 0.02; // per-tick chance a small molecule crosses a nearby membrane
+  // Raised from 0.02 as part of the second abiogenesis-tuning pass (see
+  // NOTES.md) — a vesicle's interior nucleotide/energy supply is
+  // otherwise only whatever got trapped at formation plus whatever's
+  // slowly diffused in since, so a working interior replicator can stall
+  // on local depletion even with every reaction rate raised; a higher
+  // exchange rate keeps it resupplied from the surrounding soup instead.
+  readonly membranePermeability = 0.035; // per-tick chance a small molecule crosses a nearby membrane
+  // A real, headless-diagnosed gap in what the model represented: being
+  // inside a vesicle was previously *only* a constraint (a smaller,
+  // same-vesicle-only reaction candidate pool), with none of the actual
+  // real-world advantage compartmentalization is supposed to provide —
+  // protection from the open dilute solution, and local concentration of
+  // whatever reactants did get trapped together. A dedicated diagnostic
+  // (see NOTES.md) found this was the real bottleneck behind the whole
+  // first tuning pass: across an 80,000-tick sweep, replication completed
+  // reasonably often free-floating in the open soup, but no vesicle ever
+  // once accumulated 2 completions *inside* itself. This multiplier
+  // stacks with (doesn't replace) the existing replicase-catalyst boost —
+  // applied only in templatedReplication(), only when the template
+  // currently has a vesicleId.
+  readonly inVesicleReplicationBoost = 1.75;
   // A *per-base* allowance rather than one flat number — headless
   // verification found RNA strands growing past 30nt via ordinary
   // condensation (which has no completion requirement) while a fixed
@@ -569,7 +600,8 @@ export class Origin {
         // before any of the downstream per-base extension odds even come
         // into play), so it's the one constant in this pass raised a
         // full 2x rather than a fraction of that.
-        const startRate = 0.003 * Math.max(selfBoost, transBoost);
+        const vesicleBoost = p.vesicleId !== null ? this.inVesicleReplicationBoost : 1;
+        const startRate = 0.003 * Math.max(selfBoost, transBoost) * vesicleBoost;
         if (this.rng.bool(startRate)) p.copying = { built: [], startedTick: this.tick };
         continue;
       }
@@ -645,7 +677,8 @@ export class Origin {
       // stall timeout even with an active ribozyme nearby — the base
       // rate, not just catalysis, was too low to realistically finish a
       // 6-9-base copy inside a ~1000-tick window.
-      const boost = this.nearbyCatalystBoost(p.x, p.y, 'replicase') * (p.fold.isRibozyme ? 1 + p.fold.catalysisStrength * 4 : 1);
+      const vesicleBoost = p.vesicleId !== null ? this.inVesicleReplicationBoost : 1;
+      const boost = this.nearbyCatalystBoost(p.x, p.y, 'replicase') * (p.fold.isRibozyme ? 1 + p.fold.catalysisStrength * 4 : 1) * vesicleBoost;
       if (!this.rng.bool(Math.min(0.9, 0.2 * boost))) continue;
 
       consumed.add(energyNearby.id);
@@ -927,24 +960,37 @@ export class Origin {
   }
 
   // --- bootstrap detection -------------------------------------------------
+  /** One real scan of a vesicle's current contents, shared by
+   * detectBootstrap() and getBootstrapProgress() so "what does this
+   * vesicle actually, currently hold" is computed one way in one place. */
+  private scanVesicleContents(v: Vesicle): {
+    hasActiveCatalyst: boolean;
+    hasReplicator: boolean;
+    peptides: PeptideParticle[];
+    rnas: RnaParticle[];
+  } {
+    let hasActiveCatalyst = false;
+    let hasReplicator = false;
+    const peptides: PeptideParticle[] = [];
+    const rnas: RnaParticle[] = [];
+    for (const id of v.memberIds) {
+      const p = this.particles.get(id);
+      if (!p) continue;
+      if (p.kind === 'peptide') {
+        peptides.push(p);
+        if (p.fold.isCatalyst) hasActiveCatalyst = true;
+      } else if (p.kind === 'rna') {
+        rnas.push(p);
+        if (p.sequence.length >= MIN_TEMPLATE_LENGTH) hasReplicator = true;
+        if (p.fold.isRibozyme) hasActiveCatalyst = true;
+      }
+    }
+    return { hasActiveCatalyst, hasReplicator, peptides, rnas };
+  }
+
   private detectBootstrap(): void {
     for (const v of this.vesicles.values()) {
-      let hasActiveCatalyst = false;
-      let hasReplicator = false;
-      const peptides: PeptideParticle[] = [];
-      const rnas: RnaParticle[] = [];
-      for (const id of v.memberIds) {
-        const p = this.particles.get(id);
-        if (!p) continue;
-        if (p.kind === 'peptide') {
-          peptides.push(p);
-          if (p.fold.isCatalyst) hasActiveCatalyst = true;
-        } else if (p.kind === 'rna') {
-          rnas.push(p);
-          if (p.sequence.length >= MIN_TEMPLATE_LENGTH) hasReplicator = true;
-          if (p.fold.isRibozyme) hasActiveCatalyst = true;
-        }
-      }
+      const { hasActiveCatalyst, hasReplicator, peptides, rnas } = this.scanVesicleContents(v);
       if (isBootstrapEligible(v, hasActiveCatalyst, hasReplicator)) {
         const already = this.bootstrapCandidates.some((c) => c.vesicleId === v.id);
         if (!already) {
@@ -1013,6 +1059,125 @@ export class Origin {
       totalReplicationEvents: this.totalReplicationEvents,
       bootstrapReady: this.bootstrapCandidates.length,
     };
+  }
+
+  /** The single vesicle currently ranked closest to bootstrap eligibility
+   * — ranked first by whether it *currently* has a live catalyst +
+   * replicator (what actually matters right now), then by real
+   * historical replicationEvents, then divisions. Shared by
+   * getBootstrapProgress() and estimateBootstrapChance() so both read
+   * off the exact same notion of "leading". */
+  private findLeadingVesicle(): { v: Vesicle; hasActiveCatalyst: boolean; hasReplicator: boolean } | null {
+    let leading: { v: Vesicle; hasActiveCatalyst: boolean; hasReplicator: boolean } | null = null;
+    let leadingScore = -Infinity;
+    for (const v of this.vesicles.values()) {
+      const { hasActiveCatalyst, hasReplicator } = this.scanVesicleContents(v);
+      const score = (hasActiveCatalyst && hasReplicator ? 1_000_000 : 0) + v.replicationEvents * 1000 + v.divisions;
+      if (score > leadingScore) {
+        leadingScore = score;
+        leading = { v, hasActiveCatalyst, hasReplicator };
+      }
+    }
+    return leading;
+  }
+
+  /** Real, currently-observable progress toward a natural bootstrap — not
+   * a prediction, just what's actually true about the dish right now.
+   * The Chemistry tab's "closest to bootstrap" detail block reads this
+   * directly. */
+  getBootstrapProgress(): { vesicleCount: number; bootstrapReady: number; leading: BootstrapProgress | null } {
+    const leading = this.findLeadingVesicle();
+    return {
+      vesicleCount: this.vesicles.size,
+      bootstrapReady: this.bootstrapCandidates.length,
+      leading: leading
+        ? {
+            hasActiveCatalyst: leading.hasActiveCatalyst,
+            hasReplicatorNow: leading.hasReplicator,
+            replicationEvents: leading.v.replicationEvents,
+            divisionsSoFar: leading.v.divisions,
+            lipidCount: leading.v.lipidIds.length,
+          }
+        : null,
+    };
+  }
+
+  /** A cheap, always-live *heuristic* estimate of the odds this dish
+   * produces a natural bootstrap within the next `horizonTicks` — this is
+   * deliberately NOT a simulated probability. A real one would mean
+   * actually cloning the dish and fast-forwarding many independent
+   * trials (Monte Carlo), and headless timing this session put a single
+   * 10,000-tick trial at ~10-15s — far too slow to recompute live every
+   * tick, or even every few seconds. This instead reuses the exact real
+   * formulas templatedReplication() itself rolls against (start-rate,
+   * extension-rate, the same catalyst/ribozyme/in-vesicle boosts),
+   * evaluated for whatever the actual leading vesicle's actual current
+   * fold/catalyst state is, and projects forward with a Poisson
+   * approximation for "at least K more completions in the next
+   * `horizonTicks` ticks." Grounded in real numbers, but still a rough
+   * approximation, not a validated probability — it ignores the
+   * stall-timeout mechanic, assumes local substrate stays available, and
+   * (see divisionReadiness below) treats "enough replication" and
+   * "enough lipid growth" as independent when they aren't really. The
+   * UI labels this as an estimate for exactly this reason — don't
+   * present it as more precise than it is. */
+  estimateBootstrapChance(horizonTicks = 10000): number {
+    const leading = this.findLeadingVesicle();
+    if (!leading || !leading.hasActiveCatalyst || !leading.hasReplicator) return 0;
+
+    // The representative template: whichever RNA is actively mid-copy
+    // (the most concrete evidence of live progress), else the longest
+    // real replicator candidate currently inside.
+    let template: RnaParticle | null = null;
+    for (const id of leading.v.memberIds) {
+      const p = this.particles.get(id);
+      if (!p || p.kind !== 'rna' || p.sequence.length < MIN_TEMPLATE_LENGTH) continue;
+      if (p.copying) {
+        template = p;
+        break;
+      }
+      if (!template || p.sequence.length > template.sequence.length) template = p;
+    }
+    if (!template) return 0;
+
+    // Same formulas as templatedReplication()'s two real rolls (see
+    // there for what each factor means) — not reinvented here.
+    const selfBoost = template.fold.isRibozyme ? 1 + template.fold.catalysisStrength * this.catalystBoost : 1;
+    const transBoost = this.nearbyCatalystBoost(template.x, template.y, 'replicase');
+    const startRate = 0.003 * Math.max(selfBoost, transBoost) * this.inVesicleReplicationBoost;
+    const extBoost =
+      this.nearbyCatalystBoost(template.x, template.y, 'replicase') *
+      (template.fold.isRibozyme ? 1 + template.fold.catalysisStrength * 4 : 1) *
+      this.inVesicleReplicationBoost;
+    const extensionRate = Math.min(0.9, 0.2 * extBoost);
+
+    const basesRemaining = template.copying ? template.sequence.length - template.copying.built.length : template.sequence.length;
+    const ticksToExtend = extensionRate > 0 ? basesRemaining / extensionRate : Infinity;
+    const ticksToStart = template.copying ? 0 : startRate > 0 ? 1 / startRate : Infinity;
+    const expectedTicksPerCompletion = ticksToStart + ticksToExtend;
+    if (!Number.isFinite(expectedTicksPerCompletion) || expectedTicksPerCompletion <= 0) return 0;
+
+    // Treat full-copy completions as a Poisson process at this rate —
+    // P(>= K events in `horizonTicks`) = 1 - e^-lambda * sum_{i=0}^{K-1} lambda^i/i!
+    const completionsPerTick = 1 / expectedTicksPerCompletion;
+    const neededCompletions = Math.max(1, 2 - leading.v.replicationEvents);
+    const lambda = completionsPerTick * horizonTicks;
+    let cdf = 0;
+    let term = Math.exp(-lambda);
+    for (let i = 0; i < neededCompletions; i++) {
+      cdf += term;
+      term *= lambda / (i + 1);
+    }
+    const replicationChance = clamp(1 - cdf, 0, 1);
+
+    // Division readiness: a coarse current-progress proxy (lipid count
+    // vs. the real DIVISION_LIPID_COUNT bar), not a real rate-based
+    // time-to-event projection — this engine doesn't track a specific
+    // vesicle's lipid count history over time, so there's no real trend
+    // to extrapolate from. Documented simplification, not hidden.
+    const divisionReadiness = leading.v.divisions >= 1 ? 1 : clamp(leading.v.lipidIds.length / DIVISION_LIPID_COUNT, 0, 1);
+
+    return clamp(replicationChance * divisionReadiness, 0, 1);
   }
 
   // --- save/restore ----------------------------------------------------

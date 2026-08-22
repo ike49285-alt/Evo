@@ -375,6 +375,24 @@ function updateChemistryPanel(): void {
   el('os-longrna').textContent = String(s.longestRna);
   el('os-vesicles').textContent = String(s.vesicleCount);
   el('os-replevents').textContent = String(s.totalReplicationEvents);
+
+  // Live-progress detail (chance estimate + closest-to-bootstrap block) —
+  // hidden once Stage 0 has retired, same as the retired-notice pattern:
+  // there's nothing live left to estimate once the pool stopped ticking.
+  el('os-live-progress').style.display = stage0Retired ? 'none' : '';
+  if (!stage0Retired) {
+    const progress = origin.getBootstrapProgress();
+    el('os-ready').textContent = String(progress.bootstrapReady);
+
+    const pct = origin.estimateBootstrapChance(10000) * 100;
+    el('os-chance').textContent = pct > 0 && pct < 1 ? `${pct.toFixed(1)}%` : `${Math.round(pct)}%`;
+
+    const leading = progress.leading;
+    el('os-closest-catalyst').textContent = leading ? (leading.hasActiveCatalyst ? 'yes' : 'no') : '—';
+    el('os-closest-replicator').textContent = leading ? (leading.hasReplicatorNow ? 'yes' : 'no') : '—';
+    el('os-closest-replication').textContent = leading ? `${Math.min(2, leading.replicationEvents)} / 2` : '—';
+    el('os-closest-division').textContent = leading ? `${Math.min(1, leading.divisionsSoFar)} / 1 (${leading.lipidCount} lipids)` : '—';
+  }
 }
 
 // --- HUD + stats panel ----------------------------------------------------
