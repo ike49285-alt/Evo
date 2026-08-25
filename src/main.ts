@@ -201,11 +201,27 @@ el<HTMLButtonElement>('btn-fit').addEventListener('click', () => {
   renderer.fitToWorld(world);
 });
 
+// Population cap — live-adjustable while the right value is still being
+// worked out (see World.maxPopulation's comment), rather than a constant
+// that needs a rebuild to try a new number. Not part of the save format
+// yet (a deliberate, temporary-tool scope choice) — a page reload goes
+// back to World's own default until this setting earns a permanent home.
+const popCapInput = el<HTMLInputElement>('pop-cap-input');
+popCapInput.value = String(world.maxPopulation);
+function applyPopCap(): void {
+  const parsed = Math.round(Number(popCapInput.value));
+  const clamped = Math.min(20000, Math.max(20, Number.isFinite(parsed) ? parsed : world.maxPopulation));
+  popCapInput.value = String(clamped);
+  world.maxPopulation = clamped;
+}
+popCapInput.addEventListener('change', applyPopCap);
+
 el<HTMLButtonElement>('btn-reset').addEventListener('click', async () => {
   const ok = await confirmDialog('Reset the whole world — wipe the pool and every evolved lineage, and start over from scratch?');
   if (!ok) return;
   origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
   world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+  applyPopCap(); // the cap is a topbar-level setting, not per-world state — a reset shouldn't silently drop it back to the default
   renderer.fitToWorld(world);
   selectedIndividualId = null;
   // Session-level bookkeeping that isn't part of origin/world themselves

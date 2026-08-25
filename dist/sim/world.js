@@ -22,6 +22,9 @@ export class World {
         this.treeNodes = new Map();
         this.tick = 0;
         // --- tunables -----------------------------------------------------
+        // Not readonly — live-adjustable from the topbar's "Pop cap" input
+        // while the right value is still being worked out, rather than a
+        // recompile-to-test constant.
         this.maxPopulation = 320;
         this.maxColonySize = 14;
         // There is no ambient "plant food" resource — sunlight (chloroplast

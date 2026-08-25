@@ -147,7 +147,10 @@ export class World {
   tick = 0;
 
   // --- tunables -----------------------------------------------------
-  readonly maxPopulation = 320;
+  // Not readonly — live-adjustable from the topbar's "Pop cap" input
+  // while the right value is still being worked out, rather than a
+  // recompile-to-test constant.
+  maxPopulation = 320;
   readonly maxColonySize = 14;
   // There is no ambient "plant food" resource — sunlight (chloroplast
   // organelles) is the only energy this dish generates from nothing.

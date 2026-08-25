@@ -123,6 +123,27 @@ html, body {
 .btn.wide { width: 100%; padding: 10px; font-weight: 600; }
 .btn.active { background: var(--accent); border-color: var(--accent); color: var(--ink); }
 
+.pop-cap-control {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 6px;
+  padding: 4px 10px;
+}
+.pop-cap-control label {
+  font-family: var(--font-sans); font-size: var(--fs-ui); color: var(--text-dim); white-space: nowrap;
+}
+.pop-cap-control input {
+  width: 64px; background: transparent; border: none; color: var(--text);
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-ui);
+  text-align: right; padding: 0;
+}
+.pop-cap-control input:focus { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+/* Chrome/Safari's default up/down spinner arrows clash with the compact,
+   borderless look every other topbar control shares — a plain number
+   entry field, not a stepper widget. */
+.pop-cap-control input::-webkit-outer-spin-button,
+.pop-cap-control input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pop-cap-control input[type="number"] { -moz-appearance: textfield; }
+
 /* In-page confirmation, not window.confirm() — a real bug, not
    precaution: this app also ships as a bundled single-file Artifact
    rendered inside a sandboxed iframe, and native browser dialogs
