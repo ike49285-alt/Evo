@@ -651,7 +651,75 @@ markers. A 🧬 label in the Tree's info line mirrors 🔀's.
   correctly and visibly on real founder nodes in the actual Tree of Life
   view — the marker fired naturally in that session too, not forced.
 
-## Performance lessons (reapplied + new)
+## UI round: pool hiding, portrait layout, pop cap, species stat star
+
+Four smaller, real fixes/features from user reports and requests, bundled
+into one round since none needed its own deep investigation section like
+DNA or the round-3/4/5 chemistry work did.
+
+**Hide the retired pool once Stage 0 is disabled.** `renderer.draw()`
+already took a `hidePool` intent implicitly — it just always drew the
+pool. Added `hidePool?: boolean` to its options and gated the
+`drawPool()` call on it; `main.ts` passes `hidePool: stage0Retired`, the
+same flag that already exists for exactly this transition. No new state.
+
+**Two real, separate portrait-layout bugs — not one.** User reported the
+Tree of Life canvas rendering far below where it should be, cut off by
+the bottom of the screen, in portrait. Then: "it's actually happening in
+all the tabs now I look" — which mattered, because it ruled out a
+tree-specific cause and pointed at the shared sidebar/toolbar chain.
+
+- My first hypothesis (a `.sidebar { max-height: 45vh }`-only rule
+  leaving `height: 100%` descendants indeterminate) was wrong — fixed it
+  anyway (`height: 45vh; height: 45dvh; max-height: 45dvh;`, harmless)
+  and re-measured. Canvas position was **completely unchanged**. Said so
+  directly rather than assuming the fix worked.
+  https://github.com/ike49285-alt/Evo — see also the general `#app {
+  height: 100dvh; }` fix alongside it, for the well-known mobile
+  address-bar `100vh` problem — real, but a different bug from this one.
+- Real cause, found by dumping computed styles up the whole ancestor
+  chain: `.tree-info` had `flex: 0 1 260px`, meant as a *width* cap in
+  the normal row-direction toolbar layout. The portrait media query
+  flips `.tree-toolbar` to `flex-direction: column`, which silently
+  reinterprets that same `260px` flex-basis as a *height* floor instead
+  — and `flex-shrink: 0` on the toolbar meant it never shrank back down,
+  pushing the canvas below the viewport. Fixed with `.tree-info { flex:
+  0 0 auto; }` in the portrait override — an explicit auto-height
+  instead of a stale row-mode number. Verified with fresh computed-style
+  dumps and screenshots, not just re-reading the CSS.
+
+**Live-tuneable population cap.** `World.maxPopulation` was a `readonly
+320`, needing a rebuild to try another value. Un-readonly'd it; added a
+topbar "Pop cap" number input (`min 20`, `max 20000`) wired to it live.
+Deliberately scoped out of the save format for now (page reload reverts
+to 320) — a temporary tuning tool, not a permanent setting, easy to
+promote later. Reset World creates a fresh `World` (which reverts to the
+class default) but immediately reapplies the current input value after,
+since the cap is topbar-level, not per-world state — a reset shouldn't
+silently undo the user's chosen cap.
+Verified: Playwright confirms the input initializes correctly, takes
+effect live, and survives Reset World. A follow-up headless run (cap
+raised to 900) confirmed the real payoff, not just the plumbing: final
+population 867, max observed 871 — genuinely past the old 320 ceiling —
+while never exceeding the new 900 cap.
+
+**Species stat star — tap a species card for its real capability
+profile.** Added a modal (reusing the existing Reset-World
+confirm-overlay backdrop/dismiss pattern, plus a new Escape-key handler)
+opened by tapping a species card. Shows a hand-drawn radar chart
+(`ui/chart.ts`'s new `drawRadarChart`) across the six real catalysis
+classes (peptidyl, protease, motor, lipidsynthase, replicase,
+photoreceptor), each axis a population-average of
+`Genome.classPowerCache` across that species' living members
+(`World.getLivingSpecies`'s new `avgClassPower`) — a real capability
+profile read off actual folded proteins, not an illustrative archetype.
+A predator-heavy lineage genuinely spikes toward protease/motor; a
+photosynthetic one spikes toward photoreceptor/lipidsynthase. Modal
+stays live-updated while open (or auto-closes if the species goes
+extinct) via the existing species-panel refresh loop.
+Verified with Playwright in both landscape and portrait.
+
+
 
 - Spatial hash grid for every neighbor query, same as the Dish — but
   rebuilt *between every reaction pass* within a tick, not once at the
