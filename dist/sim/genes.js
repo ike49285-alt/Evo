@@ -128,9 +128,9 @@ const POINT_MUTATION_RATE = 0.02; // per-symbol chance
 const DUPLICATION_RATE = 0.05; // per-reproduction chance of one protein-gene duplication
 const DELETION_RATE = 0.045; // per-reproduction chance of one protein-gene deletion
 const INVERSION_RATE = 0.02; // per-reproduction chance of a short inversion
-function pointMutateGene(gene, rng) {
+function pointMutateGene(gene, rng, rateMultiplier) {
     return gene.map((symbol) => {
-        if (!rng.bool(POINT_MUTATION_RATE))
+        if (!rng.bool(POINT_MUTATION_RATE * rateMultiplier))
             return symbol;
         // A real point mutation substitutes a *different* base, not a reroll
         // that might land on the same one — otherwise the effective mutation
@@ -139,9 +139,15 @@ function pointMutateGene(gene, rng) {
         return rng.pick(others);
     });
 }
-export function mutateGeneSequence(parent, rng) {
-    const coreGenes = parent.genes.slice(0, CORE_GENE_COUNT).map((g) => pointMutateGene(g, rng));
-    let proteinGenes = parent.genes.slice(CORE_GENE_COUNT).map((g) => pointMutateGene(g, rng));
+/** `pointMutationRateMultiplier` lets a DNA-genome parent's point
+ * mutations happen at a real, reduced rate (see genome.ts's
+ * DNA_MUTATION_RATE_MULTIPLIER) — structural mutations below
+ * (duplication/deletion/inversion) are deliberately left at their normal
+ * rate for now, a modest, single-lever first pass rather than reworking
+ * every mutation type's fidelity at once. */
+export function mutateGeneSequence(parent, rng, pointMutationRateMultiplier = 1) {
+    const coreGenes = parent.genes.slice(0, CORE_GENE_COUNT).map((g) => pointMutateGene(g, rng, pointMutationRateMultiplier));
+    let proteinGenes = parent.genes.slice(CORE_GENE_COUNT).map((g) => pointMutateGene(g, rng, pointMutationRateMultiplier));
     // Structural mutations — the real mechanism for a body plan growing or
     // shrinking a protein-coding gene.
     if (proteinGenes.length > 0 && rng.bool(DUPLICATION_RATE) && proteinGenes.length < TRAIT_LIMITS.maxProteins) {

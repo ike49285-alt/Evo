@@ -564,6 +564,93 @@ founding time and never anything the simulation itself discovered.
   natural one is common enough to actually see in a normal play
   session is the part still genuinely open.
 
+## DNA: a real, evolved genetic-material transition
+
+Heredity ran on RNA end-to-end before this — both Stage 0's prebiotic
+chemistry and the inherited Virtunism genome, confirmed directly from
+`elements.ts`'s `CODON_TABLE` (uses U/uracil, not T/thymine). Discussed
+with the user: two real chemical facts make DNA worth adding as more
+than a cosmetic reskin. RNA's 2'-OH group is what makes it chemically
+labile (the same reason Stage 0 has a whole hydrolysis model at all) —
+DNA lacks that group, which is literally why real biology uses it for
+stable long-term storage while RNA stays disposable/catalytic. And DNA
+uses T instead of U specifically so repair machinery can unambiguously
+recognize a spontaneously-deaminated C→U event as damage — a legitimate
+U wouldn't exist in DNA at all. That's *why* real DNA replication
+achieves far higher fidelity than RNA replication, and it's the real
+mechanism this feature is built on, not an invented one.
+
+**Design: DNA is an evolved, one-way transition, not a genome-format
+toggle.** A lineage starts on RNA (matching how it's bootstrapped from
+Stage 0's real RNA replicators — DNA doesn't exist in Stage 0 at all)
+and transitions once it evolves real reverse-transcriptase-grade
+catalytic function. Reverse transcriptase is structurally a polymerase,
+so this reuses the existing `replicase` catalysis class (already the
+axis `hasBud()` reads) rather than adding a 7th class to compete in
+every fold's argmax — `DNA_TRANSITION_THRESHOLD = 3.0`, 3x
+`BUD_THRESHOLD`, on the same `classPower(genome, 'replicase')` reading.
+`Genome.isDna` is heritable state propagated in parallel with
+`sequence`/`brain` (the same way `brain` already is, not decoded fresh
+from the sequence each time) — a one-way ratchet: `genomeFromSequence`'s
+new `inheritedIsDna` parameter means once a lineage transitions, further
+mutation can't revert it, matching how real DNA-based life never
+reverted to RNA when reverse-transcriptase genes later diverged.
+`crossoverGenome` unions both parents' `isDna`, which lets two RNA
+parents whose *combined* replicase-boosting genes finally clear the
+threshold produce a DNA child neither parent was alone — a real payoff
+of sexual recombination, not extra logic.
+
+**Mutation-rate effect, point mutations only, first pass**:
+`DNA_MUTATION_RATE_MULTIPLIER = 0.25` — not the literal ~100-1000x real
+DNA-proofreading fidelity gap, which would freeze a DNA lineage's
+evolution at this simulation's scale (the same "reachability over
+literal magnitude" call as Stage 0's soup density and catalytic
+thresholds). Structural mutations (duplication/deletion/inversion) are
+deliberately left at full rate — a modest, single-lever first pass, not
+four rates reworked at once. `SAVE_VERSION` bumped 5→6, matching the
+existing hard-discard convention (a v5 save's genomes would otherwise
+deserialize with `isDna` silently `undefined`/falsy, quietly reverting
+an already-DNA lineage to RNA on load instead of erroring).
+
+**Visibility**: reuses the existing `isSpeciationEvent`/🔀 pattern in the
+Tree of Life exactly — a new `isDnaTransition` on `TreeNode`, computed at
+the `recordBirth` call sites in `world.ts` (where parent and child
+`Genome` objects are already in scope), rendered as a solid teal ring
+(`#4fc3d9`), deliberately distinct from speciation's dashed amber so a
+birth that happens to be both events still reads as two separate
+markers. A 🧬 label in the Tree's info line mirrors 🔀's.
+
+**Verified, not assumed**:
+- Headless sanity (`dna_sanity.mjs`): a genome whose real replicase power
+  clears the threshold gets `isDna=true` on construction; a genome well
+  below it doesn't; `isDna` survives 200 generations of mutation intact
+  even as the underlying replicase power that originally triggered it
+  drifted down to 0 (the ratchet, directly proven, not just "no crash");
+  `crossoverGenome(hot, cold)` correctly unions to `true`.
+- Mutation-rate reduction measured directly (`dna_mutation_rate_check.mjs`):
+  isolated to the core genes (never touched by structural mutations, so
+  the measurement isn't contaminated by duplication/deletion/inversion
+  noise) — observed ratio 0.248 across 2,000 trials against a configured
+  0.25 multiplier. An earlier version of this same check, comparing whole
+  gene arrays, gave a misleading 0.631 — traced to structural-mutation
+  position-shift noise being counted as if it were point-mutation signal,
+  fixed by narrowing the comparison, not by adjusting the multiplier.
+- Real-world reachability (`dna_world_reachability.mjs`): a live `World`
+  simulation, 6 independent founding lineages via the real
+  `ensureEnergyCapable`-viable `randomGenome()` path, run 25,000+ ticks.
+  One founder started above threshold at tick 0 (a real, allowed
+  outcome — `ensureEnergyCapable`'s viability search can incidentally
+  roll a high-replicase gene same as any other), and by the end of the
+  run **100% of the 170 surviving individuals carried `isDna=true`** —
+  suggestive that the lower mutation rate carries a real survival
+  advantage once a population's already found a working local optimum,
+  though this is one run/seed, not a controlled comparison, so that's
+  named as an interesting open question, not a proven causal claim.
+- Save/restore round trip and a live Playwright session both confirmed
+  clean: zero console errors, and the teal transition ring rendered
+  correctly and visibly on real founder nodes in the actual Tree of Life
+  view — the marker fired naturally in that session too, not forced.
+
 ## Performance lessons (reapplied + new)
 
 - Spatial hash grid for every neighbor query, same as the Dish — but

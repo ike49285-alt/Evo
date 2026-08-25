@@ -69,6 +69,12 @@ export interface TreeNode {
    * the fact by World.checkSpeciation (birth is recorded before an
    * individual ever gets the chance to reproduce and trigger the check). */
   isSpeciationEvent: boolean;
+  /** True if this individual is the first in its lineage to carry
+   * isDna — the real moment heredity transitioned from RNA to DNA (see
+   * genome.ts's DNA_TRANSITION_THRESHOLD), not just an ordinary birth
+   * into an already-DNA lineage. Computed at the recordBirth call site,
+   * where parent and child Genome objects are both already in scope. */
+  isDnaTransition: boolean;
 }
 
 export interface StatsSnapshot {
@@ -284,7 +290,11 @@ export class World {
       const richMode = this.cells.length < this.richChemistryPopulationThreshold;
       const founder = new Virtunism(genome, x, y, lineageId, 0, startEnergy, this.rng, !!opts.isPlayerDesigned, richMode);
       this.cells.push(founder);
-      this.recordBirth(founder, null, null);
+      // No parent to compare against for a root — a founder that happens
+      // to start above DNA_TRANSITION_THRESHOLD (rare, but possible via
+      // ensureEnergyCapable's search or a hand-designed genome) is itself
+      // the transition event for its lineage.
+      this.recordBirth(founder, null, null, genome.isDna);
     }
     return lineageId;
   }
@@ -292,8 +302,12 @@ export class World {
   /** Registers a new individual as a tree-of-life node and links it under
    * its parent(s), propagating the +1 live-count up to the root so every
    * ancestor knows it still has a living descendant. `parentId: null`
-   * marks a root (a founder released via addSpeciesFromSequence). */
-  private recordBirth(child: Virtunism, parentId: number | null, secondParentId: number | null): void {
+   * marks a root (a founder released via addSpeciesFromSequence).
+   * `isDnaTransition` is computed by the caller, which already has the
+   * real parent/child Genome objects in scope — true only when this
+   * individual is the first in its lineage to carry isDna, not on every
+   * ordinary birth into an already-DNA lineage. */
+  private recordBirth(child: Virtunism, parentId: number | null, secondParentId: number | null, isDnaTransition: boolean): void {
     const node: TreeNode = {
       id: child.id,
       parentId,
@@ -307,6 +321,7 @@ export class World {
       liveCount: 1,
       children: [],
       isSpeciationEvent: false,
+      isDnaTransition,
     };
     this.treeNodes.set(child.id, node);
     if (parentId === null) return;
@@ -977,7 +992,12 @@ export class World {
           this.checkSpeciation(a);
           const child = mateVirtunisms(a, b, this.rng, richModeNow());
           newborns.push(child);
-          this.recordBirth(child, a.id, b.id);
+          // Neither parent already having isDna is what makes this the
+          // real transition moment, not just ordinary inheritance — see
+          // crossoverGenome's comment on why two RNA parents can still
+          // produce a DNA child via recombination.
+          const isDnaTransition = child.genome.isDna && !a.genome.isDna && !b.genome.isDna;
+          this.recordBirth(child, a.id, b.id, isDnaTransition);
           mated.add(a.id);
           mated.add(b.id);
           grow(a.lineageId);
@@ -997,7 +1017,7 @@ export class World {
         if (this.collectColonyMembers(root).length < this.maxColonySize) {
           const child = cell.budOffspring(this.rng, richModeNow());
           newborns.push(child);
-          this.recordBirth(child, cell.id, null);
+          this.recordBirth(child, cell.id, null, child.genome.isDna && !cell.genome.isDna);
           grow(cell.lineageId);
           continue;
         }
@@ -1005,7 +1025,7 @@ export class World {
       {
         const child = cell.reproduce(this.rng, richModeNow());
         newborns.push(child);
-        this.recordBirth(child, cell.id, null);
+        this.recordBirth(child, cell.id, null, child.genome.isDna && !cell.genome.isDna);
         grow(cell.lineageId);
       }
     }

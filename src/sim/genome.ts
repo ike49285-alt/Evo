@@ -36,6 +36,14 @@ export interface Genome {
   maxAge: number; // lifespan in ticks before death of old age
   hue: number; // 0-360, cosmetic + lets you track lineages visually
   proteins: ProteinPhenotype[];
+  // Whether this lineage has transitioned to DNA-based heredity — see
+  // DNA_TRANSITION_THRESHOLD below. A real historical fact about the
+  // lineage, not a per-tick derived stat (contrast hasBud(), which reads
+  // current replicase power fresh every call): once true it stays true
+  // through further mutation/crossover, propagated in parallel with
+  // `sequence`/`brain` by genomeFromSequence, the same way `brain` already
+  // is rather than being decoded from the sequence itself.
+  isDna: boolean;
   brain: NeuralNet;
   // Precomputed once here, not re-derived per call — genome.proteins never
   // changes after construction (mutation/crossover always build a *new*
@@ -96,7 +104,7 @@ function computeClassCaches(proteins: readonly ProteinPhenotype[]): {
   return { classPowerCache, classCountCache };
 }
 
-function decodePhenotype(sequence: GeneSequence): Omit<Genome, 'sequence' | 'brain'> {
+function decodePhenotype(sequence: GeneSequence): Omit<Genome, 'sequence' | 'brain' | 'isDna'> {
   const core = decodeCoreTraits(sequence);
   const proteins = decodeProteins(sequence);
   const { classPowerCache, classCountCache } = computeClassCaches(proteins);
@@ -220,6 +228,32 @@ export function hasBud(genome: Genome): boolean {
   return classPower(genome, 'replicase') >= BUD_THRESHOLD;
 }
 
+// Reverse transcriptase is structurally a polymerase — the same real
+// surface-chemistry axis (Arg/Lys-rich, RNA-backbone-binding) that
+// already defines the replicase class, just a meaningfully harder bar to
+// clear than "any repeatable replication" (BUD_THRESHOLD). Any lineage
+// whose replicase power crosses this transcribes its own genome into the
+// more stable molecule real DNA actually is (see DNA_MUTATION_RATE_
+// MULTIPLIER below for why that matters) — not treated as a separate 7th
+// catalysis class, since that would mean competing it against the other
+// six for every fold's argmax when it's really the same functional axis
+// at higher potency. 3x BUD_THRESHOLD as a starting point, not derived —
+// pending the same empirical calibration pass every other threshold in
+// this project gets (see NOTES.md).
+const DNA_TRANSITION_THRESHOLD = 3.0;
+
+// Not the literal ~100-1000x fidelity gap real DNA proofreading achieves
+// over uncorrected RNA replication — at this simulation's scale that
+// would make a DNA lineage's evolution effectively invisible, the same
+// "reachability over literal magnitude" call made for Stage 0's soup
+// density and catalytic-fold thresholds (see NOTES.md). A real, modest
+// reduction instead: a DNA lineage's point mutations still happen, just
+// meaningfully less often than an RNA lineage's — the correct *direction*
+// for a real chemical reason (T-vs-U repair-detectability, no 2'-OH
+// instability), calibrated for gameplay reachability rather than the
+// literal number.
+const DNA_MUTATION_RATE_MULTIPLIER = 0.25;
+
 // ---- construction & evolution ----------------------------------------------
 
 // The inverse of genes.ts's sum-based decode — needed wherever a specific
@@ -246,9 +280,14 @@ export function encodeUnit(unit: number, length: number): Gene {
  * there's no loadout catalog to encode). Both the bootstrap path
  * (chem/bridge.ts, sequence built from a protocell's real RNA) and the
  * Designer tab's random-seed release (a fresh randomGeneSequence) go
- * through this. */
-export function genomeFromSequence(sequence: GeneSequence, brain: NeuralNet): Genome {
-  return { sequence, brain, ...decodePhenotype(sequence) };
+ * through this with no parent genome in scope, so `inheritedIsDna`
+ * defaults false — every fresh lineage starts on RNA, matching Stage 0
+ * having no DNA at all to inherit from. `mutateGenome`/`crossoverGenome`
+ * below are the only callers that ever pass true. */
+export function genomeFromSequence(sequence: GeneSequence, brain: NeuralNet, inheritedIsDna = false): Genome {
+  const decoded = decodePhenotype(sequence);
+  const isDna = inheritedIsDna || decoded.classPowerCache.replicase >= DNA_TRANSITION_THRESHOLD;
+  return { sequence, brain, isDna, ...decoded };
 }
 
 // Real, single-random-protein-gene hit rates (headless-measured against
@@ -402,11 +441,16 @@ export function randomGenome(rng: Rng, reproductionMode: ReproductionMode = 'ase
 
 /** Produces a mutated child genome from a parent. Parent is untouched. */
 export function mutateGenome(parent: Genome, rng: Rng): Genome {
-  const sequence = mutateGeneSequence(parent.sequence, rng);
+  // A DNA parent's point mutations happen at a real, deliberately reduced
+  // rate — see DNA_MUTATION_RATE_MULTIPLIER's comment. isDna itself is
+  // passed through as inheritedIsDna: the ratchet only ever moves toward
+  // DNA, ordinary mutation can't revert it.
+  const rateMultiplier = parent.isDna ? DNA_MUTATION_RATE_MULTIPLIER : 1;
+  const sequence = mutateGeneSequence(parent.sequence, rng, rateMultiplier);
   // Strength scaled down to match the brain's Xavier-init weight range
   // (roughly ±0.2-0.3) rather than the old flat [-1,1] one — mutation
   // noise should perturb a weight, not routinely swamp it.
-  return genomeFromSequence(sequence, parent.brain.mutate(rng, 0.12, 0.15));
+  return genomeFromSequence(sequence, parent.brain.mutate(rng, 0.12, 0.15), parent.isDna);
 }
 
 /** Crossover of two same-lineage parents (for sexual reproduction). Core
@@ -416,7 +460,11 @@ export function mutateGenome(parent: Genome, rng: Rng): Genome {
  * mechanic. Brain crossover is unchanged. */
 export function crossoverGenome(a: Genome, b: Genome, rng: Rng): Genome {
   const sequence = crossoverGeneSequence(a.sequence, b.sequence, rng);
-  return genomeFromSequence(sequence, NeuralNet.crossover(a.brain, b.brain, rng));
+  // Either parent already having transitioned is enough — this lets two
+  // RNA parents whose combined replicase genes finally clear
+  // DNA_TRANSITION_THRESHOLD produce a DNA child neither parent was on
+  // their own, a real payoff of sexual recombination, not extra logic.
+  return genomeFromSequence(sequence, NeuralNet.crossover(a.brain, b.brain, rng), a.isDna || b.isDna);
 }
 
 // ---- save/restore ----------------------------------------------------------

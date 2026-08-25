@@ -13,6 +13,12 @@
 // hue, so it reads as "the same kind of thing" across the whole UI).
 const NEUTRAL = 'rgba(138, 154, 142, 0.8)';
 const SPECIATION_COLOR = '#e8a23c';
+// A distinct cool teal, deliberately far from the speciation amber — both
+// events can in principle land on the same node (a crossover that both
+// diverges past the speciation threshold and crosses
+// DNA_TRANSITION_THRESHOLD in one birth), so the two markers need to read
+// as clearly separate, not blend into one ambiguous color.
+const DNA_TRANSITION_COLOR = '#4fc3d9';
 /**
  * Lays out and draws the tree, time flowing left-to-right (x = birth tick,
  * auto-scaled to whatever span is currently retained) with branches spread
@@ -131,10 +137,18 @@ export function drawTree(canvas, nodes, opts) {
         // ordinary parent->child birth — drawn dashed, in the same amber
         // "genetic record" color everywhere in the UI, so it reads as a
         // distinct event even when it's not on the currently-highlighted path.
+        // A DNA transition is a real molecular-heredity event, not a branch
+        // point (unlike speciation, the lineage identity doesn't change) —
+        // drawn solid rather than dashed so the two never read as the same
+        // kind of thing, even if a single birth happens to be both.
         if (node.isSpeciationEvent) {
             ctx.setLineDash([4, 3]);
             ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.95)' : `${SPECIATION_COLOR}bf`;
             ctx.lineWidth = onPath ? 2.5 : 1.8;
+        }
+        else if (node.isDnaTransition) {
+            ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.95)' : `${DNA_TRANSITION_COLOR}cc`;
+            ctx.lineWidth = onPath ? 2.5 : 2;
         }
         else {
             ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.85)' : 'rgba(138, 154, 142, 0.3)';
@@ -176,6 +190,16 @@ export function drawTree(canvas, nodes, opts) {
             ctx.arc(p.x, p.y, r + 2.5, 0, Math.PI * 2);
             ctx.stroke();
             ctx.setLineDash([]);
+        }
+        // Solid, at a different radius than the speciation ring, so a birth
+        // that's rarely both events still reads as two distinct markers
+        // rather than overlapping into one.
+        if (node.isDnaTransition) {
+            ctx.strokeStyle = `${DNA_TRANSITION_COLOR}e6`;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, r + 4.5, 0, Math.PI * 2);
+            ctx.stroke();
         }
         if (isSelected) {
             ctx.strokeStyle = 'rgba(255,255,255,0.95)';

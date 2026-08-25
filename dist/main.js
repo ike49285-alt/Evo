@@ -527,13 +527,14 @@ function describeSelection() {
             : `of #${node.parentId}`;
     const status = node.alive ? 'alive' : 'extinct branch';
     const speciation = node.isSpeciationEvent ? ' · 🔀 new species' : '';
+    const dnaTransition = node.isDnaTransition ? ' · 🧬 DNA heredity' : '';
     // lineageName can be player-entered text (Designer tab's free-text name
     // field) — build it as a separate node via textContent, never
     // interpolate it into innerHTML.
     const nameSpan = document.createElement('span');
     nameSpan.className = 'specimen-name';
     nameSpan.textContent = lineageName;
-    treeInfo.append(`#${node.id} · `, nameSpan, ` · gen ${node.generation} · born t${node.birthTick} · ${parents} · ${status}${speciation}`);
+    treeInfo.append(`#${node.id} · `, nameSpan, ` · gen ${node.generation} · born t${node.birthTick} · ${parents} · ${status}${speciation}${dnaTransition}`);
 }
 treeCanvas.addEventListener('click', (e) => {
     const rect = treeCanvas.getBoundingClientRect();

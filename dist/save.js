@@ -39,8 +39,15 @@ const SAVE_KEY = 'evo-save-v2';
 // a v4 save predates them entirely — deserializing one would hand
 // classPower()/hasClass() `undefined[cls]` and crash immediately, not
 // silently misbehave, so this has to be a hard version bump like the
-// others rather than something patched over on load.)
-const SAVE_VERSION = 5;
+// others rather than something patched over on load.
+// v6: Genome gained isDna (the RNA->DNA heredity transition — see
+// genome.ts's DNA_TRANSITION_THRESHOLD). A v5 save's genomes would
+// deserialize with isDna undefined, which is falsy and wouldn't crash —
+// but it would silently treat an already-DNA lineage as freshly RNA again
+// (losing its earned lower mutation rate) rather than erroring, exactly
+// the "half-loads into a corrupt-but-plausible state" failure mode this
+// version bump exists to prevent.)
+const SAVE_VERSION = 6;
 export function saveGame(origin, world) {
     try {
         const payload = {

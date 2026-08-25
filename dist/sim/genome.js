@@ -144,6 +144,30 @@ const BUD_THRESHOLD = 1.0;
 export function hasBud(genome) {
     return classPower(genome, 'replicase') >= BUD_THRESHOLD;
 }
+// Reverse transcriptase is structurally a polymerase — the same real
+// surface-chemistry axis (Arg/Lys-rich, RNA-backbone-binding) that
+// already defines the replicase class, just a meaningfully harder bar to
+// clear than "any repeatable replication" (BUD_THRESHOLD). Any lineage
+// whose replicase power crosses this transcribes its own genome into the
+// more stable molecule real DNA actually is (see DNA_MUTATION_RATE_
+// MULTIPLIER below for why that matters) — not treated as a separate 7th
+// catalysis class, since that would mean competing it against the other
+// six for every fold's argmax when it's really the same functional axis
+// at higher potency. 3x BUD_THRESHOLD as a starting point, not derived —
+// pending the same empirical calibration pass every other threshold in
+// this project gets (see NOTES.md).
+const DNA_TRANSITION_THRESHOLD = 3.0;
+// Not the literal ~100-1000x fidelity gap real DNA proofreading achieves
+// over uncorrected RNA replication — at this simulation's scale that
+// would make a DNA lineage's evolution effectively invisible, the same
+// "reachability over literal magnitude" call made for Stage 0's soup
+// density and catalytic-fold thresholds (see NOTES.md). A real, modest
+// reduction instead: a DNA lineage's point mutations still happen, just
+// meaningfully less often than an RNA lineage's — the correct *direction*
+// for a real chemical reason (T-vs-U repair-detectability, no 2'-OH
+// instability), calibrated for gameplay reachability rather than the
+// literal number.
+const DNA_MUTATION_RATE_MULTIPLIER = 0.25;
 // ---- construction & evolution ----------------------------------------------
 // The inverse of genes.ts's sum-based decode — needed wherever a specific
 // locus value has to be forced into a real gene (chem/bridge.ts uses this
@@ -168,9 +192,14 @@ export function encodeUnit(unit, length) {
  * there's no loadout catalog to encode). Both the bootstrap path
  * (chem/bridge.ts, sequence built from a protocell's real RNA) and the
  * Designer tab's random-seed release (a fresh randomGeneSequence) go
- * through this. */
-export function genomeFromSequence(sequence, brain) {
-    return { sequence, brain, ...decodePhenotype(sequence) };
+ * through this with no parent genome in scope, so `inheritedIsDna`
+ * defaults false — every fresh lineage starts on RNA, matching Stage 0
+ * having no DNA at all to inherit from. `mutateGenome`/`crossoverGenome`
+ * below are the only callers that ever pass true. */
+export function genomeFromSequence(sequence, brain, inheritedIsDna = false) {
+    const decoded = decodePhenotype(sequence);
+    const isDna = inheritedIsDna || decoded.classPowerCache.replicase >= DNA_TRANSITION_THRESHOLD;
+    return { sequence, brain, isDna, ...decoded };
 }
 // Real, single-random-protein-gene hit rates (headless-measured against
 // the actual class-score formula in chem/polymer.ts, 50,000-gene sample):
@@ -319,11 +348,16 @@ export function randomGenome(rng, reproductionMode = 'asexual') {
 }
 /** Produces a mutated child genome from a parent. Parent is untouched. */
 export function mutateGenome(parent, rng) {
-    const sequence = mutateGeneSequence(parent.sequence, rng);
+    // A DNA parent's point mutations happen at a real, deliberately reduced
+    // rate — see DNA_MUTATION_RATE_MULTIPLIER's comment. isDna itself is
+    // passed through as inheritedIsDna: the ratchet only ever moves toward
+    // DNA, ordinary mutation can't revert it.
+    const rateMultiplier = parent.isDna ? DNA_MUTATION_RATE_MULTIPLIER : 1;
+    const sequence = mutateGeneSequence(parent.sequence, rng, rateMultiplier);
     // Strength scaled down to match the brain's Xavier-init weight range
     // (roughly ±0.2-0.3) rather than the old flat [-1,1] one — mutation
     // noise should perturb a weight, not routinely swamp it.
-    return genomeFromSequence(sequence, parent.brain.mutate(rng, 0.12, 0.15));
+    return genomeFromSequence(sequence, parent.brain.mutate(rng, 0.12, 0.15), parent.isDna);
 }
 /** Crossover of two same-lineage parents (for sexual reproduction). Core
  * loci are picked per-gene from one parent or the other (independent
@@ -332,7 +366,11 @@ export function mutateGenome(parent, rng) {
  * mechanic. Brain crossover is unchanged. */
 export function crossoverGenome(a, b, rng) {
     const sequence = crossoverGeneSequence(a.sequence, b.sequence, rng);
-    return genomeFromSequence(sequence, NeuralNet.crossover(a.brain, b.brain, rng));
+    // Either parent already having transitioned is enough — this lets two
+    // RNA parents whose combined replicase genes finally clear
+    // DNA_TRANSITION_THRESHOLD produce a DNA child neither parent was on
+    // their own, a real payoff of sexual recombination, not extra logic.
+    return genomeFromSequence(sequence, NeuralNet.crossover(a.brain, b.brain, rng), a.isDna || b.isDna);
 }
 export function serializeGenome(genome) {
     return { ...genome, brain: genome.brain.toJSON() };
