@@ -14,6 +14,7 @@ import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
 import { BRAIN_TOPOLOGY, CatalysisClass } from './types.js';
 import { SpatialGrid } from './grid.js';
+import { CATALYSIS_CLASSES } from '../chem/polymer.js';
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
@@ -120,6 +121,13 @@ export interface SpeciesSummary {
    * members' proteins right now — not a fixed trait, just a cheap-to-show
    * summary of what it currently leans toward. */
   dominantClass: CatalysisClass | null;
+  /** Average real catalytic power per class, across this lineage's living
+   * members — the same classPowerCache each individual already carries
+   * (see Genome's own comment), just averaged across the population. This
+   * is a real capability profile read off actual folded proteins, not a
+   * looked-up archetype — the Species panel's radar chart plots this
+   * directly. */
+  avgClassPower: Record<CatalysisClass, number>;
 }
 
 /** How long the *last* update() call actually took, in milliseconds — the
@@ -581,12 +589,18 @@ export class World {
       sumSpeed: number;
       sumSense: number;
       classCounts: Partial<Record<CatalysisClass, number>>;
+      sumClassPower: Record<CatalysisClass, number>;
     }
+    const zeroClassPower = (): Record<CatalysisClass, number> => {
+      const r = {} as Record<CatalysisClass, number>;
+      for (const cls of CATALYSIS_CLASSES) r[cls] = 0;
+      return r;
+    };
     const acc = new Map<number, Acc>();
     for (const c of this.cells) {
       let a = acc.get(c.lineageId);
       if (!a) {
-        a = { population: 0, maxGeneration: 0, sumSize: 0, sumSpeed: 0, sumSense: 0, classCounts: {} };
+        a = { population: 0, maxGeneration: 0, sumSize: 0, sumSpeed: 0, sumSense: 0, classCounts: {}, sumClassPower: zeroClassPower() };
         acc.set(c.lineageId, a);
       }
       a.population++;
@@ -599,6 +613,7 @@ export class World {
         if (cls === null) continue;
         a.classCounts[cls] = (a.classCounts[cls] ?? 0) + 1;
       }
+      for (const cls of CATALYSIS_CLASSES) a.sumClassPower[cls] += c.genome.classPowerCache[cls];
     }
 
     const result: SpeciesSummary[] = [];
@@ -629,6 +644,10 @@ export class World {
         avgSpeed: a.sumSpeed / a.population,
         avgSense: a.sumSense / a.population,
         dominantClass: dominant,
+        avgClassPower: Object.fromEntries(CATALYSIS_CLASSES.map((cls) => [cls, a.sumClassPower[cls] / a.population])) as Record<
+          CatalysisClass,
+          number
+        >,
       });
     }
     result.sort((x, y) => y.population - x.population);

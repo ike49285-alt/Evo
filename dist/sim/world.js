@@ -7,6 +7,7 @@ import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
 import { BRAIN_TOPOLOGY } from './types.js';
 import { SpatialGrid } from './grid.js';
+import { CATALYSIS_CLASSES } from '../chem/polymer.js';
 function clamp(v, min, max) {
     return Math.min(max, Math.max(min, v));
 }
@@ -439,11 +440,17 @@ export class World {
      * sampled/cached: cheap (same O(population) cost as getLiveStats()),
      * and callers already throttle how often they call it. */
     getLivingSpecies() {
+        const zeroClassPower = () => {
+            const r = {};
+            for (const cls of CATALYSIS_CLASSES)
+                r[cls] = 0;
+            return r;
+        };
         const acc = new Map();
         for (const c of this.cells) {
             let a = acc.get(c.lineageId);
             if (!a) {
-                a = { population: 0, maxGeneration: 0, sumSize: 0, sumSpeed: 0, sumSense: 0, classCounts: {} };
+                a = { population: 0, maxGeneration: 0, sumSize: 0, sumSpeed: 0, sumSense: 0, classCounts: {}, sumClassPower: zeroClassPower() };
                 acc.set(c.lineageId, a);
             }
             a.population++;
@@ -458,6 +465,8 @@ export class World {
                     continue;
                 a.classCounts[cls] = (a.classCounts[cls] ?? 0) + 1;
             }
+            for (const cls of CATALYSIS_CLASSES)
+                a.sumClassPower[cls] += c.genome.classPowerCache[cls];
         }
         const result = [];
         for (const [lineageId, a] of acc) {
@@ -488,6 +497,7 @@ export class World {
                 avgSpeed: a.sumSpeed / a.population,
                 avgSense: a.sumSense / a.population,
                 dominantClass: dominant,
+                avgClassPower: Object.fromEntries(CATALYSIS_CLASSES.map((cls) => [cls, a.sumClassPower[cls] / a.population])),
             });
         }
         result.sort((x, y) => y.population - x.population);

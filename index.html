@@ -103,7 +103,7 @@
               One card per species currently alive in the dish — whether it
               swam out of the pool, was hand-designed, or split off from
               another lineage once its genes drifted far enough to earn its
-              own name.
+              own name. Tap a card for its full stat star.
             </p>
             <div id="species-list" class="species-list"></div>
           </section>
@@ -278,6 +278,20 @@
         <button id="confirm-cancel" class="btn">Cancel</button>
         <button id="confirm-ok" class="btn danger">Reset World</button>
       </div>
+    </div>
+  </div>
+
+  <div id="species-modal" class="confirm-overlay" hidden>
+    <div class="species-modal-box" role="dialog" aria-modal="true" aria-labelledby="species-modal-name">
+      <button id="species-modal-close" class="modal-close-btn" aria-label="Close">✕</button>
+      <div class="species-modal-head">
+        <span id="species-modal-swatch" class="species-swatch"></span>
+        <span id="species-modal-name" class="species-name"></span>
+      </div>
+      <p id="species-modal-meta" class="species-pop"></p>
+      <canvas id="species-modal-radar" class="chart species-modal-radar"></canvas>
+      <div id="species-modal-traits" class="species-traits"></div>
+      <p id="species-modal-lineage" class="species-lineage"></p>
     </div>
   </div>
 

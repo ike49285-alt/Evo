@@ -1,10 +1,11 @@
 import { Renderer } from './render/renderer.js';
 import { ReproductionMode } from './sim/types.js';
 import { deriveEnergyCapturePower, derivePredationPower, randomGenome } from './sim/genome.js';
-import { World } from './sim/world.js';
+import { World, SpeciesSummary } from './sim/world.js';
+import { CATALYSIS_CLASSES } from './chem/polymer.js';
 import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
-import { drawSparkline, drawScatter, ScatterPoint } from './ui/chart.js';
+import { drawSparkline, drawScatter, drawRadarChart, ScatterPoint } from './ui/chart.js';
 import { drawTree, hitTestTree, TreeNodeScreenPos } from './ui/treeview.js';
 import { loadGame, saveGame } from './save.js';
 
@@ -536,6 +537,8 @@ function updateSpeciesPanel(): void {
     const card = document.createElement('div');
     card.className = 'species-card';
     card.style.borderLeftColor = `hsl(${s.hue}, 60%, 50%)`;
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', () => openSpeciesModal(s));
 
     const head = document.createElement('div');
     head.className = 'species-card-head';
@@ -567,7 +570,64 @@ function updateSpeciesPanel(): void {
     }
     speciesList.appendChild(card);
   }
+
+  // Keep an already-open modal live while its species is still around —
+  // reads the same fresh SpeciesSummary array this refresh just built,
+  // not a stale snapshot from the moment it was opened.
+  if (openedSpeciesLineageId !== null) {
+    const stillAlive = species.find((sp) => sp.lineageId === openedSpeciesLineageId);
+    if (stillAlive) renderSpeciesModal(stillAlive);
+    else closeSpeciesModal();
+  }
 }
+
+// --- species stat-star modal --------------------------------------------
+const speciesModal = el<HTMLDivElement>('species-modal');
+const speciesModalClose = el<HTMLButtonElement>('species-modal-close');
+const speciesModalSwatch = el('species-modal-swatch');
+const speciesModalName = el('species-modal-name');
+const speciesModalMeta = el('species-modal-meta');
+const speciesModalRadar = el<HTMLCanvasElement>('species-modal-radar');
+const speciesModalTraits = el('species-modal-traits');
+const speciesModalLineage = el('species-modal-lineage');
+let openedSpeciesLineageId: number | null = null;
+
+function renderSpeciesModal(s: SpeciesSummary): void {
+  speciesModalSwatch.style.background = `hsl(${s.hue}, 60%, 45%)`;
+  speciesModalName.textContent = s.name; // player-entered text — textContent only, never innerHTML
+  speciesModalMeta.textContent = `${s.population} alive · gen ${s.maxGeneration}${s.dominantClass ? ` · mostly ${s.dominantClass}` : ''}`;
+  speciesModalTraits.textContent = `size ${s.avgSize.toFixed(2)} · speed ${s.avgSpeed.toFixed(2)} · sense ${s.avgSense.toFixed(0)}`;
+  speciesModalLineage.replaceChildren();
+  if (s.parentName !== null) {
+    const parentEm = document.createElement('em');
+    parentEm.textContent = s.parentName;
+    speciesModalLineage.append('diverged from ', parentEm);
+  }
+  drawRadarChart(
+    speciesModalRadar,
+    CATALYSIS_CLASSES.map((cls) => ({ label: cls, value: s.avgClassPower[cls] })),
+    s.hue,
+  );
+}
+
+function openSpeciesModal(s: SpeciesSummary): void {
+  openedSpeciesLineageId = s.lineageId;
+  renderSpeciesModal(s);
+  speciesModal.hidden = false;
+}
+
+function closeSpeciesModal(): void {
+  openedSpeciesLineageId = null;
+  speciesModal.hidden = true;
+}
+
+speciesModalClose.addEventListener('click', closeSpeciesModal);
+speciesModal.addEventListener('click', (e) => {
+  if (e.target === speciesModal) closeSpeciesModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !speciesModal.hidden) closeSpeciesModal();
+});
 
 // --- tree of life -----------------------------------------------------
 const treeCanvas = el<HTMLCanvasElement>('chart-tree');

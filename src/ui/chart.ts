@@ -134,3 +134,109 @@ export function drawScatter(
   ctx.fillText(opts.yLabel, 0, 0);
   ctx.restore();
 }
+
+export interface RadarAxis {
+  label: string;
+  value: number; // real, unscaled — the chart normalizes against the largest value present
+}
+
+/**
+ * A "stat star" — one axis per entry, plotted as a closed polygon from the
+ * center. Built for a species' six real catalysis-class powers
+ * (Genome.classPowerCache, averaged across its living members — see
+ * World.getLivingSpecies), so the shape itself is a real capability
+ * profile read off actual folded proteins (a predator-heavy lineage
+ * genuinely spikes toward protease/motor), not an illustrative fake.
+ * `hue` is a raw 0-360 value (species already carry one, see
+ * SpeciesSummary.hue) rather than a pre-built color string, so the fill/
+ * stroke/vertex colors can share one real number instead of three
+ * string-parsing round trips.
+ */
+export function drawRadarChart(canvas: HTMLCanvasElement, axes: readonly RadarAxis[], hue: number): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const cssWidth = Math.max(1, Math.round(canvas.clientWidth));
+  const cssHeight = Math.max(1, Math.round(canvas.clientHeight));
+  if (canvas.width !== cssWidth) canvas.width = cssWidth;
+  if (canvas.height !== cssHeight) canvas.height = cssHeight;
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (axes.length < 3) return; // not a meaningful polygon below a triangle
+
+  const cx = w / 2;
+  const cy = h / 2;
+  const labelPad = 30; // room for axis labels around the rim
+  const radius = Math.max(8, Math.min(w, h) / 2 - labelPad);
+  const n = axes.length;
+  const angleFor = (i: number): number => -Math.PI / 2 + (i / n) * Math.PI * 2; // start at top, clockwise
+  // A real value of 0 across every axis (a lineage with no functional
+  // proteins at all yet) shouldn't divide-by-zero into a degenerate
+  // full-size star — floor the normalizer so an all-zero profile draws as
+  // a real point at the center instead.
+  const maxValue = Math.max(0.05, ...axes.map((a) => a.value));
+
+  // Concentric rings, same neutral axis-line color the other charts here use.
+  ctx.strokeStyle = 'rgba(138, 154, 142, 0.16)';
+  ctx.lineWidth = 1;
+  const rings = 4;
+  for (let ring = 1; ring <= rings; ring++) {
+    const rr = (radius * ring) / rings;
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const a = angleFor(i % n);
+      const x = cx + Math.cos(a) * rr;
+      const y = cy + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Spokes + axis labels.
+  ctx.strokeStyle = 'rgba(138, 154, 142, 0.22)';
+  ctx.fillStyle = 'rgba(138, 154, 142, 0.85)';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  axes.forEach((axis, i) => {
+    const a = angleFor(i);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a) * radius, cy + Math.sin(a) * radius);
+    ctx.stroke();
+    const lx = cx + Math.cos(a) * (radius + 14);
+    const ly = cy + Math.sin(a) * (radius + 14);
+    ctx.fillText(axis.label, lx, ly);
+  });
+
+  // The real data polygon.
+  ctx.beginPath();
+  axes.forEach((axis, i) => {
+    const a = angleFor(i);
+    const rr = (Math.min(axis.value, maxValue) / maxValue) * radius;
+    const x = cx + Math.cos(a) * rr;
+    const y = cy + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = `hsla(${hue}, 65%, 55%, 0.28)`;
+  ctx.fill();
+  ctx.strokeStyle = `hsl(${hue}, 70%, 60%)`;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Vertex dots make each axis's real value legible even where the
+  // polygon edge alone would be ambiguous (a value near zero is easy to
+  // miss without one).
+  axes.forEach((axis, i) => {
+    const a = angleFor(i);
+    const rr = (Math.min(axis.value, maxValue) / maxValue) * radius;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 2.4, 0, Math.PI * 2);
+    ctx.fillStyle = `hsl(${hue}, 70%, 65%)`;
+    ctx.fill();
+  });
+}
