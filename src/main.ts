@@ -633,7 +633,7 @@ function frame(): void {
       if (performance.now() - frameStart > TICK_TIME_BUDGET_MS) break;
     }
   }
-  renderer.draw(world, origin, POOL_OFFSET, { showVision, highlightId: selectedIndividualId });
+  renderer.draw(world, origin, POOL_OFFSET, { showVision, highlightId: selectedIndividualId, hidePool: stage0Retired });
   updateHudAndStats();
   updateChemistryPanel();
   updateTree();

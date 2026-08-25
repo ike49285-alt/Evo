@@ -68,7 +68,16 @@ html, body {
 #app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100vh; /* fallback for browsers without dvh support */
+  /* Real mobile browsers show/hide their address bar as you scroll, so
+     100vh is computed against the *largest* possible viewport (bar
+     hidden) — the page ends up genuinely taller than what's visible
+     whenever that bar is showing (the common case), pushing anything
+     stacked toward the bottom (in portrait, that's the whole sidebar —
+     every tab's content) off-screen instead of being clipped/scrollable
+     within a properly-bounded #app. dvh tracks the *actual* visible
+     viewport instead. */
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -352,12 +361,32 @@ canvas.chart {
 
 @media (max-width: 760px) {
   main { flex-direction: column; }
-  .sidebar { order: 2; width: 100%; flex-basis: auto; max-height: 45vh; }
+  /* A genuine `height`, not just `max-height` — with only max-height,
+     .sidebar's real height comes from its own content (max-height just
+     caps it), which leaves it indeterminate as far as CSS percentage
+     resolution is concerned. #tab-tree.tab-panel.active's `height: 100%`
+     (needed so the tree canvas can flex to fill whatever room is left,
+     not grow with its own content like every other panel) resolves
+     against an indeterminate ancestor as `auto` per spec — silently
+     collapsing to content size instead of actually filling the sidebar.
+     A real height gives every descendant something definite to resolve
+     percentages against. */
+  .sidebar { order: 2; width: 100%; flex-basis: auto; height: 45vh; height: 45dvh; max-height: 45dvh; }
   #tab-rail { order: 1; width: 100%; flex-basis: auto; flex-direction: row; }
   #tab-rail .tab-btn { border-left: none; border-bottom: 2px solid transparent; flex: 1; }
   #tab-rail .tab-btn.active { border-left-color: transparent; border-bottom-color: var(--accent); }
   .tree-toolbar { flex-direction: column; }
-  .tree-info { text-align: left; max-width: none; }
+  /* .tree-info's base rule is `flex: 0 1 260px` — a 260px *width* cap,
+     correct for the desktop row layout .tree-toolbar normally uses. Once
+     the rule above switches .tree-toolbar to a column, that same
+     flex-basis is read on the vertical axis instead — a 260px *height*
+     floor nothing here needs, and paired with .tree-toolbar's
+     flex-shrink:0 (so it never yields the space back), this is what
+     actually pushed the tree canvas off-screen: not a sizing chain bug,
+     just a flex-basis meant for one axis silently applying to the other
+     once the axis flipped. `flex: 0 0 auto` lets it take its real,
+     compact content height instead. */
+  .tree-info { flex: 0 0 auto; text-align: left; max-width: none; }
 }
 
 /* A phone held sideways is short, not narrow — the 760px breakpoint above

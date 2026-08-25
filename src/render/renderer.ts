@@ -117,7 +117,13 @@ export class Renderer {
     world: World,
     origin: Origin,
     poolOffset: { x: number; y: number },
-    options: { showVision?: boolean; highlightId?: number | null } = {},
+    // hidePool: once Stage 0 retires, origin.update() stops running (see
+    // main.ts's frame loop) but the pool's last real state is still sitting
+    // there — drawing it forever after would mean a permanently frozen
+    // (and, once a population is old enough, potentially oversized —
+    // vesicles keep whatever state they had at the instant retirement
+    // fired) pool cluttering the view for a stage that's not coming back.
+    options: { showVision?: boolean; highlightId?: number | null; hidePool?: boolean } = {},
   ): void {
     const ctx = this.ctx;
     this.animT += 1;
@@ -169,7 +175,7 @@ export class Renderer {
     ctx.stroke();
     ctx.restore();
 
-    this.drawPool(origin, poolOffset);
+    if (!options.hidePool) this.drawPool(origin, poolOffset);
 
     // carrion — the only discrete food item; there's no ambient plant food
     ctx.fillStyle = '#b5502f';

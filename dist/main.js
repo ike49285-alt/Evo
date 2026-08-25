@@ -580,7 +580,7 @@ function frame() {
                 break;
         }
     }
-    renderer.draw(world, origin, POOL_OFFSET, { showVision, highlightId: selectedIndividualId });
+    renderer.draw(world, origin, POOL_OFFSET, { showVision, highlightId: selectedIndividualId, hidePool: stage0Retired });
     updateHudAndStats();
     updateChemistryPanel();
     updateTree();
