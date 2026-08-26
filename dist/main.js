@@ -1,6 +1,7 @@
 import { Renderer } from './render/renderer.js';
 import { deriveEnergyCapturePower, derivePredationPower, randomGenome } from './sim/genome.js';
 import { World } from './sim/world.js';
+import { CORE_GENE_COUNT, LOCUS } from './sim/genes.js';
 import { CATALYSIS_CLASSES } from './chem/polymer.js';
 import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
@@ -97,6 +98,16 @@ renderer.fitToWorld(world);
 // fall back to, which is exactly "zoom works on the page, not the box."
 const activePointers = new Map();
 let lastPinchDist = null;
+// Tap-to-select on the dish: a pointerdown that lifts (pointerup) close to
+// where it went down, with only one pointer ever down during that whole
+// gesture, selects whatever individual is under it — layered onto the
+// same pointer stream pan/pinch already track above, not a second
+// independent listener that could race it. TAP_MAX_SCREEN_DIST is in
+// screen pixels, not world units: how far your finger/mouse actually
+// moved on the glass is what separates a tap from a drag, not how far
+// that maps to in world space at the current zoom.
+const TAP_MAX_SCREEN_DIST = 6;
+let tapCandidate = null;
 function canvasPoint(e) {
     const rect = canvas.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -124,10 +135,15 @@ canvas.addEventListener('pointerdown', (e) => {
     catch {
         // ignored — see above
     }
-    activePointers.set(e.pointerId, canvasPoint(e));
+    const point = canvasPoint(e);
+    activePointers.set(e.pointerId, point);
     // A second finger landing establishes the pinch's starting distance —
     // the very next pointermove diffs against this instead of jumping.
     lastPinchDist = pinchState()?.dist ?? null;
+    // A tap candidate only survives as the *sole* pointer down — a second
+    // finger landing (pinch start) cancels it immediately, same as real
+    // movement does in pointermove below.
+    tapCandidate = activePointers.size === 1 ? { pointerId: e.pointerId, x: point.x, y: point.y } : null;
 });
 canvas.addEventListener('pointermove', (e) => {
     if (!activePointers.has(e.pointerId))
@@ -145,10 +161,18 @@ canvas.addEventListener('pointermove', (e) => {
             renderer.zoomAt(pinch.midX, pinch.midY, pinch.dist / lastPinchDist);
         }
         lastPinchDist = pinch.dist;
+        tapCandidate = null;
         return;
     }
     if (activePointers.size === 1) {
         renderer.panByScreenDelta(next.x - prev.x, next.y - prev.y);
+    }
+    // Moved far enough on the glass that this reads as a drag, not a tap.
+    // Reaching here means activePointers.size is 1 (the pinch branch above
+    // already returned otherwise), so e.pointerId is necessarily the one
+    // tapCandidate, if any, is tracking.
+    if (tapCandidate && Math.hypot(next.x - tapCandidate.x, next.y - tapCandidate.y) > TAP_MAX_SCREEN_DIST) {
+        tapCandidate = null;
     }
 });
 function releasePointer(e) {
@@ -157,8 +181,56 @@ function releasePointer(e) {
     // next time a second finger lands, not a stale distance from before.
     lastPinchDist = pinchState()?.dist ?? null;
 }
-canvas.addEventListener('pointerup', releasePointer);
-canvas.addEventListener('pointercancel', releasePointer);
+/** Nearest alive cell whose body (plus a fixed screen-space tap
+ * tolerance, converted to world units by the current zoom so the
+ * tappable margin around a small/zoomed-out cell stays a usable size on
+ * screen) contains the tapped world point. Linear scan over world.cells —
+ * runs once per completed tap, not per frame, so population size doesn't
+ * matter the way it would in the render loop. */
+const TAP_HIT_PAD_SCREEN = 6;
+function hitTestDish(worldX, worldY) {
+    const padWorld = TAP_HIT_PAD_SCREEN / renderer.camera.zoom;
+    let best = null;
+    let bestD = Infinity;
+    for (const cell of world.cells) {
+        if (!cell.alive)
+            continue;
+        const d = Math.hypot(cell.x - worldX, cell.y - worldY);
+        if (d <= cell.radius + padWorld && d < bestD) {
+            bestD = d;
+            best = cell.id;
+        }
+    }
+    return best;
+}
+function handleDishTap(sx, sy) {
+    const worldPt = renderer.screenToWorld(sx, sy);
+    const hit = hitTestDish(worldPt.x, worldPt.y);
+    // Tapping empty water is a no-op, not a deselect — mirrors the tree
+    // canvas's own click handler below: Clear (Tree tab) is the one
+    // deliberate way to deselect, shared by both since they drive the same
+    // selectedIndividualId.
+    if (hit !== null)
+        selectIndividual(hit);
+}
+canvas.addEventListener('pointerup', (e) => {
+    // A completed tap: this pointer is the one tapCandidate has been
+    // tracking, and it never moved past the drag threshold or got
+    // cancelled by a pinch — see pointerdown/pointermove above. Uses the
+    // *down* position (not wherever it lifted) — by construction the two
+    // are always within TAP_MAX_SCREEN_DIST of each other by this point.
+    if (tapCandidate && tapCandidate.pointerId === e.pointerId) {
+        handleDishTap(tapCandidate.x, tapCandidate.y);
+    }
+    tapCandidate = null;
+    releasePointer(e);
+});
+canvas.addEventListener('pointercancel', (e) => {
+    // A cancelled gesture (the browser/OS took it over, e.g. a scroll) is
+    // never a completed tap.
+    tapCandidate = null;
+    releasePointer(e);
+});
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
@@ -203,7 +275,7 @@ el('btn-reset').addEventListener('click', async () => {
     world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
     applyPopCap(); // the cap is a topbar-level setting, not per-world state — a reset shouldn't silently drop it back to the default
     renderer.fitToWorld(world);
-    selectedIndividualId = null;
+    selectIndividual(null);
     // Session-level bookkeeping that isn't part of origin/world themselves
     // still needs a real reset here, or a reset after Stage 0 had already
     // retired (the common case — retirement fires in a few thousand ticks,
@@ -574,11 +646,44 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !speciesModal.hidden)
         closeSpeciesModal();
 });
-// --- tree of life -----------------------------------------------------
+// --- tree of life + individual detail -----------------------------------
+// One selection variable for the whole app — dish taps (see handleDishTap
+// above), tree-node clicks, ancestry parent-links inside the detail panel
+// below, and Clear all funnel through selectIndividual() so there is
+// exactly one place that keeps selectedIndividualId, the one-liner
+// (#tree-info), and the full detail panel in sync. There is no separate
+// tab for this — it lives in the existing Tree of Life panel (#tab-tree),
+// appended below the tree canvas.
 const treeCanvas = el('chart-tree');
 const treeInfo = el('tree-info');
+const treeDetail = el('tree-detail');
 let selectedIndividualId = null;
 let treePositions = new Map();
+let detailRefs = null;
+// `${id}:${'alive'|'gone'}` for whatever the detail panel was last fully
+// rebuilt for — the panel's *structure* (identity header, protein list,
+// gene list, brain summary, radar canvas, alive-vs-historical layout)
+// only ever needs to change when the selection itself changes or a live
+// selection dies; every other frame just updates the small live-vitals
+// set above in place. A genome never changes after its individual is
+// born (mutation always produces a *new* individual with a new id — see
+// genome.ts), so nothing genome-derived here needs more than this.
+let lastDetailSignature = null;
+function selectIndividual(id) {
+    selectedIndividualId = id;
+    refreshSelectionUI();
+}
+/** The live Virtunism for the current selection, if it still has one —
+ * null once World.cleanupDead() has actually removed it (the tree node
+ * itself can outlive the individual — see TreeNode's own doc comment on
+ * liveCount). O(population), same cost class as buildInputs' own
+ * per-cell grid queries — called at most a couple of times per frame,
+ * only while something's selected. */
+function findLiveSelected() {
+    if (selectedIndividualId === null)
+        return null;
+    return world.cells.find((c) => c.id === selectedIndividualId) ?? null;
+}
 function describeSelection() {
     treeInfo.replaceChildren();
     if (selectedIndividualId === null)
@@ -605,24 +710,362 @@ function describeSelection() {
     nameSpan.textContent = lineageName;
     treeInfo.append(`#${node.id} · `, nameSpan, ` · gen ${node.generation} · born t${node.birthTick} · ${parents} · ${status}${speciation}${dnaTransition}`);
 }
+function pctLabel(ratio) {
+    return `${(ratio * 100).toFixed(1)}%`;
+}
+function fillWidth(ratio) {
+    return `${Math.min(100, Math.max(0, ratio * 100))}%`;
+}
+function addStatBlock(container, label, value) {
+    const stat = document.createElement('div');
+    stat.className = 'stat';
+    const labelEl = document.createElement('span');
+    labelEl.className = 'stat-label';
+    labelEl.textContent = label;
+    const valueEl = document.createElement('span');
+    valueEl.textContent = value;
+    stat.append(labelEl, valueEl);
+    container.appendChild(stat);
+    return valueEl;
+}
+function addBarRow(container, label) {
+    const row = document.createElement('div');
+    row.className = 'tree-detail-bar-row';
+    const labelRow = document.createElement('div');
+    labelRow.className = 'tree-detail-bar-label';
+    const labelText = document.createElement('span');
+    labelText.textContent = label;
+    const labelValue = document.createElement('span');
+    labelRow.append(labelText, labelValue);
+    const track = document.createElement('div');
+    track.className = 'tree-detail-bar-track';
+    const fill = document.createElement('div');
+    fill.className = 'tree-detail-bar-fill';
+    track.appendChild(fill);
+    row.append(labelRow, track);
+    container.appendChild(row);
+    return { fill, labelValue };
+}
+function addSectionTitle(container, text) {
+    const h = document.createElement('div');
+    h.className = 'tree-detail-section-title';
+    h.textContent = text;
+    container.appendChild(h);
+}
+/** A clickable link to another tree node's id — reuses selectIndividual()
+ * so following a parent/child link is exactly the same selection path as
+ * a tree-canvas click or a dish tap. Falls back to plain (unclickable)
+ * text in the defensive case an id somehow isn't in world.treeNodes —
+ * shouldn't happen (a node's parent always outlives it), but this is a
+ * display helper, not a place to throw on an invariant violation. */
+function ancestryLink(id, label) {
+    if (!world.treeNodes.has(id))
+        return document.createTextNode(label);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tree-detail-parent-link';
+    btn.textContent = label;
+    btn.addEventListener('click', () => selectIndividual(id));
+    return btn;
+}
+function buildParentsLine(node) {
+    const p = document.createElement('p');
+    p.className = 'tree-detail-empty-hint';
+    p.append('Parent: ');
+    if (node.parentId === null) {
+        p.append('none — a founder');
+    }
+    else {
+        p.append(ancestryLink(node.parentId, `#${node.parentId}`));
+        if (node.secondParentId !== null)
+            p.append(' & ', ancestryLink(node.secondParentId, `#${node.secondParentId}`));
+    }
+    return p;
+}
+/** Real per-protein detail: the actual translated amino-acid sequence
+ * plus its real fold result (chem/polymer.ts's PeptideFold) — not a
+ * summary, the same data Virtunism/World read to derive every
+ * capability. */
+function buildProteinList(proteins) {
+    const list = document.createElement('div');
+    list.className = 'protein-list';
+    if (proteins.length === 0) {
+        const p = document.createElement('p');
+        p.className = 'tree-detail-empty-hint';
+        p.textContent = 'No protein-coding genes at all.';
+        list.appendChild(p);
+        return list;
+    }
+    proteins.forEach((p, i) => {
+        const row = document.createElement('div');
+        row.className = 'protein-row';
+        const head = document.createElement('div');
+        head.className = 'protein-row-head';
+        const cls = document.createElement('span');
+        cls.className = 'protein-class';
+        cls.textContent = p.fold.catalysisClass
+            ? `#${i + 1} ${p.fold.catalysisClass}${p.fold.isCatalyst ? ` — strength ${p.fold.catalysisStrength.toFixed(2)}` : ''}`
+            : `#${i + 1} no function`;
+        const meta = document.createElement('span');
+        meta.textContent =
+            `${p.fold.folded ? 'folded' : 'unfolded'} · stability ${p.fold.stability.toFixed(2)} · contacts ${p.fold.contacts} · ` +
+                `${p.sequence.length} aa · mount ${((p.angle * 180) / Math.PI).toFixed(0)}°`;
+        head.append(cls, meta);
+        const seq = document.createElement('div');
+        seq.className = 'protein-seq';
+        seq.textContent = p.sequence.join('');
+        row.append(head, seq);
+        list.appendChild(row);
+    });
+    return list;
+}
+function buildBrainSummary(brain) {
+    const p = document.createElement('p');
+    p.className = 'tree-detail-empty-hint';
+    const avgAbs = (arr) => arr.reduce((s, v) => s + Math.abs(v), 0) / (arr.length || 1);
+    const totalParams = brain.w1.length + brain.b1.length + brain.w2.length + brain.b2.length;
+    p.textContent =
+        `${brain.topology.inputs} sensor inputs → ${brain.topology.hidden} hidden units (tanh) → ` +
+            `${brain.topology.outputs} outputs (turn, thrust) · ${totalParams} weights/biases total · ` +
+            `avg |weight| ${((avgAbs(brain.w1) + avgAbs(brain.w2)) / 2).toFixed(3)}`;
+    return p;
+}
+const CORE_GENE_LABELS = Object.entries(LOCUS)
+    .sort((a, b) => a[1] - b[1])
+    .map(([name]) => name);
+/** The real, raw heritable sequence — every core-trait locus plus every
+ * protein-coding gene, exactly as genes.ts decodes/translates it. One
+ * string per gene, not one DOM node per nucleotide symbol — cheap even
+ * for a genome carrying many protein genes. */
+function buildGeneList(sequence) {
+    const list = document.createElement('div');
+    list.className = 'gene-list';
+    sequence.genes.forEach((gene, i) => {
+        const row = document.createElement('div');
+        row.className = 'gene-row';
+        const label = document.createElement('span');
+        label.className = 'gene-label';
+        label.textContent = i < CORE_GENE_COUNT ? `${CORE_GENE_LABELS[i]}:` : `protein ${i - CORE_GENE_COUNT + 1}:`;
+        row.append(label, gene.join(''));
+        list.appendChild(row);
+    });
+    return list;
+}
+/** Rebuilds the full detail panel for a selection that's no longer
+ * alive — World's tree node can outlive the Virtunism it describes
+ * (cleanupDead() removes the individual itself, but the tree keeps the
+ * node as long as a living descendant traces back through it, per
+ * liveCount). There's no genome, position, energy, or brain left to
+ * show — a real, honest degraded view of only what the tree itself still
+ * remembers, not a fabrication of the rest. */
+function renderHistoricalDetail(node) {
+    const wrap = document.createElement('div');
+    const head = document.createElement('div');
+    head.className = 'tree-detail-head';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'specimen-name';
+    nameSpan.textContent = world.lineages.get(node.lineageId)?.name ?? `Species ${node.lineageId}`;
+    const statusEl = document.createElement('span');
+    statusEl.className = 'tree-detail-status extinct';
+    statusEl.textContent = ' · no longer alive';
+    head.append(`#${node.id} `, nameSpan, statusEl);
+    wrap.appendChild(head);
+    const hint = document.createElement('p');
+    hint.className = 'tree-detail-empty-hint';
+    hint.textContent =
+        "This individual's own body — genome, position, proteins, brain — is gone; it was removed once it died. " +
+            'Only its tree-of-life record remains, below. Select a living individual (in the dish, or a lit node in the tree) for a full profile.';
+    wrap.appendChild(hint);
+    addSectionTitle(wrap, 'Ancestry');
+    const vitals = document.createElement('div');
+    vitals.className = 'stat-grid';
+    addStatBlock(vitals, 'Generation', String(node.generation));
+    addStatBlock(vitals, 'Born (tick)', String(node.birthTick));
+    addStatBlock(vitals, 'Living descendants', String(node.liveCount));
+    addStatBlock(vitals, 'Player-designed', node.isPlayerDesigned ? 'yes' : 'no');
+    wrap.appendChild(vitals);
+    wrap.appendChild(buildParentsLine(node));
+    if (node.children.length > 0) {
+        const childrenP = document.createElement('p');
+        childrenP.className = 'tree-detail-empty-hint';
+        childrenP.append('Children: ');
+        node.children.forEach((childId, i) => {
+            if (i > 0)
+                childrenP.append(', ');
+            childrenP.append(ancestryLink(childId, `#${childId}`));
+        });
+        wrap.appendChild(childrenP);
+    }
+    treeDetail.replaceChildren(wrap);
+}
+/** Rebuilds the full detail panel for a currently-alive selection. Builds
+ * (and attaches to the live DOM) everything that's fixed for this
+ * individual's whole life — identity, ancestry, an (initially empty) six-
+ * class capability radar canvas (drawn lazily by updateTree(), not here
+ * — see its own comment on why), per-protein detail, brain summary, raw
+ * gene sequence — then returns refs to the handful of nodes that do need
+ * refreshing every frame (position, age/energy/reproduction bars). */
+function renderLiveDetail(node, cell) {
+    const wrap = document.createElement('div');
+    const head = document.createElement('div');
+    head.className = 'tree-detail-head';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'specimen-name';
+    nameSpan.textContent = world.lineages.get(node.lineageId)?.name ?? `Species ${node.lineageId}`;
+    const statusEl = document.createElement('span');
+    statusEl.className = 'tree-detail-status';
+    head.append(`#${node.id} `, nameSpan, statusEl);
+    wrap.appendChild(head);
+    wrap.appendChild(buildParentsLine(node));
+    const vitals = document.createElement('div');
+    vitals.className = 'stat-grid';
+    const posEl = addStatBlock(vitals, 'Position (x, y)', '');
+    addStatBlock(vitals, 'Generation', String(cell.generation));
+    addStatBlock(vitals, 'Reproduction mode', cell.genome.reproductionMode);
+    addStatBlock(vitals, 'Heredity', cell.genome.isDna ? 'DNA' : 'RNA');
+    addStatBlock(vitals, 'Size (chassis)', cell.genome.size.toFixed(2));
+    addStatBlock(vitals, 'Sense radius', cell.genome.senseRadius.toFixed(0));
+    addStatBlock(vitals, 'Colony', cell.attachedTo ? 'bonded member' : cell.attachedChildren.length > 0 ? `root, ${cell.attachedChildren.length} bud(s)` : 'solo');
+    addStatBlock(vitals, 'Chemistry mode', cell.richMode ? 'rich (stochastic)' : 'cheap (deterministic)');
+    wrap.appendChild(vitals);
+    const ageBar = addBarRow(wrap, 'Age / lifespan');
+    const energyBar = addBarRow(wrap, 'Energy / capacity');
+    const reproBar = addBarRow(wrap, cell.genome.reproductionMode === 'sexual' ? 'Toward mating threshold' : 'Toward reproduction threshold');
+    const reproStatusEl = document.createElement('p');
+    reproStatusEl.className = 'tree-detail-empty-hint';
+    wrap.appendChild(reproStatusEl);
+    addSectionTitle(wrap, 'Capability profile');
+    const radarCanvas = document.createElement('canvas');
+    radarCanvas.className = 'tree-detail-radar';
+    wrap.appendChild(radarCanvas);
+    addSectionTitle(wrap, `Proteins (${cell.genome.proteins.length})`);
+    wrap.appendChild(buildProteinList(cell.genome.proteins));
+    addSectionTitle(wrap, 'Brain');
+    wrap.appendChild(buildBrainSummary(cell.genome.brain));
+    addSectionTitle(wrap, 'Raw gene sequence');
+    wrap.appendChild(buildGeneList(cell.genome.sequence));
+    // Attach before the radar is ever drawn — drawRadarChart sizes itself
+    // from the canvas's real laid-out clientWidth/clientHeight, which reads
+    // 0 for a canvas that isn't actually in the document yet (or whose
+    // panel is currently display:none — see updateTree()'s own comment on
+    // why the radar is only ever actually drawn there, not here).
+    treeDetail.replaceChildren(wrap);
+    return {
+        statusEl,
+        posEl,
+        ageBarFill: ageBar.fill,
+        ageBarLabel: ageBar.labelValue,
+        energyBarFill: energyBar.fill,
+        energyBarLabel: energyBar.labelValue,
+        reproBarFill: reproBar.fill,
+        reproBarLabel: reproBar.labelValue,
+        reproStatusEl,
+        radarCanvas,
+    };
+}
+/** The cheap, every-frame half of keeping a live selection current —
+ * everything here is a real number that actually changes tick to tick;
+ * everything that doesn't (genome, proteins, brain, ancestry) was already
+ * built once by renderLiveDetail() above and is left untouched. */
+function updateLiveVitals(refs, cell) {
+    refs.statusEl.textContent = ' · alive';
+    refs.posEl.textContent = `${cell.x.toFixed(0)}, ${cell.y.toFixed(0)}`;
+    const ageRatio = cell.age / cell.genome.maxAge;
+    refs.ageBarLabel.textContent = `${Math.floor(cell.age)} / ${Math.round(cell.genome.maxAge)} ticks (${pctLabel(ageRatio)})`;
+    refs.ageBarFill.style.width = fillWidth(ageRatio);
+    // eat() already clamps energy to maxEnergy, so this ratio is naturally <= 1.
+    const energyRatio = cell.energy / cell.maxEnergy;
+    refs.energyBarLabel.textContent = `${cell.energy.toFixed(1)} / ${cell.maxEnergy.toFixed(1)} (${pctLabel(energyRatio)})`;
+    refs.energyBarFill.style.width = fillWidth(energyRatio);
+    // Real percentage toward whichever threshold this individual's own
+    // reproduction mode actually uses (Virtunism.reproduceThreshold for
+    // asexual, .matingThreshold for sexual) — not clamped in the label, so
+    // a genuinely over-ready individual (energy above threshold, still on
+    // cooldown) shows a real >100%, only the bar's fill width is capped.
+    const reproThreshold = cell.genome.reproductionMode === 'sexual' ? cell.matingThreshold : cell.reproduceThreshold;
+    const reproRatio = cell.energy / reproThreshold;
+    refs.reproBarLabel.textContent = pctLabel(reproRatio);
+    refs.reproBarFill.style.width = fillWidth(reproRatio);
+    const ready = cell.genome.reproductionMode === 'sexual' ? cell.canMate() : cell.canReproduce();
+    refs.reproStatusEl.textContent =
+        cell.reproCooldown > 0
+            ? `On cooldown: ${Math.ceil(cell.reproCooldown)} ticks remaining.`
+            : ready
+                ? 'Ready to reproduce right now.'
+                : 'Still building up energy.';
+}
+/** The full-breakout panel's single entry point — called on every
+ * selection change (tap/click/Clear, synchronously via selectIndividual)
+ * *and* unconditionally every frame (see frame() below), the same "just
+ * always run it, it's cheap" precedent updateHudAndStats() already sets
+ * for work that needs to stay current regardless of which tab is active
+ * — this is what makes tapping a cell in the dish populate this panel
+ * silently even while a different tab is showing. */
+function refreshSelectionUI() {
+    describeSelection();
+    if (selectedIndividualId === null) {
+        if (lastDetailSignature !== null) {
+            treeDetail.replaceChildren();
+            lastDetailSignature = null;
+            detailRefs = null;
+        }
+        return;
+    }
+    const node = world.treeNodes.get(selectedIndividualId);
+    if (!node) {
+        // Pruned out from under the selection entirely (no living descendant
+        // left anywhere) — describeSelection() above already cleared
+        // selectedIndividualId for this case.
+        treeDetail.replaceChildren();
+        lastDetailSignature = null;
+        detailRefs = null;
+        return;
+    }
+    const live = findLiveSelected();
+    const signature = `${node.id}:${live ? 'alive' : 'gone'}`;
+    if (signature !== lastDetailSignature) {
+        lastDetailSignature = signature;
+        if (live) {
+            detailRefs = renderLiveDetail(node, live);
+            updateLiveVitals(detailRefs, live);
+        }
+        else {
+            renderHistoricalDetail(node);
+            detailRefs = null;
+        }
+    }
+    else if (detailRefs && live) {
+        updateLiveVitals(detailRefs, live);
+    }
+}
 treeCanvas.addEventListener('click', (e) => {
     const rect = treeCanvas.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * treeCanvas.width;
     const y = ((e.clientY - rect.top) / rect.height) * treeCanvas.height;
     const hit = hitTestTree(treePositions, x, y);
-    if (hit !== null) {
-        selectedIndividualId = hit;
-        describeSelection();
-    }
+    if (hit !== null)
+        selectIndividual(hit);
 });
-el('tree-clear').addEventListener('click', () => {
-    selectedIndividualId = null;
-    describeSelection();
-});
+el('tree-clear').addEventListener('click', () => selectIndividual(null));
 function updateTree() {
     if (activeTab !== 'tree')
         return;
     treePositions = drawTree(treeCanvas, world.treeNodes, { selectedId: selectedIndividualId });
+    // The radar canvas is only ever drawn here, gated the same way the
+    // tree canvas itself already is — a canvas sizes itself from its real
+    // laid-out clientWidth/clientHeight (see drawRadarChart), which is 0
+    // while #tab-tree is display:none (any tab but this one). Deferring
+    // the actual draw to the one place already known to run only while
+    // this panel is genuinely visible means a selection made from another
+    // tab (see handleDishTap) still shows a correctly-sized radar the
+    // instant the user switches here — no stale 1x1 canvas from an earlier
+    // build.
+    if (detailRefs) {
+        const live = findLiveSelected();
+        if (live) {
+            drawRadarChart(detailRefs.radarCanvas, CATALYSIS_CLASSES.map((cls) => ({ label: cls, value: live.genome.classPowerCache[cls] })), live.genome.hue);
+        }
+    }
 }
 // --- main loop --------------------------------------------------------
 // A hard time budget for simulation work per animation frame — this is
@@ -652,6 +1095,7 @@ function frame() {
     renderer.draw(world, origin, POOL_OFFSET, { showVision, highlightId: selectedIndividualId, hidePool: stage0Retired });
     updateHudAndStats();
     updateChemistryPanel();
+    refreshSelectionUI();
     updateTree();
     updateSpeciesPanel();
     requestAnimationFrame(frame);

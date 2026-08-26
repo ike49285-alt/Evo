@@ -167,7 +167,7 @@ export function drawRadarChart(canvas: HTMLCanvasElement, axes: readonly RadarAx
 
   const cx = w / 2;
   const cy = h / 2;
-  const labelPad = 30; // room for axis labels around the rim
+  const labelPad = 40; // room for axis labels + their real value line around the rim
   const radius = Math.max(8, Math.min(w, h) / 2 - labelPad);
   const n = axes.length;
   const angleFor = (i: number): number => -Math.PI / 2 + (i / n) * Math.PI * 2; // start at top, clockwise
@@ -208,7 +208,19 @@ export function drawRadarChart(canvas: HTMLCanvasElement, axes: readonly RadarAx
     ctx.stroke();
     const lx = cx + Math.cos(a) * (radius + 14);
     const ly = cy + Math.sin(a) * (radius + 14);
+    ctx.fillStyle = 'rgba(138, 154, 142, 0.85)';
+    ctx.font = '10px sans-serif';
     ctx.fillText(axis.label, lx, ly);
+    // The real absolute number, not just the normalized shape — without
+    // this, a lineage with a 0.1-power dabble in a class and one with a
+    // 3.0-power specialization can draw the exact same-looking polygon
+    // (each chart normalizes to its own biggest axis) and read as
+    // identical at a glance. A plain 0 is real, useful information too —
+    // "no gene folds into this at all" is a legitimate answer worth
+    // showing, not hidden as an empty axis.
+    ctx.fillStyle = 'rgba(138, 154, 142, 0.55)';
+    ctx.font = '9px sans-serif';
+    ctx.fillText(axis.value.toFixed(2), lx, ly + 11);
   });
 
   // The real data polygon.

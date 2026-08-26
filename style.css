@@ -383,12 +383,65 @@ canvas.chart {
 .tree-toolbar { display: flex; align-items: flex-start; gap: 12px; flex: 0 0 auto; }
 .tree-toolbar .panel-hint { flex: 1 1 auto; margin: 0; }
 .tree-info { flex: 0 1 260px; font-size: var(--fs-body); color: var(--text-dim); text-align: right; }
+/* flex-basis as a percentage, not a fixed px, so the tree/detail split
+   holds proportionally across whatever real height this panel gets (a
+   tall desktop sidebar vs. the 45dvh portrait override elsewhere in this
+   file) -- min-height is the real backstop that keeps the canvas from
+   ever being crushed, not the percentage itself. */
 #chart-tree {
-  flex: 1 1 auto; width: 100%; min-height: 160px;
+  flex: 1 1 55%; width: 100%; min-height: 160px;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
   cursor: pointer;
 }
 .specimen-name { font-family: var(--font-serif); color: var(--accent-2); }
+
+/* The full per-individual breakout, appended below the tree canvas --
+   same panel, not a separate tab (selectedIndividualId/describeSelection
+   in main.ts is the one shared selection state, whether it came from a
+   tree-node click or a tap on a virtunism in the dish). Its own
+   independent scroll is what stops a long selected individual's detail
+   from pushing the tree canvas off-screen, portrait especially. */
+.tree-detail { flex: 1 1 45%; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 10px; }
+.tree-detail:empty { display: none; border-top: none; padding-top: 0; } /* nothing selected yet -- #chart-tree's flex-basis alone fills the panel, same as before this feature existed */
+
+.tree-detail-empty-hint { color: var(--text-dim); font-size: var(--fs-body); line-height: 1.5; margin: 0 0 10px; }
+
+.tree-detail-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px; margin-bottom: 8px; }
+.tree-detail-head .specimen-name { font-size: var(--fs-specimen); }
+.tree-detail-status { font-size: var(--fs-body); color: var(--text-dim); }
+.tree-detail-status.extinct { color: var(--danger); }
+
+.tree-detail-bar-row { margin-bottom: 8px; }
+.tree-detail-bar-label {
+  display: flex; justify-content: space-between; font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-eyebrow); color: var(--text-dim); margin-bottom: 3px;
+}
+.tree-detail-bar-track { height: 6px; border-radius: 3px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+.tree-detail-bar-fill { height: 100%; background: var(--accent); transition: width 0.15s linear; }
+
+.tree-detail-radar { width: 100%; height: 200px; margin-bottom: 4px; cursor: default; }
+
+.tree-detail-section-title {
+  font-family: var(--font-sans); font-size: var(--fs-eyebrow); color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 6px;
+}
+
+.protein-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.protein-row { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: var(--fs-body); }
+.protein-row-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 3px; }
+.protein-class { font-family: var(--font-sans); font-weight: 600; }
+.protein-seq { font-family: var(--font-mono); color: var(--text-dim); word-break: break-all; font-size: 11px; }
+
+.gene-list { display: flex; flex-direction: column; gap: 4px; }
+.gene-row { font-family: var(--font-mono); font-size: 11px; word-break: break-all; }
+.gene-row .gene-label { color: var(--text-dim); margin-right: 6px; }
+
+.tree-detail-parent-link {
+  background: none; border: 1px solid var(--line); border-radius: 5px;
+  color: var(--accent); font-family: var(--font-mono); font-size: 11px;
+  padding: 1px 6px; cursor: pointer;
+}
+.tree-detail-parent-link:hover { border-color: var(--accent); }
 
 .species-list { display: flex; flex-direction: column; gap: 10px; }
 .species-card {
@@ -432,6 +485,16 @@ canvas.chart {
      once the axis flipped. `flex: 0 0 auto` lets it take its real,
      compact content height instead. */
   .tree-info { flex: 0 0 auto; text-align: left; max-width: none; }
+  /* The 45vh sidebar budget here is tight enough that #chart-tree's
+     desktop min-height:160px floor alone, plus the toolbar, leaves
+     .tree-detail almost nothing — its own min-height:0 (needed so an
+     unselected state doesn't reserve dead space) means the flex algorithm
+     squeezes it toward zero instead. Shrink the canvas's floor and give
+     the detail panel a small floor of its own so a selection is still a
+     usable scroll region here, not a sliver. */
+  #chart-tree { min-height: 100px; }
+  .tree-detail { min-height: 70px; }
+  .tree-detail-radar { height: 140px; }
 }
 
 /* A phone held sideways is short, not narrow — the 760px breakpoint above
@@ -468,4 +531,7 @@ canvas.chart {
   .panel-hint { margin-bottom: 8px; }
   .vitals-row, .stat-grid { gap: 6px; margin-bottom: 8px; }
   .chart-grid { gap: 6px; }
+  #chart-tree { min-height: 110px; }
+  .tree-detail { min-height: 60px; }
+  .tree-detail-radar { height: 150px; }
 }

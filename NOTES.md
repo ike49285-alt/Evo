@@ -899,6 +899,81 @@ relative to their fixed joints unchanged to floating-point precision
 (max drift 0) — colonies genuinely never deform. Live Playwright check:
 zero console errors running the app at speed.
 
+## Individual breakout: tap a cell, get its full profile in the Tree tab
+
+Wanted a way to inspect one virtunism directly — age, energy, reproduction
+progress, exact xy, genome, folded proteins, brain — not just population
+aggregates. Originally scoped as a new tab; folded into the existing Tree
+of Life tab instead, since it already tracks one shared selection
+(`selectedIndividualId`) and already shows a one-line summary of it.
+
+Tap-to-select on the dish is layered onto the existing multi-pointer pan/
+pinch-zoom handling without disturbing it: a `tapCandidate` is armed on
+`pointerdown` (only when it's the sole active pointer), cancelled by a
+pinch starting or by moving past a 6px screen threshold, and only fires
+`handleDishTap()` on `pointerup` if it survived untouched — so panning
+and pinch-zooming never accidentally select something. A tap looks up the
+nearest alive cell within its real radius plus a small fixed *screen*-
+pixel pad (converted to world units by the current zoom, so small or
+zoomed-out cells stay tappable), and selects silently — no tab switch —
+matching the explicit ask to populate quietly regardless of which tab is
+open when the tap happens.
+
+The detail panel's *structure* (identity, ancestry, live stat bars, a
+radar canvas, protein list, raw gene list, brain summary) rebuilds only
+on an `${id}:${alive|gone}` signature change; a handful of live numbers
+(position, age/energy/repro-progress bars) get cheap per-frame writes on
+top, same "just always run it" precedent the HUD and Species panel
+already use. The radar canvas is a case where *when* you build vs. *when*
+you draw matters: `drawRadarChart` sizes itself off the canvas's real
+laid-out `clientWidth`/`clientHeight`, which reads 0 for a canvas built
+while its tab is `display:none` — exactly the "select from another tab"
+case this feature explicitly wants to support. Fix: the empty `<canvas>`
+is always built immediately on selection (satisfies "populate silently"),
+but the actual draw call only ever runs inside `updateTree()`, gated on
+the tree tab being active — so switching to the tab later always shows a
+correctly-sized chart, never a stale 1×1 one.
+
+A selection whose live `Virtunism` has been removed by `cleanupDead()`
+degrades to a historical view built from the surviving `TreeNode` alone
+(identity, ancestry, parent/child links) with an explicit "no longer
+alive" status — nothing about age, energy, or genome is fabricated for a
+dead individual. Confirmed directly against `World`'s own pruning
+semantics (not assumed): a dead node with no living descendants
+(`liveCount === 0`) is deleted from `treeNodes` immediately — there's no
+transient historical state for it at all — and a dead node with exactly
+one remaining child gets spliced out too (a redundant "spine" waypoint);
+only a dead node that's an actual branch point (2+ live-tracing children)
+persists with `alive: false`, which is the one case
+`renderHistoricalDetail` is for. The UI's existing `describeSelection()`
+already matched this correctly (clears the selection outright once the
+node is gone), confirmed rather than assumed.
+
+Verified headless against the real `World`/`compactFrom` pruning rules
+described above (both branches: immediate full deletion vs. persisting
+historical node), and live via Playwright: dish tap selects silently
+without switching tabs; switching to Tree afterward shows an
+already-populated panel with a correctly-sized radar (not 1×1); numbers
+visibly tick over a few seconds; clicking a different tree node rebuilds
+the whole panel; `Clear` empties both the one-liner and the panel;
+portrait and landscape-short breakpoints keep the tree canvas at a sane
+height with the detail panel scrolling independently — including a real
+bug the first pass missed: both breakpoints' tight vertical budgets
+squeezed the detail panel toward a ~11px sliver once the canvas's own
+min-height floor and the toolbar ate the available space, since the
+panel's `min-height: 0` (needed so an *unselected* state reserves no dead
+space) gave it nothing to hold onto once the layout got tight. Fixed with
+a small min-height floor for the panel in both breakpoints, verified
+after the fix (70px portrait, 60px landscape-short — a real usable scroll
+window, not a sliver). Zero console errors throughout.
+
+Also added real absolute numbers to the species radar/stat-star chart
+(`ui/chart.ts`), reused here for the Inspector's own per-individual radar:
+previously it only drew each axis normalized against its own biggest
+value, so a lineage barely dabbling in a catalysis class and one deeply
+specialized in it could draw visually identical polygons. Each axis label
+now also shows its real class-power value.
+
 ## The wider dish — real emergent function, not organelles
 
 This replaced an earlier hard-coded system (flagellum/mouth/chloroplast/
