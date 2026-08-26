@@ -44,6 +44,35 @@ export const MIN_VESICLE_LIPIDS = 10;
 // supply first.
 export const DIVISION_LIPID_COUNT = 22;
 
+// A membrane can end up structurally locked out of ever dividing again if it
+// keeps absorbing other vesicles faster than divisionCooldownTicks ever
+// clears — mergeVesicles() (origin.ts) resets the cooldown clock on every
+// fusion (see its own comment: an unprotected freshly-fused vesicle
+// instantly re-splits and undoes the merge before any chemistry happens),
+// but at high soup density a vesicle whose radius has grown into a large
+// fraction of the pool stays in near-constant contact with newly-forming
+// small vesicles, so it can accumulate fusions — and cooldown resets —
+// faster than 500 ticks ever elapses between two of them. Headless-verified
+// as a real runaway at 8x soup density, not a hypothetical: 6 of 8 seeds in
+// a 15,000-tick sweep collapsed to a single vesicle holding 1,700-1,900+ of
+// ~1,920 total pool lipids, some still collapsed tens of thousands of ticks
+// later in a longer run.
+//
+// Past some point the "let a freshly-joined membrane settle" rationale the
+// cooldown exists for no longer applies: a vesicle this far past
+// DIVISION_LIPID_COUNT isn't freshly formed in any meaningful sense, it's
+// overdue for fission regardless of how recently it last touched another
+// vesicle. 3x is calibrated against real numbers, not picked in the
+// abstract: the healthy multi-vesicle equilibrium at 8x soup density
+// settles to roughly 18 lipids/vesicle on average (106 vesicles sharing
+// ~1,920 total pool lipids — see seedPrimordialSoup's own comment), and
+// even a freshly-fused pair of ordinary vesicles (the exact case
+// divisionCooldownTicks protects) tops out around 30-50 combined — both
+// comfortably under 66. The actual runaway collapse this constant targets
+// reached 1,700-1,900+ lipids in a single vesicle (roughly 77-86x this bar)
+// in headless verification — nowhere near this threshold by accident.
+export const OVERSIZE_DIVISION_MULTIPLIER = 3;
+
 /** Minimum evidence a protocell is a real, self-sustaining Darwinian unit —
  * not just a bag that happened to trap some chemistry once: it needs an
  * active catalyst supporting replication, it needs to have actually

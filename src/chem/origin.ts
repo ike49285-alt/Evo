@@ -46,6 +46,7 @@ import {
   DIVISION_LIPID_COUNT,
   isBootstrapEligible,
   MIN_VESICLE_LIPIDS,
+  OVERSIZE_DIVISION_MULTIPLIER,
   radiusForLipidCount,
   Vesicle,
 } from './vesicle.js';
@@ -189,6 +190,34 @@ export class Origin {
   // close range, not certain on first contact) so this stays a real rare-
   // event mechanism rather than an instant merge-on-touch shortcut.
   readonly vesicleFusionChance = 0.05; // per-tick chance two touching vesicles fuse
+  // A *targeted* complement to vesicleFusionChance above, not a replacement
+  // for it — see fuseVesicles()'s comment for the full mechanism. The
+  // oversize-division escape valve (see OVERSIZE_DIVISION_MULTIPLIER,
+  // vesicle.ts) closed a runaway where a vesicle could snowball through
+  // dozens of uniform-random fusions and, by sheer brute-force absorption
+  // of nearly the whole dish, eventually hold both a catalyst and a
+  // replicator — headless-verified as the real mechanism behind this sim's
+  // first natural-bootstrap successes (4/10 seeds), which vanished (0/10
+  // on the same seeds) once that runaway was capped. Two vesicles that are
+  // *specifically* complementary — one holds an active catalyst and no
+  // replicator, the other holds a replicator and no active catalyst, so
+  // fusing them is real structural progress toward isBootstrapEligible
+  // rather than just membrane growth — are a categorically rarer and more
+  // meaningful event than an arbitrary touch, so a much higher per-tick
+  // chance here doesn't reopen the "instant merge-on-touch" shortcut
+  // vesicleFusionChance's own comment guards against: the bonus only ever
+  // applies to this one narrow case, and is self-limiting per vesicle —
+  // once a vesicle picks up the piece it was missing it has both flags and
+  // drops back to the ordinary baseline for every fusion after that, so
+  // this can't compound into an unconditional runaway the way the
+  // createdTick-reset bug did. Left under 1 rather than certain-on-contact
+  // for the same reason vesicleFusionChance is: real membrane fusion is
+  // stochastic even at close range, not guaranteed on first touch — but at
+  // 0.9 a genuinely complementary pair fuses within ~1-2 ticks of first
+  // contact on expectation, which is what actually matters here: restoring
+  // reliable catalyst/replicator co-occurrence without depending on
+  // unbounded vesicle size.
+  readonly complementaryFusionChance = 0.9;
   // Real precedent: surfaces that concentrate prebiotic chemistry —
   // montmorillonite clay in particular (Hanczyc, Fujikawa & Szostak 2003)
   // — are documented to also nucleate vesicle formation around themselves,
@@ -203,6 +232,64 @@ export class Origin {
   // the time, same as reality.
   readonly nucleationSeedRadius = 14; // catalyst/RNA search radius during lipid clustering — 2x lipidAssemblyRadius, a "seed" pulls in lipids from further out than a same-species neighbor would
   readonly nucleationBiasStrength = 0.01;
+  // A third, independent contributor to the same catalyst/replicator
+  // co-occurrence problem vesicleFusionChance/complementaryFusionChance and
+  // nucleationBiasStrength each target from a different angle:
+  // nucleationBiasStrength biases where a *new* vesicle closes around
+  // existing chemistry, but says nothing about two *already-closed*
+  // vesicles that each independently ended up with only half of what a
+  // bootstrap needs. Headless-verified as the real remaining gap:
+  // instrumenting mergeVesicles() across two 40,000-tick runs (seeds 3 and
+  // 10) found 0 complementary fusions in 4,400+ total fusion events,
+  // because complementary vesicles never even touch — every particle
+  // (including membrane lipids) moves by independent Brownian motion
+  // (moveParticles()), so a vesicle's centroid is the average of N
+  // independent random walks and its *net* displacement barely grows once
+  // N is more than a handful; two specific rare vesicles out of a
+  // ~90-107-strong population essentially never drift into contact by
+  // chance within any practical horizon.
+  //
+  // This is not active chemotaxis — a protocell has no flagella or signal
+  // transduction machinery to actively swim toward anything. It's modeled
+  // the same way real fatty-acid vesicle chemistry already isn't inert to
+  // its surroundings (surface/interfacial concentration gradients around
+  // active chemistry are a real physical effect — the same
+  // montmorillonite-nucleation precedent nucleationBiasStrength's comment
+  // cites): a small, uniform, per-tick velocity nudge applied to every
+  // membrane lipid of a catalyst-only or replicator-only vesicle, toward
+  // the nearest vesicle holding the complementary piece. Applying the
+  // *same* vector to every membrane lipid (not divided across them, unlike
+  // nucleationBiasStrength's per-seed averaging) is what makes this work
+  // despite the "sluggish blob" effect above: that effect is specific to
+  // *uncorrelated* per-particle noise (which cancels across members), not
+  // to a *coherent* applied bias (which translates the whole centroid
+  // undiminished by member count).
+  //
+  // No radius cutoff — deliberately unbounded across the whole pool.
+  // Catalyst-only/replicator-only vesicles are individually rare
+  // (headless-typical: 1-3 of each at a time out of ~90-107 total), so
+  // their *specific* mutual spacing is typically far larger than the
+  // ~63-unit average spacing between all vesicles (sqrt(800*500/100)) — a
+  // modest bounded radius would just reproduce a narrower version of the
+  // exact zero-contact problem this exists to fix. The pool this models is
+  // already framed elsewhere (seedPrimordialSoup's "fill the dish") as a
+  // single small, well-mixed vessel, not an open ocean, so a soft gradient
+  // bias spanning it is no less defensible than an arbitrary smaller
+  // cutoff — and unlike a long-range-sensing claim, this stays bounded in
+  // effect: it only ever nudges the two rarest vesicle types, only until
+  // each resolves (see vesicleChemotaxis()).
+  //
+  // Strength calibrated, not guessed: with drag=0.96 (moveParticles()),
+  // a nudge re-applied every tick has steady-state contribution
+  // biasStrength/(1-drag) = 25*biasStrength per vesicle. At 0.002 that's
+  // ~0.05 units/tick per vesicle, ~0.1/tick combined for a pair drifting
+  // toward each other — closing the ~63-unit average spacing in ~600
+  // ticks, or a worst-case ~400-unit separation in ~4,000 ticks, both far
+  // inside the 40,000-tick sweep horizon and a matured catalyst/ribozyme's
+  // thousands-of-ticks protected lifespan (see catalyticFoldProtection)
+  // — real and reliable, but well under the 1.1/tick lipid speed cap, not
+  // instant "swimming."
+  readonly vesicleChemotaxisBiasStrength = 0.002;
   // A membrane that just crossed DIVISION_LIPID_COUNT — whether by
   // ordinary growth or by fusing with another vesicle — needs real time
   // to reorganize before it's structurally ready to fission again; real
@@ -410,6 +497,8 @@ export class Origin {
     this.lipidAssembly();
     this.grid.rebuild([...this.particles.values()]);
     this.recruitAndDivideVesicles();
+    this.grid.rebuild([...this.particles.values()]);
+    this.vesicleChemotaxis();
     this.grid.rebuild([...this.particles.values()]);
     this.fuseVesicles();
     this.grid.rebuild([...this.particles.values()]);
@@ -947,7 +1036,63 @@ export class Origin {
         v.lipidIds.push(l.id);
         v.memberIds.add(l.id);
       }
-      if (nearbyFree.length > 0) v.radius = radiusForLipidCount(v.lipidIds.length);
+      if (nearbyFree.length > 0) {
+        v.radius = radiusForLipidCount(v.lipidIds.length);
+
+        // Capture-on-growth: a membrane that just expanded to enclose new
+        // lipids also encloses whatever peptides/RNA now happen to be
+        // geometrically inside its larger radius — the same real,
+        // unconditional "whatever's nearby gets trapped, for better or
+        // worse" mechanism formVesicle() already uses at initial closure
+        // (see its own comment above), extended here from a one-time
+        // closure event to every later growth event across a vesicle's
+        // life: real ongoing bilayer growth is physically the same
+        // membrane-closing-around-contents process repeated, not a
+        // categorically different one. Unlike the lipid recruitment
+        // immediately above — lipids are the membrane's actual building
+        // material, driven inward as new wall, hence the generous `+3`
+        // reach — a captured peptide or RNA is incidental, passive
+        // enclosure, so this uses a real geometric containment test
+        // (dist <= v.radius, exactly formVesicle()'s own check) rather
+        // than a reach-out-and-grab radius or any driven-recruitment
+        // framing.
+        //
+        // Deliberately unconditional/blind to catalytic or replicator
+        // status, same as formVesicle(): a real membrane closing around
+        // space has no way to know in advance which macromolecule inside
+        // happens to be functional, any more than the original closure
+        // event does. Scoped to peptide/rna only — lipid is already fully
+        // covered by the unconditional recruitment just above (the
+        // nearbyFree query already captures every unclaimed free lipid
+        // within this same radius), and nt/aa/energy already have their
+        // own ongoing post-formation entry/exit pathway (membraneDiffusion(),
+        // permeability-gated) — this fills specifically the gap
+        // membraneDiffusion()'s own comment carves out ("too big to
+        // cross"): peptide/rna were the only two kinds with no route into
+        // an existing vesicle at all before this.
+        //
+        // No new probability knob: capture frequency is already bounded
+        // by how often a vesicle actually recruits new lipids
+        // (nearbyFree.length > 0, itself an existing, already-tuned,
+        // naturally-limited rate) — piggybacking on an already-calibrated
+        // cadence instead of inventing a new number to guess, the same
+        // "more independent attempts, not higher per-attempt odds"
+        // philosophy seedPrimordialSoup's SOUP_DENSITY_MULTIPLIER comment
+        // already uses elsewhere in this file. Headless-verified: closes
+        // the confirmed 0.00%-of-ticks in-vesicle-catalyst gap (see
+        // NOTES.md) without pushing it into universal/instant territory.
+        const newlyEnclosed = this.grid
+          .queryRadius(v.x, v.y, v.radius + 3)
+          .filter(
+            (p): p is PeptideParticle | RnaParticle =>
+              (p.kind === 'peptide' || p.kind === 'rna') && p.vesicleId === null,
+          );
+        for (const p of newlyEnclosed) {
+          if (Math.hypot(p.x - v.x, p.y - v.y) > v.radius) continue;
+          p.vesicleId = v.id;
+          v.memberIds.add(p.id);
+        }
+      }
 
       // Real vesicle fission isn't instant the moment a size threshold is
       // crossed — a membrane needs real time to reorganize before it's
@@ -961,7 +1106,23 @@ export class Origin {
       // seed and still zero ticks of catalyst+replicator co-occurrence,
       // with division counts exploding 30-50x versus the pre-fusion
       // baseline — the smoking gun for fuse-then-instantly-re-split churn.
-      if (v.lipidIds.length >= DIVISION_LIPID_COUNT && this.tick - v.createdTick >= this.divisionCooldownTicks) {
+      const settled = this.tick - v.createdTick >= this.divisionCooldownTicks;
+      // A separate, size-based escape valve for the opposite failure mode:
+      // mergeVesicles() resets createdTick on every fusion, so a vesicle
+      // absorbing new small vesicles faster than the cooldown clears can
+      // never divide at all — headless-verified as a real runaway at 8x
+      // soup density (a large vesicle's radius scales directly with its
+      // lipid count, keeping it in near-constant contact with freshly-
+      // forming small ones, so successful fusions arrive faster than 500
+      // ticks apart and the cooldown never lapses): 6 of 8 seeds in a
+      // 15,000-tick sweep collapsed to a single vesicle holding
+      // 1,700-1,900+ of ~1,920 total pool lipids, some still collapsed
+      // tens of thousands of ticks later. See OVERSIZE_DIVISION_MULTIPLIER
+      // (vesicle.ts) for why 3x specifically and why this doesn't
+      // reintroduce the fuse-then-instant-resplit churn above for
+      // ordinary-sized vesicles.
+      const grosslyOversized = v.lipidIds.length >= DIVISION_LIPID_COUNT * OVERSIZE_DIVISION_MULTIPLIER;
+      if (v.lipidIds.length >= DIVISION_LIPID_COUNT && (settled || grosslyOversized)) {
         this.divideVesicle(v);
       }
     }
@@ -1059,13 +1220,96 @@ export class Origin {
     this.vesicles.set(daughterB.id, daughterB);
   }
 
+  // --- vesicle chemotaxis ---------------------------------------------------
+  // See vesicleChemotaxisBiasStrength's comment above for the full
+  // rationale. Runs once per tick, right after recruitAndDivideVesicles()
+  // has refreshed every vesicle's centroid/membership and before
+  // fuseVesicles() checks for contact — nudges vx/vy the same one-tick-
+  // behind way lipidAssembly()'s nucleation bias already does (the actual
+  // position integration happens in the *next* tick's moveParticles()).
+  private vesicleChemotaxis(): void {
+    const list = [...this.vesicles.values()];
+    if (list.length < 2) return;
+    // One content scan per vesicle up front — same reasoning as
+    // fuseVesicles()'s own `contents` prescan (see its comment): up to
+    // O(vesicles^2) in the worst case below, trivial at the ~90-107-
+    // vesicle scale this sim runs at.
+    const contents = new Map<number, { hasActiveCatalyst: boolean; hasReplicator: boolean }>();
+    for (const v of list) {
+      const { hasActiveCatalyst, hasReplicator } = this.scanVesicleContents(v);
+      contents.set(v.id, { hasActiveCatalyst, hasReplicator });
+    }
+    for (const v of list) {
+      const c = contents.get(v.id)!;
+      const catalystOnly = c.hasActiveCatalyst && !c.hasReplicator;
+      const replicatorOnly = c.hasReplicator && !c.hasActiveCatalyst;
+      // Only the two "half-formed" cases drift — a vesicle with neither
+      // (or already both) has nothing complementary to look for, same
+      // gating fuseVesicles() already uses for complementaryFusionChance.
+      if (!catalystOnly && !replicatorOnly) continue;
+
+      let nearest: Vesicle | null = null;
+      let nearestDist = Infinity;
+      for (const other of list) {
+        if (other.id === v.id) continue;
+        const oc = contents.get(other.id)!;
+        const isComplement = catalystOnly
+          ? oc.hasReplicator && !oc.hasActiveCatalyst
+          : oc.hasActiveCatalyst && !oc.hasReplicator;
+        if (!isComplement) continue;
+        const d = Math.hypot(other.x - v.x, other.y - v.y);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearest = other;
+        }
+      }
+      if (!nearest || nearestDist === 0) continue;
+
+      // Only the membrane lipids get nudged, not the fuller memberIds —
+      // v.x/v.y (what fuseVesicles() actually checks) is the centroid of
+      // v.lipidIds only (see recruitAndDivideVesicles()), and interior
+      // contents already get pulled along by moveParticles()'s existing
+      // containment clamp as the membrane translates, with no extra code
+      // needed for that part.
+      const dx = (nearest.x - v.x) / nearestDist;
+      const dy = (nearest.y - v.y) / nearestDist;
+      for (const id of v.lipidIds) {
+        const p = this.particles.get(id);
+        if (!p) continue;
+        p.vx += dx * this.vesicleChemotaxisBiasStrength;
+        p.vy += dy * this.vesicleChemotaxisBiasStrength;
+      }
+    }
+  }
+
   // --- vesicle fusion ------------------------------------------------------
   // See vesicleFusionChance's comment (with this.tunables above) for the
   // real precedent and why this exists: without it, a protocell holding a
   // catalyst and one holding a replicator can drift side by side forever
-  // and never combine into a single bootstrap-eligible unit.
+  // and never combine into a single bootstrap-eligible unit. On top of that
+  // flat baseline, a specifically complementary pair — one missing only a
+  // replicator, the other missing only a catalyst — fuses at
+  // complementaryFusionChance instead: a deliberate, targeted bias toward
+  // exactly the co-occurrence isBootstrapEligible needs, in place of what
+  // this sim's first natural bootstraps actually ran on (an unbounded
+  // vesicle brute-force-absorbing the whole dish — see
+  // OVERSIZE_DIVISION_MULTIPLIER, vesicle.ts) with a mechanism that doesn't
+  // depend on runaway size at all.
   private fuseVesicles(): void {
     const list = [...this.vesicles.values()];
+    // One content scan per vesicle up front, not one per pair compared —
+    // this pass has up to ~90-107 vesicles (~5,000-11,000 pairs before the
+    // radius check below short-circuits most of them), and re-scanning
+    // full membership per pair would be wasteful. A fusion doesn't remove
+    // anything from either side (mergeVesicles is a pure union of
+    // contents), so this snapshot is kept accurate for the rest of the
+    // pass by updating the surviving vesicle's entry in place after each
+    // merge below, instead of re-scanning it.
+    const contents = new Map<number, { hasActiveCatalyst: boolean; hasReplicator: boolean }>();
+    for (const v of list) {
+      const { hasActiveCatalyst, hasReplicator } = this.scanVesicleContents(v);
+      contents.set(v.id, { hasActiveCatalyst, hasReplicator });
+    }
     const consumed = new Set<number>();
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
@@ -1074,10 +1318,29 @@ export class Origin {
         const b = list[j];
         if (consumed.has(b.id) || !this.vesicles.has(b.id)) continue;
         if (Math.hypot(a.x - b.x, a.y - b.y) > a.radius + b.radius) continue; // membranes not touching
-        if (!this.rng.bool(this.vesicleFusionChance)) continue; // contact alone isn't instant fusion
+        const ca = contents.get(a.id)!;
+        const cb = contents.get(b.id)!;
+        // Complementary: each side is missing exactly what the other
+        // holds — fusing them is real structural progress toward
+        // isBootstrapEligible, not just membrane growth. See
+        // complementaryFusionChance's comment above.
+        const aCatalystOnly = ca.hasActiveCatalyst && !ca.hasReplicator;
+        const aReplicatorOnly = ca.hasReplicator && !ca.hasActiveCatalyst;
+        const bCatalystOnly = cb.hasActiveCatalyst && !cb.hasReplicator;
+        const bReplicatorOnly = cb.hasReplicator && !cb.hasActiveCatalyst;
+        const complementary = (aCatalystOnly && bReplicatorOnly) || (bCatalystOnly && aReplicatorOnly);
+        const chance = complementary ? this.complementaryFusionChance : this.vesicleFusionChance;
+        if (!this.rng.bool(chance)) continue; // contact alone isn't instant fusion
         const [big, small] = a.lipidIds.length >= b.lipidIds.length ? [a, b] : [b, a];
         this.mergeVesicles(big, small);
         consumed.add(small.id);
+        // The merge is a pure union — keep the survivor's cached flags
+        // accurate for any further pairing this same pass without a full
+        // re-scan (see the comment on `contents` above).
+        contents.set(big.id, {
+          hasActiveCatalyst: ca.hasActiveCatalyst || cb.hasActiveCatalyst,
+          hasReplicator: ca.hasReplicator || cb.hasReplicator,
+        });
         if (small.id === a.id) break; // a was absorbed — nothing left to pair it with this tick
       }
     }

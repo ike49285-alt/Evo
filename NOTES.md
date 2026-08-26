@@ -749,6 +749,125 @@ Verified with Playwright in both landscape and portrait.
   never grew a polymer past 2 monomers in a 60k-tick, 5-seed run as a
   direct result.
 
+## The vesicle runaway bug, and the deep rabbit hole fixing it opened
+
+User reported "massive vesicles filling the whole abiotic pool." My first
+diagnosis (a single-seed, coarse-sampled headless check) called this not
+a bug — just a dense-soup visual side-effect of round 5's 8x density.
+That was wrong: the user sent a live screenshot showing the HUD's own
+`VESICLES: 1` stat — a literal `origin.vesicles.size` count, not a
+rendering artifact.
+
+**Part 1 — the real bug, fixed and fully verified.** `mergeVesicles()`
+resets a vesicle's division-cooldown clock (`keep.createdTick =
+this.tick`) on every fusion. At 8x density, a large vesicle's radius
+(scales linearly with lipid count) becomes a big fraction of the
+800x500 pool, keeping it in near-constant contact with newly-forming
+small vesicles — successful fusions (5%/tick while touching) arrive
+faster than the 500-tick cooldown ever clears, so it can never divide. A
+150k-tick single-seed run showed collapse from ~90-100 vesicles down to
+**1**, holding **99.5% of all 1,920 pool lipids**, staying collapsed for
+over half the run. An 8-seed x 15,000-tick sweep: 6 of 8 seeds
+collapsed similarly, several within a few thousand ticks — matching the
+user's screenshot almost exactly.
+
+Fixed with a size-based escape valve (`vesicle.ts`):
+`OVERSIZE_DIVISION_MULTIPLIER = 3` — a vesicle past `DIVISION_LIPID_COUNT
+* 3` (66 lipids) divides regardless of cooldown state, on the reasoning
+that a vesicle that oversized is unambiguously overdue for fission no
+matter how recently it last fused. Preserves round 3's original
+protection for normal-sized vesicles (a freshly-merged pair tops out
+around 30-50 lipids, comfortably under 66). **Fully verified**: 8/8
+seeds now show 0 runaway-collapse episodes (vs. 6/8 affected pre-fix),
+mass conservation exact, and an isolation check confirmed both division
+paths fire exactly as designed (0 violations across 4,600+ divisions).
+
+**The deep rabbit hole**: fixing Part 1 silently broke natural
+bootstrap — a follow-up 10-seed sweep found **0/10** vs. round 5's
+original **4/10** baseline, including the seed that bootstrapped
+fastest (tick 4,928) now failing entirely. The likely explanation: round
+5's bootstrap breakthrough was itself powered by the runaway bug — a
+vesicle brute-force-absorbing nearly the whole dish eventually held
+*something* with a catalyst and *something* with a replicator purely by
+exhaustive absorption. Fixing the visual bug removed the very mechanism
+that had accidentally been solving round 3/4's original co-occurrence
+bottleneck.
+
+Three additive attempts to restore bootstrap without reintroducing the
+runaway, each real, each individually verified, none (yet) sufficient
+together:
+
+- **Part 2a — complementary fusion bias** (`complementaryFusionChance =
+  0.9`): two touching vesicles where one has a catalyst-no-replicator
+  and the other has a replicator-no-catalyst fuse near-certainly instead
+  of at the 5% baseline. Sound logic, but instrumenting `mergeVesicles()`
+  found **zero** complementary fusions in 4,400+ total fusion events
+  across two 40,000-tick runs — the precondition (such a pair ever
+  touching) essentially never occurred.
+- **Part 2b — proximity bias** (`vesicleChemotaxisBiasStrength =
+  0.002`, new `vesicleChemotaxis()`): every particle including membrane
+  lipids moves by independent Brownian motion, so a vesicle's centroid
+  barely drifts in aggregate (variance shrinks as ~1/member-count) — two
+  rare vesicles essentially never randomly diffuse into contact. Added a
+  coherent per-tick velocity nudge (same vector to every membrane lipid,
+  so it isn't diluted by averaging) for catalyst-only/replicator-only
+  vesicles toward their nearest complement, unbounded whole-pool search.
+  Worked-through arithmetic: closes the ~63-unit average inter-vesicle
+  spacing in ~600 ticks. Necessary, not sufficient — see below.
+- **Part 2c — capture-on-growth** (extends `recruitAndDivideVesicles()`):
+  the actual missing piece. `membraneDiffusion()` correctly excludes
+  peptides/RNA from crossing an existing membrane ("too big to cross" —
+  real biology, kept as-is), so a catalyst can only enter a vesicle by
+  being synthesized in place — a rare compound event given a vesicle's
+  small "reaction volume." Direct 20,000-tick instrumentation (every
+  tick, not sampled) found catalyst-only vesicles occurred in **0.00% of
+  ticks** — never, not once — while replicator-only vesicles occurred in
+  19.25%. Separately: catalysts exist in 90.77% of ticks somewhere in
+  the dish, always free in the open soup, never inside a vesicle.
+  `recruitAndDivideVesicles()`'s membrane-growth recruitment only ever
+  captured nearby free *lipids* — extended it to also enclose nearby
+  free peptides/RNA using the exact same unconditional, kind-blind
+  geometric test `formVesicle()` already uses at initial closure
+  (`dist <= v.radius`), on the reasoning that ongoing bilayer growth is
+  physically the same "membrane closes around what's inside" process
+  repeated, not a new one. No new tunable constant — capture rides on
+  the existing, already-tuned lipid-recruitment cadence.
+
+**Part 2c's real, if smaller, remaining gap**: replicator-only vesicle
+presence jumped from 19% to 86% of ticks — RNA capture is clearly
+working. But catalytic material specifically gets captured well below
+its open-soup abundance: 2 catalytic-peptide captures out of 352
+attempts across 4 seeds (expected ~8 at the observed 2.36% base rate), 0
+ribozyme captures out of 186 (expected ~2.3). I hypothesized spatial
+segregation (lipid-dense vesicle-growth regions vs. aa/nt-dense
+catalysis hotspots) and measured it directly — **refuted**: near-vesicle
+catalytic-peptide density is 1.02x the dish-wide average (no
+segregation), ribozymes 0.77x (a real but modest effect, not enough to
+explain the shortfall alone). Most likely explanation is ordinary
+statistical variance on a small sample (4 seeds), not a confirmed
+mechanism — said honestly rather than inventing one.
+
+A 10-seed x 30-minutes-each real-time sweep (not a fixed tick count,
+partly to also check whether tick throughput degrades over a long run)
+was in progress when a container restart wiped it mid-run. Two seeds got
+to ~39,000-42,000 ticks (~18 min in) before being lost: seed 1 recorded
+its **first-ever complementary fusion at tick 8,402** — genuine forward
+progress — but neither seed had bootstrapped yet. Throughput did
+measurably degrade over that run (seed 1: ~18ms/tick at the 4-min mark
+climbing to ~32ms/tick by 18 minutes, vesicle count staying flat at
+93-108 the whole time, so it isn't vesicle-count growth causing it —
+cause not further diagnosed).
+
+**Where this leaves things**: Part 1 is solid and shipped. Parts
+2a/2b/2c are real, individually-correct chemistry improvements
+(replicator capture demonstrably works, complementary-fusion logic is
+sound, proximity-seeking is sound) kept in the codebase, but natural
+bootstrap at 8x density has not been confirmed restored to round 5's
+4/10 baseline — the honest state is "not yet demonstrated," not "fixed."
+Revisiting this needs either a longer/larger sweep than this session
+could complete, or further investigation into why catalytic-specific
+capture underperforms its own measured spatial-density baseline.
+
 ## The wider dish — real emergent function, not organelles
 
 This replaced an earlier hard-coded system (flagellum/mouth/chloroplast/
