@@ -967,6 +967,26 @@ a small min-height floor for the panel in both breakpoints, verified
 after the fix (70px portrait, 60px landscape-short — a real usable scroll
 window, not a sliver). Zero console errors throughout.
 
+**Follow-up**: those floors weren't actually enough — a real phone still
+showed the detail panel as "barely there." Measured why: the tab's own
+static onboarding hint (six sentences, wraps to 130px+ at phone width,
+sitting in a `flex: 0 0 auto` toolbar that never shrinks) was eating
+57% of the entire mobile sidebar budget on its own, worst possible
+timing since it competes hardest for space in the exact moment it
+matters least — once something's actually selected. Fixed with two
+`:has()`-scoped rules (same feature the codebase already relies on for
+`.segmented label:has(input:checked)`): hide the hint, and grow the
+portrait sidebar past its 45vh cap, both only while the Tree tab is the
+active tab *and* has a live selection — never just because a selection
+exists anywhere, since one can be set silently from another tab and
+that tab's own layout must never shift for it. Measured before/after on
+the real repo (390×844 portrait, 812×380 landscape-short): detail panel
+70px → 214px portrait, 60px → 121px landscape-short; confirmed the
+Designer tab's layout is bit-for-bit unaffected by a silent selection,
+`Clear` reverts cleanly, re-selecting regrows correctly, and desktop is
+untouched (rules only live inside the two mobile media queries). Zero
+console errors throughout.
+
 Also added real absolute numbers to the species radar/stat-star chart
 (`ui/chart.ts`), reused here for the Inspector's own per-individual radar:
 previously it only drew each axis normalized against its own biggest

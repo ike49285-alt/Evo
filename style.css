@@ -495,6 +495,27 @@ canvas.chart {
   #chart-tree { min-height: 100px; }
   .tree-detail { min-height: 70px; }
   .tree-detail-radar { height: 140px; }
+  /* Even with the floors above, 45vh is still tight for a panel meant to
+     hold bars, a radar, a protein list, and gene sequences — measured at
+     70px tall in practice, a scroll window barely bigger than one line
+     of text sitting over 2000+px of real content. The single biggest
+     thing eating that budget is the tab's own static onboarding hint
+     (six sentences, wraps to 130px+ at phone width) sitting in a
+     flex: 0 0 auto toolbar that never yields it back — worst possible
+     timing, since it's competing hardest for space in the exact moment
+     it matters least: once something's actually selected and being
+     looked at instead of explained. Hide it, and let the sidebar itself
+     grow past 45vh, only while the Tree tab is genuinely the active tab
+     *and* has a live selection — never just because a selection exists
+     (one can be set silently from another tab entirely, and that must
+     never shift that other tab's own layout). Reverts automatically the
+     moment Clear empties #tree-detail; no JS involved. */
+  body:has(#tab-tree.tab-panel.active #tree-detail:not(:empty)) .tree-toolbar .panel-hint {
+    display: none;
+  }
+  body:has(#tab-tree.tab-panel.active #tree-detail:not(:empty)) .sidebar {
+    height: 70vh; height: 70dvh; max-height: 70dvh;
+  }
 }
 
 /* A phone held sideways is short, not narrow — the 760px breakpoint above
@@ -534,4 +555,13 @@ canvas.chart {
   #chart-tree { min-height: 110px; }
   .tree-detail { min-height: 60px; }
   .tree-detail-radar { height: 150px; }
+  /* Same fix as the portrait breakpoint above, and worse here — the hint
+     wraps so tall in this breakpoint's narrow sidebar column that it
+     alone measured taller than the whole sidebar. Width is already the
+     roomier dimension in this breakpoint (the sidebar isn't
+     height-capped — see max-height: none above), so hiding the hint is
+     sufficient on its own; no separate grow-the-sidebar rule needed. */
+  body:has(#tab-tree.tab-panel.active #tree-detail:not(:empty)) .tree-toolbar .panel-hint {
+    display: none;
+  }
 }
