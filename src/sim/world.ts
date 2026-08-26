@@ -226,6 +226,12 @@ export class World {
   // richMode individuals would start to matter. See NOTES.md.
   readonly richChemistryPopulationThreshold = 60;
   readonly predationSizeRatio = 0.88; // prey must be <= predator.size * this
+  // See resolveCrowding()'s own comment for the full mechanism. Kept
+  // under 1 deliberately: resolving the full overlap in one tick risks a
+  // pair pushing straight through each other and swapping sides
+  // (oscillation) when several units are mutually overlapping at once;
+  // 0.5 still visibly thins a crowd within a handful of ticks.
+  readonly separationStrength = 0.5;
   readonly statsSampleInterval = 10;
   readonly maxHistory = 400;
 
@@ -480,6 +486,12 @@ export class World {
       }
     }
 
+    // Rebuild so resolveCrowding() below queries this tick's actual
+    // post-movement positions, not the pre-movement snapshot from the top
+    // of this method.
+    this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
+    this.resolveCrowding();
+
     for (const cell of this.cells) {
       if (cell.alive) {
         cell.runInternalChemistry(dt, this.rng); // no-op for cheap-mode cells
@@ -488,7 +500,7 @@ export class World {
     }
     this.applyPhotosynthesis(dt);
 
-    // Rebuild with post-movement positions for contact-driven systems.
+    // Rebuild with post-separation positions for contact-driven systems.
     this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
 
     this.handleEating();
@@ -869,7 +881,16 @@ export class World {
     root.y += Math.sin(root.heading) * root.speed * dt;
     root.clampToBounds(this.width, this.height, true);
 
-    // Cascade positions from root down through the bond tree.
+    this.cascadeColonyPositions(root);
+  }
+
+  /** Repositions every bonded descendant from `root`'s current position —
+   * the rigid-body half of colony movement, shared by moveColonyRigid()
+   * (after the root's own thrust/heading integration) and
+   * resolveCrowding() (after a separation nudge to the root) so both
+   * callers reposition children from exactly the same fixed
+   * parent-relative joints, never independently. */
+  private cascadeColonyPositions(root: Virtunism): void {
     const stack: Virtunism[] = [root];
     while (stack.length) {
       const cell = stack.pop() as Virtunism;
@@ -881,6 +902,52 @@ export class World {
         child.clampToBounds(this.width, this.height, false);
         stack.push(child);
       }
+    }
+  }
+
+  /** Soft separation: nothing in this sim has ever pushed two overlapping
+   * virtunisms apart (only the outer world walls are clamped against), so
+   * a favorable spot with nothing else limiting density can accumulate a
+   * crowd stacked far past what the space actually holds. A colony must
+   * move as one rigid unit, never deform — its members' positions are
+   * fixed parent-relative joints (cascadeColonyPositions()), not
+   * independently movable — so this resolves overlap once per *unit*
+   * (a solo virtunism, or an entire bonded colony via its root), not per
+   * member: every member's overlap against anything *outside* its own
+   * unit contributes to one shared push, averaged across the unit's
+   * member count (so a large colony doesn't get an outsized net shove
+   * just because it has more members individually detecting overlap),
+   * applied to the root, then cascaded down exactly like ordinary
+   * movement. Resolves only half the measured overlap per tick — under
+   * 1.0 guarantees a pair can never push straight through each other and
+   * swap sides (no oscillation), while still visibly thinning a crowd
+   * within a handful of ticks rather than snapping positions instantly. */
+  private resolveCrowding(): void {
+    for (const root of this.cells) {
+      if (!root.alive || root.attachedTo !== null) continue;
+      const members = this.collectColonyMembers(root);
+
+      let pushX = 0;
+      let pushY = 0;
+      for (const m of members) {
+        const nearby = this.virtunismGrid.queryRadius(m.x, m.y, m.radius + 40);
+        for (const o of nearby) {
+          if (!o.alive || o === m) continue;
+          if (this.findColonyRoot(o) === root) continue; // same unit -- bonded, not repelling
+          const dist = Math.hypot(o.x - m.x, o.y - m.y);
+          if (dist <= 0) continue; // exact-coincident pair -- vanishingly rare, self-resolves once anything else nudges either one
+          const overlap = m.radius + o.radius - dist;
+          if (overlap <= 0) continue;
+          pushX += ((m.x - o.x) / dist) * overlap;
+          pushY += ((m.y - o.y) / dist) * overlap;
+        }
+      }
+      if (pushX === 0 && pushY === 0) continue;
+
+      root.x += (pushX / members.length) * this.separationStrength;
+      root.y += (pushY / members.length) * this.separationStrength;
+      this.cascadeColonyPositions(root);
+      root.clampToBounds(this.width, this.height, false);
     }
   }
 

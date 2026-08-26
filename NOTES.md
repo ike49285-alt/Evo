@@ -868,6 +868,37 @@ Revisiting this needs either a longer/larger sweep than this session
 could complete, or further investigation into why catalytic-specific
 capture underperforms its own measured spatial-density baseline.
 
+## Virtunism crowding: soft separation, colonies stay rigid
+
+User reported ~200 virtunisms sitting stacked in a space sized for ~3.
+Traced the full movement pipeline and confirmed there was no
+virtunism-to-virtunism collision anywhere — only the world's outer walls
+were ever clamped against. The higher population cap added earlier this
+session made a favorable spot accumulate an unbounded crowd with nothing
+to thin it.
+
+Added a boids-style soft separation pass (`World.resolveCrowding()`),
+reusing the existing `virtunismGrid` spatial hash. Colonies must move as
+one rigid unit, never deform — their members are fixed parent-relative
+joints, not independently movable — so separation resolves per *unit*
+(a solo virtunism, or a whole colony via its root): every member's
+overlap against anything outside its own unit contributes to one shared
+push, averaged across member count, applied to the root, then cascaded
+down via the same rigid-body geometry `moveColonyRigid()` already uses
+(extracted into a shared `cascadeColonyPositions()` so both callers use
+identical code, not a second copy). Resolves 50% of measured overlap per
+tick — under 1.0 guarantees no oscillation (a pair can't push through
+each other and swap sides) while still visibly thinning a crowd within a
+handful of ticks.
+
+Verified headless: solo virtunisms crammed onto one point converge to
+zero overlap with monotonically decreasing overlap (no oscillation); a
+crowd near a wall stays fully in bounds; a bonded colony surrounded by
+crowders moves as a whole (root displaced) with its members' positions
+relative to their fixed joints unchanged to floating-point precision
+(max drift 0) — colonies genuinely never deform. Live Playwright check:
+zero console errors running the app at speed.
+
 ## The wider dish — real emergent function, not organelles
 
 This replaced an earlier hard-coded system (flagellum/mouth/chloroplast/
