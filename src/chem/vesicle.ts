@@ -21,6 +21,20 @@ export interface Vesicle {
   createdTick: number;
   divisions: number;
   replicationEvents: number; // count of completed templated-RNA-replication events seen inside
+  /** The other daughter this vesicle was split from, if it was created by
+   * divideVesicle() and that sibling still exists — see
+   * divisionSiblingCooldownTicks (origin.ts) for why this exists: two
+   * freshly-divided daughters start out still touching (they're just two
+   * halves of the same original membrane ring), so without this,
+   * fuseVesicles()'s ordinary contact check re-merges them within a tick
+   * or two — worst case almost immediately when the division happened to
+   * split a catalyst from a replicator, since that's exactly the pairing
+   * complementaryFusionChance rewards. null for a vesicle that was never
+   * a division daughter, or once its sibling has itself been absorbed
+   * into something else (fuseVesicles() doesn't update this on merge —
+   * the surviving vesicle keeps whatever identity/history it already
+   * had, same as replicationEvents/divisions do). */
+  siblingId: number | null;
 }
 
 // A 2D "ring" abstraction: lipids spaced LIPID_SPACING apart around the

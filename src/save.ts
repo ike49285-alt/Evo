@@ -48,17 +48,31 @@ const SAVE_KEY = 'evo-save-v2';
 // (losing its earned lower mutation rate) rather than erroring, exactly
 // the "half-loads into a corrupt-but-plausible state" failure mode this
 // version bump exists to prevent.
-// v7: Origin gained the hydrothermal vent (vent/ventDebt/ventBaseline —
+// v7: Origin gained the hydrothermal vent (vent/ventDebt/ventInjected —
 // see origin.ts's ventFluxPerTick comment). A v6 save would deserialize
 // with vent=undefined rather than a real point or explicit null —
 // moveParticles()'s `if (this.vent)` guard happens to degrade gracefully
-// (falsy, so the current term is just skipped), but ventDebt/ventBaseline
+// (falsy, so the current term is just skipped), but ventDebt/ventInjected
 // would be undefined too, and spawnVentFlux() would throw the moment it
 // ran (`this.ventDebt += undefined` -> NaN propagating silently is the
 // more likely failure than a clean crash) — a real, if delayed and
 // confusing, corruption rather than the clean discard this bump gives
-// instead.)
-const SAVE_VERSION = 7;
+// instead.
+// v8: not a shape change (Origin's width/height/vent were already plain
+// serialized fields, so a v7 save still deserializes without error) —
+// bumped anyway on a "pool identity changed" basis. The pool's
+// coordinate space now spans the whole dish and its matter concentrates
+// into one patch (see origin.ts's seedPrimordialSoup) instead of living
+// in a small fixed sub-rectangle. Without this bump, a resumed v7 save
+// would silently keep running the old small pool forever (its own
+// serialized width/height/vent override whatever main.ts would
+// otherwise construct) while a freshly reset world gets the new
+// full-dish pool — a confusing, silent divergence between "resumed" and
+// "fresh" with no crash to signal it, not the kind of corruption v5-v7
+// guarded against but a real footgun on this experimental branch
+// nonetheless. Given this branch is unshipped, the cost of forcing a
+// clean restart is low.)
+const SAVE_VERSION = 8;
 
 interface SaveFile {
   version: number;

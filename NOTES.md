@@ -1309,6 +1309,132 @@ hypothesized above (e.g. measuring cluster-formation attempt rate near
 vs. far from the vent) before concluding the current strength needs
 tuning down.
 
+## Phase B (pool fills the whole dish) + three live-iteration fixes
+
+Four connected changes landed in one working session on
+`claude/closed-loop-soup`, driven partly by design (Phase B, planned in
+advance) and partly by the user watching the published artifact live
+and reporting real problems as they appeared. Documented together
+because that's how they actually happened, not retroactively split into
+separate rounds.
+
+**Phase B: the pool now spans the whole dish.** `Origin`'s coordinate
+space grew from an 800×500 corner to the full 2400×1500 dish —
+`POOL_OFFSET` is now `{0,0}`, `Origin`/`World` are spatially
+coextensive. The key design decision: **patch-seed, don't area-seed**.
+Naively spreading the same particle count over 9x the area would have
+cut density 9x, directly undermining this project's own prior finding
+that bootstrap likelihood scales super-linearly with density (3x
+density: catalytic peptides 0.40→2.14 average; 5x: ribozymes appear at
+all for the first time). Instead, `seedPrimordialSoup` plants the exact
+same 8x-density initial dose into one 800×500 patch (reusing Phase A's
+original footprint) positioned inside the new dish, and lets the vent's
+ongoing injection + persistent current do the actual spreading over
+time. `ventCapPerKind` raised 300→900 since the vent is now the dish's
+sole ongoing matter source for its entire life, not a top-up on an
+unchanged dominant seed. A real gap was caught before it could bite:
+`spawnEnergy()` had no `at` parameter at all, which would have spread
+the initial energy dose uniformly over the whole dish while aa/nt/lipid
+stayed patch-concentrated — fixed by adding the same optional `at?`
+param the other three spawn functions already had. The renderer's
+amber pool-tint rectangle was removed (it now draws the exact same
+rectangle as the dish boundary already drawn beside it). `SAVE_VERSION`
+bumped 7→8 on a "pool identity changed" basis — no schema shape broke,
+but resuming an old save silently under the new full-dish code would
+otherwise keep running Phase A's small pool forever with no signal.
+
+Mass-ledger re-verified exact: vent-off 0 violations (ledger constant);
+vent-on adds exactly 900/900/900, matching the new cap precisely, 0
+violations.
+
+**A real regression was found, reported honestly, and accepted as-is —
+not fixed.** A matched bootstrap-sanity comparison (same seeds,
+patch-seeded full-dish vs. the original small-pool baseline) found
+`longestPeptide` dropping from 12→2 and `longestRna` from 7-8→2-5 across
+tested seeds, with standing vesicle count roughly doubling (46-58→
+110-115). Likely mechanism, not yet isolated: the current, calibrated
+for a small wall-bounded pool, now drains material out of the dense
+patch into a much larger empty void once walls are far away, working
+against concentration. Four possible fixes were identified but none
+implemented — the finding was reported plainly with the tradeoff spelled
+out, and the user's call was **"I like it as is."** This is recorded
+here as an accepted, known cost of the design, not something silently
+fixed or silently ignored.
+
+**Division-cooldown fix: vesicles were re-fusing immediately after
+splitting.** Live-observed by the user ("we're getting a vesicle issue
+again"). Root cause: `divideVesicle()`'s two daughters start out still
+touching — they're two halves of the same original membrane ring — so
+`fuseVesicles()`'s ordinary contact-triggered fusion check (especially
+its 0.9/tick `complementaryFusionChance` bonus) could immediately
+re-merge them, worst case exactly when a division had split a catalyst
+from a replicator, silently erasing the one outcome `isBootstrapEligible`
+actually needs. Asked the user to choose between ejection force and a
+cooldown; a cooldown was recommended (ejection force needs touching
+per-particle movement code for every member of both daughters, with the
+existing speed cap immediately reasserting — similar to the vent jet's
+own limitation) and implemented: a `siblingId` field on `Vesicle`
+cross-referencing each daughter to the other, plus a
+`divisionSiblingCooldownTicks=50` gate in `fuseVesicles()` (deliberately
+much shorter than the unrelated `divisionCooldownTicks=500`, which
+gates a single vesicle re-dividing, not sibling re-fusion). Verified
+headlessly by monkey-patching `divideVesicle`/`mergeVesicles` to log
+tick-stamped events: 3000 ticks, 7848 divisions, 98 sibling reunions, **0
+cooldown violations** (smallest observed gap was 57 ticks, cooldown is
+50).
+
+**Vent radial-dispersal fix: particles were orbiting, not spreading.**
+Live-observed by the user ("Things are just slowly spinning in fairly
+fixed orbits"). The original vent current was tangential-only,
+deliberately, out of a concern that a purely radial push would just
+pile everything against the walls — but that reasoning was incomplete.
+A tangential-only force is centripetal-like with no radius-dependent
+restoring force, so particles settle into stable circular orbits at
+whatever radius they currently occupy rather than genuinely dispersing
+— defeating the actual point of Phase B (the pool reaching the wider
+dish). Fixed by adding a genuine radial (outward) component alongside
+the tangential one (`ventRadialStrength=0.015`, same calibration
+approach as the existing `ventCurrentStrength`), turning the motion
+into a dispersing spiral instead of a closed circle — the same way a
+real buoyant plume both entrains rotational flow and rises/expands away
+from its source. Verified headlessly: average particle distance from
+the vent increases monotonically at every sampled checkpoint (343→805
+over 2000 ticks, post vent-position-fix numbers below), confirming real
+outward dispersal rather than a plateau.
+
+**Vent-position fix: anchored to the seed patch, not the raw dish.**
+The user asked directly why the vent wasn't centered in the dish. The
+honest answer: it never was meant to be — Phase A's `{width*0.15,
+height*0.5}` formula deliberately placed it left-of-center to give the
+current's rotation a real long axis before hitting a wall, not
+symmetric-and-cancelling from dead center. But Phase B reused that
+formula against the *whole dish's* width/height rather than the seed
+patch's, and it only kept landing inside the patch by coincidence — this
+dish happens to be narrow enough (2400×0.15=360, inside the patch's
+0-800 x-range) for it to work, but a wider dish would silently put the
+vent outside the seeded material entirely. Fixed by recomputing the
+vent's position directly from `seedPatch` once it's known
+(`seedPatch.x + seedPatch.w*0.15`, `seedPatch.y + seedPatch.h*0.5`),
+keeping the vent's original off-center relationship to the *seeded
+material* exact regardless of dish size, rather than relying on that
+coincidence holding. Verified against three cases: full dish (2400×1500)
+→ `(120, 750)`, a direct small-pool call reproducing Phase A's exact
+original footprint (800×500) → `(120, 250)`, matching Phase A exactly,
+and a hypothetical much-wider dish (6000×1500) → `(120, 750)`, unchanged
+despite the huge width — confirming the vent now stays patch-anchored
+rather than dish-anchored. Mass-ledger and radial-dispersal checks
+re-run after this change, both still pass (0 violations; 343→805
+avgDist increasing).
+
+**Honest state to hand off**: all four changes build clean and pass
+their respective headless verification. The Phase B polymer-growth
+regression remains a known, user-accepted tradeoff, not a fixed bug —
+if this branch continues, isolating its actual mechanism (rather than
+the four untested hypotheses from when it was found) would be the
+natural next diagnostic, now that the vent's own behavior (dispersal
+direction, position) is on firmer footing than when the regression was
+first found.
+
 ## Tech constraint from last time
 
 Original build environment blocked the npm registry/CDNs (git-only

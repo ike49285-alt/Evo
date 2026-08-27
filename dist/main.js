@@ -10,16 +10,20 @@ import { drawTree, hitTestTree } from './ui/treeview.js';
 import { loadGame, saveGame } from './save.js';
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 1500;
-// A small, concentrated "primordial pool" rather than a thin ocean — real
-// dilute-solution prebiotic chemistry runs into a genuine, well-known
-// "concentration problem" (see origin.ts's bondRadius comment); a denser
-// pool is the same fix real hypotheses reach for (tide pools, mineral
-// surfaces, evaporating basins concentrating solutes) rather than a purely
-// game-y shortcut. It's a *region within* the same dish, not a separate
-// world — see renderer.ts's drawPool and POOL_OFFSET below.
-const ORIGIN_WIDTH = 800;
-const ORIGIN_HEIGHT = 500;
-const POOL_OFFSET = { x: (WORLD_WIDTH - ORIGIN_WIDTH) / 2, y: WORLD_HEIGHT - ORIGIN_HEIGHT - 100 };
+// Phase B: the pool's own coordinate space now spans the whole dish,
+// not a small sub-rectangle within it — Origin is constructed at
+// WORLD_WIDTH/HEIGHT directly (see the seedPrimordialSoup calls below).
+// The initial matter dose still concentrates into one dense patch
+// (origin.ts's own seedPrimordialSoup — the same "concentration
+// problem" bondRadius's comment there documents), just relocated inside
+// Origin itself rather than expressed as a smaller Origin living inside
+// a bigger World. POOL_OFFSET is always {0,0} now that the two spaces
+// are coextensive by construction — kept as a named constant (not
+// deleted) since Renderer.draw() and autoBootstrap() below both already
+// thread it through as their one seam for Origin-space -> World-space
+// translation, and reintroducing it later would cost more than keeping
+// it costs now.
+const POOL_OFFSET = { x: 0, y: 0 };
 function el(id) {
     const found = document.getElementById(id);
     if (!found)
@@ -63,17 +67,20 @@ function confirmDialog(message) {
 }
 // --- one continuous world --------------------------------------------
 // Origins (the chemistry — see src/chem/) and the Dish (the organelle/
-// Virtunism ecosystem) are two engines, but one world: the primordial pool
-// is a real region within the same dish (see POOL_OFFSET), not a separate
-// screen. A protocell that clears the bootstrap bar spawns its founders
-// automatically, right at the pool, with no button to click and nowhere
-// else to teleport to — see autoBootstrap() in the main loop.
+// Virtunism ecosystem) are two engines, but one world: the primordial
+// pool's coordinate space spans the whole dish (see POOL_OFFSET, always
+// {0,0} now — Phase B), not a separate screen or even a distinguished
+// sub-rectangle within it anymore; its matter just starts concentrated
+// into one dense patch (see origin.ts's seedPrimordialSoup) rather than
+// spread evenly. A protocell that clears the bootstrap bar spawns its
+// founders automatically, right where it bootstrapped, with no button to
+// click and nowhere else to teleport to — see autoBootstrap() below.
 //
 // Both engines' state autosaves to localStorage every 5s (see save.ts)
 // and gets restored here on load if a save exists — a page reload or an
 // accidentally-closed tab doesn't cost you a run.
 const restored = loadGame();
-let origin = restored?.origin ?? Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
+let origin = restored?.origin ?? Origin.seedPrimordialSoup(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
 let world = restored?.world ?? new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
 const canvas = el('sim-canvas');
 const renderer = new Renderer(canvas);
@@ -271,7 +278,7 @@ el('btn-reset').addEventListener('click', async () => {
     const ok = await confirmDialog('Reset the whole world — wipe the pool and every evolved lineage, and start over from scratch?');
     if (!ok)
         return;
-    origin = Origin.seedPrimordialSoup(ORIGIN_WIDTH, ORIGIN_HEIGHT, Date.now() & 0xffffffff);
+    origin = Origin.seedPrimordialSoup(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
     world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
     applyPopCap(); // the cap is a topbar-level setting, not per-world state — a reset shouldn't silently drop it back to the default
     renderer.fitToWorld(world);

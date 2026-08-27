@@ -186,7 +186,19 @@ export class Origin {
   // count under a ceiling (headless-caught: an earlier free-count-based
   // version of this cap let the vent add 3x+ its intended budget before
   // the free-count gauge ever actually reached the ceiling).
-  readonly ventCapPerKind = 300;
+  // Raised from 300 to 900 for Phase B — the vent stopped being a modest
+  // supplement on top of an otherwise-dish-wide dose the moment the pool
+  // stopped ambiently reseeding the whole dish and started
+  // patch-seeding instead (see seedPrimordialSoup); it's now the *sole*
+  // ongoing matter source for the dish's entire life, so "a ~12%-of-
+  // initial top-up" was the wrong bar. Still cheap in absolute terms —
+  // 2,700 extra particles trickled in over ~2,250 ticks (ventFluxPerTick
+  // unchanged), negligible next to the ~8,000-particle initial patch
+  // that dominates per-tick cost — while meaningfully increasing the
+  // matter actually available to spread outward with over a real run. A
+  // starting hypothesis to confirm or adjust by measurement, not a final
+  // number — see the Phase B density/perf sweep.
+  readonly ventCapPerKind = 900;
   // Well above moveParticles()'s existing 0.6/1.1 speed caps — the very
   // next movement step clamps the *magnitude* back down to the cap but
   // preserves *direction* (moveParticles() already does this
@@ -195,31 +207,48 @@ export class Origin {
   // decays into ordinary Brownian motion over the following ticks as
   // drag and noise wash the extra momentum out.
   readonly ventJetSpeed = 2.5;
-  // The actual whole-pool "agitation" — a small, coherent, per-tick
-  // tangential (rotational) velocity bias around the vent, applied to
-  // every particle every tick in moveParticles(), on top of (never
-  // replacing) its existing independent Brownian motion. Tangential,
-  // not radial: a purely radial push would just pile everything against
-  // the walls over time, not help far-apart molecules meet; a real
-  // buoyant vent plume drives broader convection in the surrounding
-  // body of water, not just local turbulence at the outlet, which is
-  // what this represents. Constant magnitude (not divided by distance)
-  // means angular velocity falls off with distance from the vent — real
-  // differential rotation, which shears adjacent "rings" of material
-  // past each other over time (actual mixing) rather than carrying
-  // everyone around in the same rigid rotation (which wouldn't mix
-  // anything — same molecules stay same neighbors forever).
+  // The whole-pool "agitation" — a small, coherent, per-tick velocity
+  // bias around the vent, applied to every particle every tick in
+  // moveParticles(), on top of (never replacing) its existing
+  // independent Brownian motion. Two components, tangential + radial:
+  //
+  // Tangential (rotational): constant magnitude (not divided by
+  // distance), so angular velocity falls off with distance from the
+  // vent — real differential rotation, which shears adjacent "rings" of
+  // material past each other over time (actual mixing) rather than
+  // carrying everyone around in the same rigid rotation (same molecules
+  // stay same neighbors forever, no mixing).
+  //
+  // Radial (outward): originally left out on the reasoning that a purely
+  // radial push would just pile everything against the walls — true in
+  // isolation, but tangential-only turned out to have its own, worse
+  // failure mode, caught by direct observation of a live run rather than
+  // by the math: a tangential-only force continuously redirects a
+  // particle's velocity to stay tangential *at whatever radius it
+  // currently occupies*, which is a real centripetal-like effect with no
+  // radius-dependent restoring force to fight it — particles settle into
+  // stable, slowly-diffusing circular orbits around the vent instead of
+  // actually escaping toward the wider dish, which was the entire point
+  // once the pool stopped being a small enclosed pool (Phase B). Adding
+  // a real outward term alongside the tangential one turns that circle
+  // into a spiral — material still gets the shearing/mixing benefit
+  // *and* genuinely disperses outward, the combination a real buoyant
+  // plume actually produces (a plume both entrains rotational flow in
+  // the surrounding water and, being buoyant, actually rises/expands
+  // away from the vent — it doesn't just stir the pot in place).
   //
   // Calibrated, not guessed: same steady-state math
   // vesicleChemotaxisBiasStrength's own comment uses — a bias re-applied
   // every tick against drag=0.96 compounds to a steady-state
-  // contribution of biasStrength/(1-drag) = 25x. At 0.015 that's
-  // ~0.375/tick, comfortably under the 0.6/1.1 movement speed caps, so
-  // this adds real, compounding circulation without permanently pegging
-  // every particle at max speed in lockstep (which a much higher value
-  // would — a rigid, cap-pegged whirl doesn't actually mix anything
+  // contribution of biasStrength/(1-drag) = 25x. At 0.015 each, that's
+  // ~0.375/tick per component, comfortably under the 0.6/1.1 movement
+  // speed caps even combined (~0.53/tick at 45°) — real, compounding
+  // circulation *and* dispersal without permanently pegging every
+  // particle at max speed in lockstep (which a much higher value would —
+  // a rigid, cap-pegged whirl doesn't actually mix or disperse anything
   // either, for the same reason a non-differential rotation doesn't).
   readonly ventCurrentStrength = 0.015;
+  readonly ventRadialStrength = 0.015;
   readonly lipidAssemblyRadius = 7;
   // Raised from 0.02 as part of the second abiogenesis-tuning pass (see
   // NOTES.md) — a vesicle's interior nucleotide/energy supply is
@@ -364,6 +393,24 @@ export class Origin {
   // copyStallTimeoutFloor) — long enough for a boosted in-vesicle
   // replication to plausibly complete before the membrane can split again.
   readonly divisionCooldownTicks = 500;
+  // A different problem than divisionCooldownTicks above, which gates a
+  // vesicle re-dividing — this gates two freshly-divided *siblings*
+  // re-fusing with *each other*. The two daughters divideVesicle()
+  // produces are just two halves of the same original membrane ring,
+  // still touching (or close to it) the instant they're created, so
+  // without this, fuseVesicles()'s ordinary contact check undoes the
+  // division within a tick or two — worst case almost immediately when
+  // the split happened to separate a catalyst from a replicator, since
+  // that's exactly the pairing complementaryFusionChance (0.9/tick)
+  // rewards, silently erasing the one division outcome that would
+  // actually matter for isBootstrapEligible. Much shorter than
+  // divisionCooldownTicks on purpose: this only needs to outlast the
+  // instant of contact right at the split, not give the membrane real
+  // reorganization time — long enough for ordinary drift/the vent
+  // current to carry them apart, short enough that if they *do*
+  // genuinely re-encounter each other later (a real, separate event,
+  // not an artifact of the split), they're not blocked from fusing then.
+  readonly divisionSiblingCooldownTicks = 50;
   // Headless-diagnosed (see NOTES.md): catalysts weren't being destroyed
   // outright — across 32 catalytic particles sampled over 5 seeds, 0 were
   // hydrolyzed to nothing, but 17 lost their catalytic classification from
@@ -426,7 +473,11 @@ export class Origin {
     this.rng = new Rng(seed);
     // Left-of-center, not dead-center — gives the current's rotation a
     // real long axis to fan material across before it reaches a wall,
-    // instead of being symmetric-and-cancelling from the middle.
+    // instead of being symmetric-and-cancelling from the middle. This is
+    // only a default: seedPrimordialSoup() recomputes it relative to the
+    // seeded patch once the patch is known (see its own comment) — this
+    // formula only still matters for a direct `new Origin(...)` call with
+    // no seeding, or before that override runs.
     this.vent = ventEnabled ? { x: width * 0.15, y: height * 0.5 } : null;
   }
 
@@ -461,16 +512,56 @@ export class Origin {
     // retirement logic) rather than needing to run indefinitely at this
     // density.
     const SOUP_DENSITY_MULTIPLIER = 8;
-    for (const code of AMINO_ACID_CODES) for (let i = 0; i < 18 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnAminoAcid(code);
-    for (const code of NUCLEOTIDE_CODES) for (let i = 0; i < 70 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnNucleotide(code);
-    for (let i = 0; i < 240 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnLipid();
-    for (let i = 0; i < 60 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnEnergy();
+    // Phase B: `width`/`height` now typically span the whole dish, not
+    // just the pool's own small footprint — but density (particles per
+    // unit area), not total particle count, is what past rounds' density
+    // scan actually measured a payoff from (see above), and per-tick cost
+    // is driven by particle count (Origin.tickOnce() scans every particle
+    // every pass), not by how much empty space surrounds them. So the
+    // initial dose still concentrates into one dense patch reusing the
+    // pool's original 800x500 footprint — planting the same soup that
+    // worked before, not diluting it across a much bigger area — flush
+    // against the left wall, vertically centered, sized down safely via
+    // Math.min if `width`/`height` are ever smaller than that (e.g. a
+    // direct 800x500 call, which then reduces to exactly Phase A's own
+    // behavior: the "patch" is the whole area).
+    const seedPatch = {
+      x: 0,
+      y: (height - Math.min(500, height)) / 2,
+      w: Math.min(800, width),
+      h: Math.min(500, height),
+    };
+    // The constructor's vent formula ({width*0.15, height*0.5}) was
+    // written back when the pool's own footprint *was* the whole
+    // coordinate space (Phase A) — "left-of-center of the space" and
+    // "left-of-center of the seeded material" were the same statement.
+    // Patch-seeding broke that equivalence: at this dish's current size
+    // (2400x1500) the dish-relative formula (x=360) still happens to land
+    // inside the patch's 0-800 x-range, but only because this dish is
+    // narrow enough for that to hold — a wider dish would put the vent
+    // outside the seeded material entirely, silently. Recomputing directly
+    // off seedPatch keeps the vent's original off-center relationship to
+    // the *seeded material* exact regardless of how large the surrounding
+    // dish gets, rather than relying on that coincidence.
+    if (o.vent) o.vent = { x: seedPatch.x + seedPatch.w * 0.15, y: seedPatch.y + seedPatch.h * 0.5 };
+    for (const code of AMINO_ACID_CODES) for (let i = 0; i < 18 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnAminoAcid(code, o.randomPosInRect(seedPatch));
+    for (const code of NUCLEOTIDE_CODES) for (let i = 0; i < 70 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnNucleotide(code, o.randomPosInRect(seedPatch));
+    for (let i = 0; i < 240 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnLipid(o.randomPosInRect(seedPatch));
+    for (let i = 0; i < 60 * SOUP_DENSITY_MULTIPLIER; i++) o.spawnEnergy(o.randomPosInRect(seedPatch));
     return o;
   }
 
   // --- spawning ----------------------------------------------------------
   private randomPos(): { x: number; y: number } {
     return { x: this.rng.range(0, this.width), y: this.rng.range(0, this.height) };
+  }
+
+  /** Same as randomPos() but bounded to a sub-rectangle — how
+   * seedPrimordialSoup concentrates its initial dose into one dense
+   * patch instead of spreading it over the whole (now much larger)
+   * dish. See seedPrimordialSoup's own comment for why. */
+  private randomPosInRect(rect: { x: number; y: number; w: number; h: number }): { x: number; y: number } {
+    return { x: this.rng.range(rect.x, rect.x + rect.w), y: this.rng.range(rect.y, rect.y + rect.h) };
   }
 
   /** A random-direction, fixed-magnitude kick well above moveParticles()'s
@@ -481,9 +572,11 @@ export class Origin {
     return { vx: Math.cos(angle) * this.ventJetSpeed, vy: Math.sin(angle) * this.ventJetSpeed };
   }
 
-  /** `at`/`jet` are only ever passed by spawnVentFlux() — every other
-   * call site (seedPrimordialSoup's own seeding) is unaffected, still
-   * a uniform-random position and the original small ambient velocity. */
+  /** `jet` is only ever passed by spawnVentFlux() — a vented particle
+   * gets the outward speed kick, everything else (including
+   * seedPrimordialSoup's own patch-concentrated seeding, which does
+   * pass `at` but never `jet`) keeps the original small ambient
+   * velocity. */
   private spawnAminoAcid(code: AminoAcidCode, at?: { x: number; y: number }, jet = false): AminoAcidParticle {
     const p: AminoAcidParticle = {
       id: this.nextId++,
@@ -523,11 +616,16 @@ export class Origin {
     return p;
   }
 
-  private spawnEnergy(): EnergyParticle {
+  /** `at` is only ever passed by seedPrimordialSoup's own initial dose
+   * (see its comment on why the dose patch-concentrates) — the ongoing
+   * per-tick spawnEnergyFlux() top-up deliberately stays dish-wide and
+   * uniform, the pre-existing "ambient sunlight" design, genuinely
+   * unrelated to where matter is concentrated. */
+  private spawnEnergy(at?: { x: number; y: number }): EnergyParticle {
     const p: EnergyParticle = {
       id: this.nextId++,
       kind: 'energy',
-      ...this.randomPos(),
+      ...(at ?? this.randomPos()),
       vx: this.rng.range(-0.5, 0.5),
       vy: this.rng.range(-0.5, 0.5),
       vesicleId: null,
@@ -606,17 +704,18 @@ export class Origin {
       const drag = 0.96;
       p.vx = p.vx * drag + this.rng.gaussian(0, 0.06);
       p.vy = p.vy * drag + this.rng.gaussian(0, 0.06);
-      // The vent's persistent current — a coherent tangential bias on top
-      // of (never replacing) the independent Brownian term just above.
-      // See ventCurrentStrength's own comment for why tangential, why
-      // constant-magnitude, and how its strength was calibrated.
+      // The vent's persistent current — a coherent tangential + radial
+      // bias on top of (never replacing) the independent Brownian term
+      // just above. See ventCurrentStrength's own comment for the full
+      // reasoning on both components, why constant-magnitude, and how
+      // the strengths were calibrated.
       if (this.vent) {
         const dx = p.x - this.vent.x;
         const dy = p.y - this.vent.y;
         const dist = Math.hypot(dx, dy);
         if (dist > 0.01) {
-          p.vx += (-dy / dist) * this.ventCurrentStrength;
-          p.vy += (dx / dist) * this.ventCurrentStrength;
+          p.vx += (-dy / dist) * this.ventCurrentStrength + (dx / dist) * this.ventRadialStrength;
+          p.vy += (dx / dist) * this.ventCurrentStrength + (dy / dist) * this.ventRadialStrength;
         }
       }
       const speedCap = p.kind === 'peptide' || p.kind === 'rna' ? 0.6 : 1.1;
@@ -1120,6 +1219,7 @@ export class Origin {
       createdTick: this.tick,
       divisions: 0,
       replicationEvents: 0,
+      siblingId: null,
     };
     for (const l of lipids) l.vesicleId = v.id;
     // Whatever else was drifting inside the closing radius at the moment
@@ -1308,8 +1408,14 @@ export class Origin {
     // is the likely reason a natural bootstrap was never once observed
     // in 200,000+ verification ticks despite every individual mechanism
     // (folding, catalysis, replication, division) working on its own.
+    // ids assigned up front, not inline, so each daughter can record the
+    // other's real id as its sibling (see Vesicle.siblingId's own
+    // comment) — divisionSiblingCooldownTicks below is what actually
+    // uses this, in fuseVesicles().
+    const idA = this.nextVesicleId++;
+    const idB = this.nextVesicleId++;
     const daughterA: Vesicle = {
-      id: this.nextVesicleId++,
+      id: idA,
       x: ca.x,
       y: ca.y,
       radius: radiusForLipidCount(groupA.length),
@@ -1318,9 +1424,10 @@ export class Origin {
       createdTick: this.tick,
       divisions: v.divisions + 1,
       replicationEvents: v.replicationEvents,
+      siblingId: idB,
     };
     const daughterB: Vesicle = {
-      id: this.nextVesicleId++,
+      id: idB,
       x: cb.x,
       y: cb.y,
       radius: radiusForLipidCount(groupB.length),
@@ -1329,6 +1436,7 @@ export class Origin {
       createdTick: this.tick,
       divisions: v.divisions + 1,
       replicationEvents: v.replicationEvents,
+      siblingId: idA,
     };
     for (const l of groupA) l.vesicleId = daughterA.id;
     for (const l of groupB) l.vesicleId = daughterB.id;
@@ -1450,6 +1558,16 @@ export class Origin {
         const b = list[j];
         if (consumed.has(b.id) || !this.vesicles.has(b.id)) continue;
         if (Math.hypot(a.x - b.x, a.y - b.y) > a.radius + b.radius) continue; // membranes not touching
+        // Fresh division siblings, still on cooldown — see
+        // divisionSiblingCooldownTicks's own comment for why this check
+        // exists. createdTick is the same for both (both daughters get
+        // it set at the moment of division), so either side's is fine.
+        if (
+          (a.siblingId === b.id || b.siblingId === a.id) &&
+          this.tick - a.createdTick < this.divisionSiblingCooldownTicks
+        ) {
+          continue;
+        }
         const ca = contents.get(a.id)!;
         const cb = contents.get(b.id)!;
         // Complementary: each side is missing exactly what the other

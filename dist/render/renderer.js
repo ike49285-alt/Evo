@@ -189,22 +189,26 @@ export class Renderer {
         }
         ctx.restore();
     }
-    /** The primordial pool: a real region within the same dish, not a
-     * separate world. Amino acids, nucleotides, lipids and everything they
-     * build sit here at `poolOffset` + their own local coordinates. */
+    /** The primordial pool: not a separate world, and — as of Phase B —
+     * not even a distinguished sub-region of the dish anymore. Origin's
+     * own coordinate space is now coextensive with World's (poolOffset is
+     * always {0,0}), so there's no longer a smaller rectangle to tint or
+     * border here (that used to draw the exact same rect as the dish
+     * boundary already drawn just before this call, once the two spaces
+     * became the same size — removed rather than left as a redundant
+     * full-screen wash). The vent marker and the particles/vesicles
+     * themselves are what still say "chemistry lives here." Amino acids,
+     * nucleotides, lipids and everything they build sit here at
+     * `poolOffset` + their own local coordinates. */
     drawPool(origin, poolOffset) {
         const ctx = this.ctx;
         const topLeft = this.worldToScreen(poolOffset.x, poolOffset.y);
         const bottomRight = this.worldToScreen(poolOffset.x + origin.width, poolOffset.y + origin.height);
-        const w = bottomRight.x - topLeft.x;
-        const h = bottomRight.y - topLeft.y;
+        // Origin and World are the same size now, so this is effectively
+        // always false in practice — kept as a real safety net (not deleted)
+        // in case a future Origin is ever smaller than its World again.
         if (topLeft.x > this.viewportWidth || topLeft.y > this.viewportHeight || bottomRight.x < 0 || bottomRight.y < 0)
             return;
-        ctx.fillStyle = 'rgba(120, 90, 40, 0.12)';
-        ctx.fillRect(topLeft.x, topLeft.y, w, h);
-        ctx.strokeStyle = 'rgba(245, 200, 120, 0.3)';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(topLeft.x, topLeft.y, w, h);
         // The vent — a visual confirmation the mechanic is actually doing
         // something, not just a number in the chemistry stats. A hot
         // orange/red glow (distinct from the cooler pale-gold/purple palette
