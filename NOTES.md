@@ -987,6 +987,44 @@ Designer tab's layout is bit-for-bit unaffected by a silent selection,
 untouched (rules only live inside the two mobile media queries). Zero
 console errors throughout.
 
+**Second follow-up — that "grow the sidebar" rule was itself broken**:
+shipped, and the very next report was "the tree tab doesn't scroll at
+all now." The `height: 70dvh` override *did* make `.sidebar` measure
+591px tall, exactly as intended — but never checking its *position*
+relative to the viewport, or the enclosing `main`'s own total content
+height, missed that `main`'s real available height (713px) was 211px
+*less* than `.canvas-wrap` (273px, unchanged) + `#tab-rail` (60px) +
+the newly-grown `.sidebar` (591px) demanded. `.sidebar` and `#tab-rail`
+both inherit `flex-shrink: 0` from their desktop `flex: 0 0 Npx` base
+rule (the mobile media query only ever overrides
+flex-basis/width/height, never the shrink/grow components of that
+shorthand), so neither gave ground; `.canvas-wrap` never got the
+axis-flip `min-height: 0` override it needs once `main` switches to
+column layout in mobile (its row-layout counterpart, `min-width: 0`,
+was already there) — the same class of axis-flip bug already fixed
+elsewhere in this file for `.tree-info`. The excess 211px didn't get
+clipped by `main` (its `overflow-y` is the initial `visible`) — it
+bled downward and only got clipped by `#app`'s `overflow: hidden;
+height: 100dvh`, entirely below the visible viewport with nothing
+scrollable in between to reach it. Confirmed directly: a real `wheel`
+event over `#tree-detail` left `scrollTop` at 0 in the broken code —
+`#tree-detail`'s own `overflow-y: auto` was never at fault; the whole
+region was just rendered off-screen.
+
+Fixed by not guessing a fixed vh number at all: `.canvas-wrap` now has
+`min-height: 0`, and while a selection is active it gets an explicit
+small floor (`flex: 0 1 90px; min-height: 90px`) while `.sidebar`
+switches to `flex: 1 1 auto` and grows to take whatever's genuinely
+left in `main` — guaranteed to fit by construction (flex-grow only
+ever distributes real leftover space), not by assumption. Verified:
+`main`'s `scrollHeight` now exactly equals its `clientHeight` (zero
+overflow); `#tree-detail`'s rect sits entirely inside the viewport; a
+real `wheel` event now moves `scrollTop` 0 → 300 under the identical
+test that stayed at 0 before. Re-ran the full regression set (Designer
+tab unaffected, `Clear` reverts, re-select regrows, landscape-short
+unaffected, desktop unaffected) — all still pass. Zero console errors
+throughout.
+
 Also added real absolute numbers to the species radar/stat-star chart
 (`ui/chart.ts`), reused here for the Inspector's own per-individual radar:
 previously it only drew each axis normalized against its own biggest

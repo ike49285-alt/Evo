@@ -213,7 +213,13 @@ html, body {
 
 main { flex: 1 1 auto; display: flex; min-height: 0; }
 
-.canvas-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
+/* min-width: 0 is the desktop row layout's "let it shrink" axis;
+   min-height: 0 is its column-mode (mobile) counterpart -- without it,
+   an implicit content-based auto min-height (driven by the canvas
+   inside) refuses to shrink even when a mobile media query later asks
+   it to, which is exactly what let .sidebar's grow-while-inspecting
+   rule below overflow the viewport instead of actually sharing space. */
+.canvas-wrap { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; }
 /* touch-action: none is load-bearing, not decorative — without it the
    browser's own native touch gesture handling (page pinch-zoom, page
    pan/scroll) claims two-finger and drag gestures on the canvas before
@@ -513,8 +519,25 @@ canvas.chart {
   body:has(#tab-tree.tab-panel.active #tree-detail:not(:empty)) .tree-toolbar .panel-hint {
     display: none;
   }
+  /* A hardcoded `height: 70dvh` here previously overflowed the viewport:
+     .sidebar and #tab-rail both inherit flex-shrink:0 from their desktop
+     `flex: 0 0 Npx` base rule (this media query only ever overrides
+     flex-basis/width/height, never the shrink/grow components of that
+     shorthand), so neither gives ground when an explicit height demands
+     more room than `main` actually has -- the excess just rendered past
+     #app's overflow:hidden bottom edge with nothing scrollable in
+     between to reach it ("doesn't scroll at all"). Fix: don't guess a
+     fixed vh number. Let flexbox distribute the real remaining space --
+     .canvas-wrap (flex: 1 1 auto, now with min-height: 0 so it can
+     actually shrink in column mode) drops to a small explicit floor,
+     and .sidebar grows via flex-grow to take whatever's genuinely left
+     in `main`. flex-grow only ever distributes real leftover space, so
+     this can't manufacture an overflow the way a fixed vh guess can. */
+  body:has(#tab-tree.tab-panel.active #tree-detail:not(:empty)) .canvas-wrap {
+    flex: 0 1 90px; min-height: 90px;
+  }
   body:has(#tab-tree.tab-panel.active #tree-detail:not(:empty)) .sidebar {
-    height: 70vh; height: 70dvh; max-height: 70dvh;
+    height: auto; max-height: none; flex: 1 1 auto;
   }
 }
 
