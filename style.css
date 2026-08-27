@@ -381,6 +381,20 @@ fieldset legend em { font-style: normal; color: var(--text); font-weight: 600; }
 }
 .stat-label { font-family: var(--font-sans); font-size: var(--fs-eyebrow); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); }
 .stat > span:not(.stat-label) { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-data); font-weight: 700; color: var(--text); }
+/* Division progress's value embeds an unbounded lipid count
+   ("0 / 1 (57 lipids)") -- the only stat value in the app whose length
+   grows over a run. Without this, crossing into 3+ digits wraps it onto
+   a second line, which grows the whole stat-grid row (both cells share
+   one grid row track) and shoves everything below it down. Scoped to
+   this one id, not the shared rule above, since every other stat value
+   is fixed-length and doesn't need this.
+   min-width:0 on the .stat box itself matters too, not just overflow on
+   the span -- a grid item's default min-width:auto still lets its
+   min-content size (driven by the un-wrapped text) grow the shared
+   grid track even with the span's own overflow:hidden, same class of
+   bug .canvas-wrap's min-width:0 above already exists to prevent. */
+.stat:has(#os-closest-division) { min-width: 0; }
+#os-closest-division { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .chart-block { margin-bottom: 0; }
