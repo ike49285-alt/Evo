@@ -212,6 +212,13 @@ function hitTestDish(worldX, worldY) {
 }
 function handleDishTap(sx, sy) {
     const worldPt = renderer.screenToWorld(sx, sy);
+    // The manual-spawn tool (Chemistry tab, wired further down) hijacks
+    // dish taps while armed — placing chemistry takes priority over
+    // selecting an individual, and doesn't fall through to hit-testing.
+    if (spawnArmed) {
+        placeManualSpawn(worldPt.x, worldPt.y);
+        return;
+    }
     const hit = hitTestDish(worldPt.x, worldPt.y);
     // Tapping empty water is a no-op, not a deselect — mirrors the tree
     // canvas's own click handler below: Clear (Tree tab) is the one
@@ -348,6 +355,65 @@ el('btn-release').addEventListener('click', () => {
     const seed = randomGenome(world.rng, reproductionMode);
     world.addSpeciesFromSequence(seed.sequence, Number(fCount.value), { name, isPlayerDesigned: true });
 });
+// Referenced by handleDishTap() above, defined here — a closure reading
+// this at call time (well after the whole module has finished loading
+// and every listener is registered), not at definition time, so the
+// forward reference is safe.
+let spawnArmed = null;
+const spawnPolymerFields = el('spawn-polymer-fields');
+const fSpawnLength = el('f-spawn-length');
+const fSpawnForce = el('f-spawn-force');
+const spawnForceLabel = el('spawn-force-label');
+const btnSpawnArm = el('btn-spawn-arm');
+function currentSpawnKind() {
+    return document.querySelector('input[name="spawn-kind"]:checked')?.value;
+}
+function refreshSpawnFields() {
+    const kind = currentSpawnKind();
+    const isPolymer = kind === 'peptide' || kind === 'rna';
+    spawnPolymerFields.style.display = isPolymer ? '' : 'none';
+    spawnForceLabel.textContent = kind === 'rna' ? 'Force ribozyme' : 'Force catalytic';
+    el('v-spawn-length').textContent = fSpawnLength.value;
+}
+document
+    .querySelectorAll('input[name="spawn-kind"]')
+    .forEach((r) => r.addEventListener('change', refreshSpawnFields));
+fSpawnLength.addEventListener('input', refreshSpawnFields);
+refreshSpawnFields();
+btnSpawnArm.addEventListener('click', () => {
+    // Toggle, not single-shot — an eyedropper-style tool the user can drop
+    // several items with while hunting for the right vesicle, rather than
+    // re-arming before every placement.
+    spawnArmed = spawnArmed ? null : currentSpawnKind();
+    btnSpawnArm.classList.toggle('active', spawnArmed !== null);
+    btnSpawnArm.textContent = spawnArmed ? 'Placing… (tap button to stop)' : 'Place on Dish';
+});
+/** Places whatever's configured in the manual-spawn panel at a world
+ * point. Inset 1px from the dish edge so a freshly-placed free particle
+ * never lands exactly on the boundary and gets immediately wall-
+ * despawned by moveParticles() (origin.ts) on the very next tick. */
+function placeManualSpawn(worldX, worldY) {
+    if (!spawnArmed)
+        return;
+    const at = {
+        x: Math.min(Math.max(worldX, 1), WORLD_WIDTH - 1),
+        y: Math.min(Math.max(worldY, 1), WORLD_HEIGHT - 1),
+    };
+    switch (spawnArmed) {
+        case 'aa':
+        case 'nt':
+        case 'lipid':
+        case 'energy':
+            origin.spawnManualParticle(spawnArmed, at);
+            break;
+        case 'peptide':
+            origin.spawnManualPeptide(at, Number(fSpawnLength.value), fSpawnForce.checked);
+            break;
+        case 'rna':
+            origin.spawnManualRna(at, Number(fSpawnLength.value), fSpawnForce.checked);
+            break;
+    }
+}
 // --- Origins: automatic bootstrap into the wider dish --------------------
 // No button, no screen change — a protocell that clears the bar just
 // starts existing as an ordinary founding lineage, spawned right where its

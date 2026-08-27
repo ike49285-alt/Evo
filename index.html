@@ -231,6 +231,45 @@
               <div class="legend-row"><span class="legend-swatch" style="background:rgba(199,125,255,0.95)"></span>ribozyme RNA</div>
               <div class="legend-row"><span class="legend-swatch" style="background:rgba(245,220,160,0.85)"></span>lipid</div>
             </div>
+
+            <p class="stat-label" style="margin-bottom:6px">Manual seeding</p>
+            <p class="panel-hint">
+              Place specific chemistry directly into the pool by hand —
+              a way to hand a stalled vesicle the one thing it's
+              missing rather than wait on the vent's random trickle.
+              This is a deliberate override, same idea as releasing a
+              random population in the Designer tab, not part of the
+              pool's own emergent economy.
+            </p>
+
+            <fieldset class="field">
+              <legend>What to place</legend>
+              <div class="segmented wrap">
+                <label><input type="radio" name="spawn-kind" value="aa" checked /> Amino acid</label>
+                <label><input type="radio" name="spawn-kind" value="nt" /> Nucleotide</label>
+                <label><input type="radio" name="spawn-kind" value="lipid" /> Lipid</label>
+                <label><input type="radio" name="spawn-kind" value="energy" /> Energy</label>
+                <label><input type="radio" name="spawn-kind" value="peptide" /> Peptide</label>
+                <label><input type="radio" name="spawn-kind" value="rna" /> RNA</label>
+              </div>
+            </fieldset>
+
+            <div id="spawn-polymer-fields" style="display:none">
+              <label class="field slider-field">
+                <span>Length <em id="v-spawn-length"></em></span>
+                <input id="f-spawn-length" type="range" min="2" max="40" step="1" value="12" />
+              </label>
+              <label class="checkbox-field">
+                <input id="f-spawn-force" type="checkbox" />
+                <span id="spawn-force-label">Force catalytic</span>
+              </label>
+            </div>
+
+            <button id="btn-spawn-arm" class="btn wide">Place on Dish</button>
+            <p class="panel-hint" id="spawn-hint">
+              Tap the dish anywhere (any tab) to place. Stays armed for
+              repeated placements until you tap the button again.
+            </p>
           </section>
 
           <section id="tab-tree" class="tab-panel">

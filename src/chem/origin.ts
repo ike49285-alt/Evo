@@ -453,18 +453,29 @@ export class Origin {
   private nextVesicleId = 1;
   private energyDebt = 0; // fractional accumulator for energyFluxPerTick
   private ventDebt = 0; // fractional accumulator for ventFluxPerTick, one shared debt spent on all three kinds together
-  // Cumulative count of particles the vent itself has ever spawned, per
-  // kind — what ventCapPerKind actually bounds. Deliberately *not* a
-  // check against the current *free* count of that kind: hydrolysis
-  // constantly cycles matter between free and polymer-bound states (see
-  // hydrolyze()), so free count alone chronically understates how much
-  // the vent has really contributed once reactions start consuming what
-  // it spawns — a cap on free count would let the vent keep injecting
-  // indefinitely as long as reactions kept pace, defeating the entire
-  // point of a stability floor. This counter only ever goes up (nothing
-  // in this file destroys aa/nt/lipid matter — see this file's header
-  // comment), so "cumulative ever spawned" and "current standing
-  // contribution" are the same number, always.
+  // Standing count of vent-attributable matter currently "checked out"
+  // against ventCapPerKind, per kind. Deliberately *not* a check against
+  // the current *free* count of that kind: hydrolysis constantly cycles
+  // matter between free and polymer-bound states (see hydrolyze()), so
+  // free count alone chronically understates how much the vent has
+  // really contributed once reactions start consuming what it spawns —
+  // a cap on free count would let the vent keep injecting indefinitely
+  // as long as reactions kept pace, defeating the entire point of a
+  // stability floor.
+  //
+  // Originally this only ever went up (nothing destroyed aa/nt/lipid
+  // matter, so "cumulative ever spawned" and "current standing
+  // contribution" were the same number, always). Wall recycling
+  // (moveParticles()) broke that: a free aa/nt/lipid particle that
+  // despawns at the dish wall decrements this, re-opening one slot for
+  // spawnVentFlux() to eventually refill. That decrement does *not*
+  // check whether the specific despawned particle was ever actually
+  // vent-spawned versus part of the original patch seed — no code
+  // anywhere tracks per-particle provenance, and the budget is what
+  // matters here, not which atoms take which path. Net effect: this cap
+  // now bounds "how much vent-sourced matter can be in circulation
+  // concurrently," not "how much the vent may ever emit in the whole
+  // run" — a deliberate loosening once matter can also leave.
   private ventInjected = { aa: 0, nt: 0, lipid: 0 };
 
   constructor(width: number, height: number, seed: number, ventEnabled = true) {
@@ -634,6 +645,93 @@ export class Origin {
     return p;
   }
 
+  // --- manual spawn tool (player-directed, not part of the closed-loop
+  // economy) ---------------------------------------------------------------
+  // Everything above this point is chemistry the *simulation* decides to
+  // create — the vent's throttled trickle, or an organic reaction. These
+  // three are different: a deliberate, explicit player action, the same
+  // category of override the Designer tab's "Release Random Population"
+  // already is. None of them touch ventInjected/ventCapPerKind — that
+  // budget exists to bound what the *vent* emits over time, and has
+  // nothing to do with a player directly placing a specific molecule to
+  // test or nudge a specific vesicle.
+
+  /** Places one free aa/nt/lipid/energy particle at `at`, with a random
+   * code where relevant. Thin public wrapper over the private spawn
+   * primitives above — reuses them rather than duplicating their
+   * velocity/field logic. */
+  spawnManualParticle(kind: 'aa' | 'nt' | 'lipid' | 'energy', at: { x: number; y: number }): Particle {
+    switch (kind) {
+      case 'aa':
+        return this.spawnAminoAcid(this.rng.pick(AMINO_ACID_CODES), at);
+      case 'nt':
+        return this.spawnNucleotide(this.rng.pick(NUCLEOTIDE_CODES), at);
+      case 'lipid':
+        return this.spawnLipid(at);
+      case 'energy':
+        return this.spawnEnergy(at);
+    }
+  }
+
+  /** Builds a complete random peptide of `length` residues directly,
+   * rather than waiting for extendPolymer() to grow one a residue at a
+   * time over many ticks. If `forceCatalyst`, resamples the sequence up
+   * to 500 times (NOTES.md's own prior measurement put catalytic-fold
+   * acceptance at roughly 7-20% per attempt for peptides, so 500 makes
+   * failure negligible without risking a real hang) looking for a fold
+   * with `isCatalyst`; on the rare chance none of the 500 attempts hit,
+   * spawns whatever the last attempt produced anyway rather than
+   * failing outright — the caller can just try again. */
+  spawnManualPeptide(at: { x: number; y: number }, length: number, forceCatalyst: boolean): PeptideParticle {
+    const len = clamp(Math.round(length), 2, MAX_POLYMER_LENGTH);
+    let sequence: AminoAcidCode[] = [];
+    let fold = null as ReturnType<typeof foldPeptide> | null;
+    const attempts = forceCatalyst ? 500 : 1;
+    for (let i = 0; i < attempts; i++) {
+      sequence = Array.from({ length: len }, () => this.rng.pick(AMINO_ACID_CODES));
+      fold = foldPeptide(sequence);
+      if (!forceCatalyst || fold.isCatalyst) break;
+    }
+    const p: PeptideParticle = {
+      id: this.nextId++,
+      kind: 'peptide',
+      sequence,
+      fold: fold!,
+      ...at,
+      vx: 0,
+      vy: 0,
+      vesicleId: null,
+    };
+    this.particles.set(p.id, p);
+    return p;
+  }
+
+  /** Same idea as spawnManualPeptide() for RNA — see its comment. */
+  spawnManualRna(at: { x: number; y: number }, length: number, forceRibozyme: boolean): RnaParticle {
+    const len = clamp(Math.round(length), 2, MAX_POLYMER_LENGTH);
+    let sequence: NucleotideCode[] = [];
+    let fold = null as ReturnType<typeof foldRna> | null;
+    const attempts = forceRibozyme ? 500 : 1;
+    for (let i = 0; i < attempts; i++) {
+      sequence = Array.from({ length: len }, () => this.rng.pick(NUCLEOTIDE_CODES));
+      fold = foldRna(sequence);
+      if (!forceRibozyme || fold.isRibozyme) break;
+    }
+    const p: RnaParticle = {
+      id: this.nextId++,
+      kind: 'rna',
+      sequence,
+      fold: fold!,
+      copying: null,
+      ...at,
+      vx: 0,
+      vy: 0,
+      vesicleId: null,
+    };
+    this.particles.set(p.id, p);
+    return p;
+  }
+
   // --- main loop -----------------------------------------------------------
   update(steps = 1): void {
     const start = performance.now();
@@ -726,6 +824,32 @@ export class Origin {
       }
       p.x += p.vx;
       p.y += p.vy;
+      // Free abiotic soup (aa/nt/lipid/energy, not yet part of a polymer
+      // or captured in a vesicle) despawns at a wall instead of bouncing
+      // — otherwise it just piles up against the boundary forever, since
+      // nothing else in this closed system ever removes it. This is the
+      // vent's other half: matter exits here and re-enters through
+      // spawnVentFlux()'s existing throttled trickle (see the
+      // ventInjected decrement below), not instantly — a real recycling
+      // loop, not a teleport. Polymers and anything inside a vesicle
+      // still bounce, unchanged — this is scoped to loose soup, not
+      // accumulated chemistry that represents real progress.
+      const outOfBounds = p.x < 0 || p.x > this.width || p.y < 0 || p.y > this.height;
+      const isFreeAbiotic =
+        p.vesicleId === null && (p.kind === 'aa' || p.kind === 'nt' || p.kind === 'lipid' || p.kind === 'energy');
+      if (outOfBounds && isFreeAbiotic) {
+        this.removeParticle(p.id);
+        // Re-opens one ventCapPerKind slot so spawnVentFlux() can
+        // eventually replace what just left. Deliberately not tracking
+        // whether *this specific particle* was ever vent-spawned versus
+        // part of the original patch seed — no code anywhere tracks
+        // per-particle provenance, and the budget is what matters here,
+        // not which atoms take which path. energy has no cap to
+        // reopen — spawnEnergyFlux()'s existing capacity-based top-up
+        // already replaces a removed energy particle for free.
+        if (p.kind !== 'energy') this.ventInjected[p.kind] = Math.max(0, this.ventInjected[p.kind] - 1);
+        continue;
+      }
       if (p.x < 0 || p.x > this.width) {
         p.x = clamp(p.x, 0, this.width);
         p.vx *= -1;

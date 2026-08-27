@@ -1435,6 +1435,94 @@ natural next diagnostic, now that the vent's own behavior (dispersal
 direction, position) is on firmer footing than when the regression was
 first found.
 
+## Wall recycling + manual soup-spawning tool
+
+Two more additions on `claude/closed-loop-soup`: free abiotic soup now
+recycles through the vent instead of piling up at walls, and there's a
+new hand tool to place specific chemistry directly into the pool.
+
+**Wall recycling.** Free `aa`/`nt`/`lipid`/`energy` particles (not part
+of a polymer, not captured in a vesicle) used to bounce off dish walls
+forever — nothing removed them, so they could pile up at the boundary
+indefinitely. `moveParticles()` now despawns them instead: touching a
+wall removes the particle, and for `aa`/`nt`/`lipid` specifically,
+decrements `ventInjected[kind]` (clamped at 0) to re-open one slot in
+`ventCapPerKind` for `spawnVentFlux()` to eventually refill — at its
+existing throttled rate, not instantly. Energy needs no extra
+bookkeeping; `spawnEnergyFlux()`'s existing capacity-based top-up
+already replaces a removed energy particle for free. Deliberately does
+**not** track whether a specific despawned particle was ever actually
+vent-spawned versus part of the original patch seed — no code anywhere
+tracks per-particle provenance, and the budget is what matters, not
+which atoms take which path. Polymers and vesicle members are
+unaffected — still bounce, exactly as before; this is scoped to loose
+soup only.
+
+Verified two ways: an isolated decrement/clamp check (particles placed
+directly at a wall with outward velocity, confirmed removed and the
+counter decremented and clamped correctly, with a polymer placed the
+same way confirmed still bouncing, unaffected), and a full exact mass-
+ledger proof — instrumenting real vent-spawn counts, wall-despawn
+counts, and (a real pre-existing mechanic this surfaced, not a bug)
+energy-consumed-by-reaction counts, over 3000 ticks on the shipped
+full-dish config. Every one of the four kinds reconciled to **exactly
+0** difference between actual and predicted final counts.
+
+**A real, honest, asymmetric side effect, found by a longer-run
+census, not the ledger proof**: over 6000 ticks on the same config,
+total aa-equivalent matter (free + in-polymer) fell from 2880 to 910
+(down to ~32%) and nt-equivalent from 2240 to 865 (~39%), while lipid
+matter *grew* from 1920 to 2819 (+899, almost exactly one
+`ventCapPerKind`'s worth). Not a bug — the mass ledger proves every
+atom is accounted for — but a real, structural asymmetry in how
+different kinds cycle between free (wall-vulnerable) and bound
+(wall-immune) states: aa/nt cycle constantly between free and
+polymer-bound via ordinary condensation/hydrolysis, so each cycle
+through the free state carries a real chance of wall-loss, and over
+many cycles that compounds into a substantial net decline. Lipids
+mostly only ever move from free into a vesicle membrane and then stay
+there — once captured, a lipid is largely immune to further wall-
+recycling, so the vent's contributions accumulate for lipids in a way
+they don't for aa/nt. Whether this actually helps or hurts bootstrap
+likelihood is genuinely unclear either way: less free aa/nt is less raw
+material for peptide/RNA growth (working against the redesign's goal),
+but more lipid could mean more vesicles for a manually-placed replicator/
+catalyst to land in (helping it). Recorded honestly, not chased with a
+fix — a natural next diagnostic if this branch continues.
+
+**Manual soup-spawning tool.** Three new public `Origin` methods —
+`spawnManualParticle`, `spawnManualPeptide`, `spawnManualRna` — let the
+player place specific chemistry directly into the pool: individual
+monomers, or a complete randomized peptide/RNA chain of a chosen length,
+optionally with a `forceCatalyst`/`forceRibozyme` flag that resamples
+the random sequence (up to 500 attempts) until it actually folds
+catalytic. This is a deliberate override outside the closed-loop
+economy — the same category of thing the Designer tab's "Release Random
+Population" already is — so none of the three touch
+`ventInjected`/`ventCapPerKind`. New Chemistry-tab panel: pick a kind,
+set a length + force-catalytic/ribozyme toggle for peptide/RNA, arm
+"Place on Dish," then tap the dish to place (stays armed for repeated
+placements, an eyedropper-style tool). Placement is inset 1px from the
+dish edge specifically so a freshly-placed particle can't land exactly
+on the wall and get immediately despawned by the new recycling logic
+above.
+
+Verified: 30 repeated `forceCatalyst`/`forceRibozyme` calls at length
+12 each hit **30/30** within the 500-attempt bound (well above the
+7-20% single-attempt rate this project's own prior density scan
+measured for peptides); length clamping confirmed at both ends (999 →
+40, 0 → 2); confirmed none of the three touch `ventInjected`/
+`ventCapPerKind` by direct before/after diff. Playwright, with the live
+sim paused for a clean diff: selecting Peptide reveals the length/force
+row, arming shows the `.active` state, and a single simulated dish tap
+produces exactly +1 peptide and +1 catalytic peptide in the stats panel
+— zero console errors.
+
+No `SAVE_VERSION` bump for either change — manually-spawned particles
+are plain `Particle`/`PeptideParticle`/`RnaParticle` objects already
+covered by the existing generic serialization, and wall-recycling only
+changes `ventInjected`'s runtime behavior, not its shape.
+
 ## Tech constraint from last time
 
 Original build environment blocked the npm registry/CDNs (git-only

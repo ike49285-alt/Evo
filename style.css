@@ -311,6 +311,8 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
   color: var(--text); border-radius: 6px; padding: 7px 8px; font-family: var(--font-sans); font-size: var(--fs-ui);
 }
 .field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.checkbox-field { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: var(--fs-body); color: var(--text); cursor: pointer; }
+.checkbox-field input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); flex: 0 0 auto; }
 /* The one control that's literally genetic identity, not UI state. */
 #f-hue { accent-color: var(--accent-2); }
 
@@ -321,6 +323,13 @@ fieldset legend {
 }
 fieldset legend em { font-style: normal; color: var(--text); font-weight: 600; }
 .segmented { display: flex; gap: 6px; }
+/* Modifier for a segmented control with more than 2-3 options (the
+   manual-spawn kind picker) -- the base .segmented assumes few enough
+   items that flex:1 across one row stays readable; six options need to
+   wrap instead of squeezing down to illegible slivers on a narrow
+   sidebar. */
+.segmented.wrap { flex-wrap: wrap; }
+.segmented.wrap label { flex: 1 1 30%; }
 
 .organelle-grid { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
 .organelle-row {
