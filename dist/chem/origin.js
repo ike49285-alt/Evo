@@ -98,11 +98,15 @@ export class Origin {
         // redesign, not this one).
         this.ventFluxPerTick = 0.4; // expected new particles/tick per kind (aa/nt/lipid) — same fractional-debt-accumulator pattern as energyFluxPerTick
         // A performance/stability floor, not a claim a real vent would run
-        // dry — same role energyCapacity plays for the energy flux. Measured
-        // relative to how many of that kind seedPrimordialSoup put in the
-        // pool to start with (see ventBaseline below), not an absolute cap —
-        // at the shipped 8x density that baseline is already in the
-        // thousands, so an absolute 300 would silently spawn nothing at all.
+        // dry — same role energyCapacity plays for the energy flux. Bounds
+        // how many particles of a kind the vent will ever spawn, cumulative
+        // (see ventInjected below) — *not* a cap on the current free count of
+        // that kind, which would silently let the vent keep injecting forever
+        // as long as ordinary hydrolysis/condensation kept cycling matter
+        // between free and polymer-bound states fast enough to keep the free
+        // count under a ceiling (headless-caught: an earlier free-count-based
+        // version of this cap let the vent add 3x+ its intended budget before
+        // the free-count gauge ever actually reached the ceiling).
         this.ventCapPerKind = 300;
         // Well above moveParticles()'s existing 0.6/1.1 speed caps — the very
         // next movement step clamps the *magnitude* back down to the cap but
@@ -322,15 +326,19 @@ export class Origin {
         this.nextVesicleId = 1;
         this.energyDebt = 0; // fractional accumulator for energyFluxPerTick
         this.ventDebt = 0; // fractional accumulator for ventFluxPerTick, one shared debt spent on all three kinds together
-        // How many of each kind were free right after seedPrimordialSoup ran —
-        // ventCapPerKind's cap is measured against *this*, not zero, so the
-        // vent's cap means "this many beyond what the pool started with," not
-        // "this many total" (which would silently spawn nothing at the
-        // shipped 8x density, already in the thousands per kind). Stays
-        // {0,0,0} for an Origin built directly via the constructor rather than
-        // seedPrimordialSoup — the cap then just means ventCapPerKind total,
-        // which is still a sensible floor.
-        this.ventBaseline = { aa: 0, nt: 0, lipid: 0 };
+        // Cumulative count of particles the vent itself has ever spawned, per
+        // kind — what ventCapPerKind actually bounds. Deliberately *not* a
+        // check against the current *free* count of that kind: hydrolysis
+        // constantly cycles matter between free and polymer-bound states (see
+        // hydrolyze()), so free count alone chronically understates how much
+        // the vent has really contributed once reactions start consuming what
+        // it spawns — a cap on free count would let the vent keep injecting
+        // indefinitely as long as reactions kept pace, defeating the entire
+        // point of a stability floor. This counter only ever goes up (nothing
+        // in this file destroys aa/nt/lipid matter — see this file's header
+        // comment), so "cumulative ever spawned" and "current standing
+        // contribution" are the same number, always.
+        this.ventInjected = { aa: 0, nt: 0, lipid: 0 };
         this.width = width;
         this.height = height;
         this.rng = new Rng(seed);
@@ -380,11 +388,6 @@ export class Origin {
             o.spawnLipid();
         for (let i = 0; i < 60 * SOUP_DENSITY_MULTIPLIER; i++)
             o.spawnEnergy();
-        o.ventBaseline = {
-            aa: AMINO_ACID_CODES.length * 18 * SOUP_DENSITY_MULTIPLIER,
-            nt: NUCLEOTIDE_CODES.length * 70 * SOUP_DENSITY_MULTIPLIER,
-            lipid: 240 * SOUP_DENSITY_MULTIPLIER,
-        };
         return o;
     }
     // --- spawning ----------------------------------------------------------
@@ -580,39 +583,28 @@ export class Origin {
     }
     /** The matter half of the vent — see ventFluxPerTick's own comment for
      * why this is a deliberate exception to the closed-loop matter
-     * philosophy, and ventCapPerKind's for why the cap is relative to
-     * seedPrimordialSoup's baseline rather than absolute. One shared debt
-     * spent on all three kinds together (not three independent debts) —
-     * simpler, and there's no real reason a vent's aa/nt/lipid output
-     * should drift out of lockstep with each other. */
+     * philosophy, and ventInjected's for why the cap tracks cumulative
+     * spawns rather than the current free count. One shared debt spent on
+     * all three kinds together (not three independent debts) — simpler,
+     * and there's no real reason a vent's aa/nt/lipid output should drift
+     * out of lockstep with each other. */
     spawnVentFlux() {
         if (!this.vent)
             return;
         this.ventDebt += this.ventFluxPerTick;
-        let freeAa = 0;
-        let freeNt = 0;
-        let freeLipid = 0;
-        for (const p of this.particles.values()) {
-            if (p.kind === 'aa')
-                freeAa++;
-            else if (p.kind === 'nt')
-                freeNt++;
-            else if (p.kind === 'lipid')
-                freeLipid++;
-        }
         while (this.ventDebt >= 1) {
             this.ventDebt -= 1;
-            if (freeAa < this.ventBaseline.aa + this.ventCapPerKind) {
+            if (this.ventInjected.aa < this.ventCapPerKind) {
                 this.spawnAminoAcid(this.rng.pick(AMINO_ACID_CODES), this.vent, true);
-                freeAa++;
+                this.ventInjected.aa++;
             }
-            if (freeNt < this.ventBaseline.nt + this.ventCapPerKind) {
+            if (this.ventInjected.nt < this.ventCapPerKind) {
                 this.spawnNucleotide(this.rng.pick(NUCLEOTIDE_CODES), this.vent, true);
-                freeNt++;
+                this.ventInjected.nt++;
             }
-            if (freeLipid < this.ventBaseline.lipid + this.ventCapPerKind) {
+            if (this.ventInjected.lipid < this.ventCapPerKind) {
                 this.spawnLipid(this.vent, true);
-                freeLipid++;
+                this.ventInjected.lipid++;
             }
         }
     }
@@ -1723,7 +1715,7 @@ export class Origin {
             bootstrapCandidates: this.bootstrapCandidates,
             vent: this.vent,
             ventDebt: this.ventDebt,
-            ventBaseline: this.ventBaseline,
+            ventInjected: this.ventInjected,
         };
     }
     static deserialize(data) {
@@ -1744,7 +1736,7 @@ export class Origin {
         // gets swapped in above rather than trusted from the constructor.
         o.vent = data.vent;
         o.ventDebt = data.ventDebt;
-        o.ventBaseline = data.ventBaseline;
+        o.ventInjected = data.ventInjected;
         return o;
     }
 }
