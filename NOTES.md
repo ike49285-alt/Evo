@@ -1204,6 +1204,111 @@ consistently aged out and died before either verification run's midpoint
 in every headless run so far — expected, since maxAge is typically well
 under the tick counts being tested, not a sign rich mode doesn't work).
 
+## Branch experiment: a hydrothermal vent (Phase A of a larger, deliberately-sequenced redesign)
+
+Started on `claude/closed-loop-soup`, split off from the main session
+branch on purpose — the user wants to experiment with a much bigger
+change to the pool's economy (filling the whole dish, no ambient
+respawn of materials, organisms decomposing back into real matter on
+death, permanent background chemistry, direct soup-eating) but chose to
+sequence it: validate a hydrothermal vent alone first, inside the
+existing small pool, before touching `World`/`Virtunism`/rendering
+assumptions at all. Everything beyond the vent is recorded as a
+roadmap, not built — see the plan file from this round for the full
+detail.
+
+**What shipped**: a fixed point in the pool (`{width*0.15, height*0.5}`)
+that continuously vents fresh amino acids/nucleotides/lipids with an
+outward jet kick, plus a small persistent tangential (not radial)
+current around it, applied to every particle every tick — real
+whole-pool circulation on top of (never replacing) each particle's
+existing independent Brownian motion. `seedPrimordialSoup`'s own
+one-time 8x-density seed is unchanged; the vent is a modest, capped
+supplement, not yet the dominant matter source. `Origin.seedPrimordialSoup(...,
+{ vent })` opt-out param for a clean A/B.
+
+**A real bug caught and fixed during verification, not before shipping
+it**: the first version capped the vent by checking the *current free*
+particle count of each kind against a ceiling. That's wrong — ordinary
+hydrolysis constantly cycles matter between free and polymer-bound
+states, so the free-count gauge chronically understated how much the
+vent had actually contributed once reactions started consuming what it
+spawned. A fresh headless mass-ledger check (this project's own
+established methodology, freshly written since no persisted script
+existed in the repo to reuse) caught it directly: over a 5000-tick run
+the vent added +989 aa and +717 nt total — more than 3x the intended
+300-per-kind cap — while the free-count check never once saw its own
+ceiling crossed. Fixed by tracking cumulative particles the vent has
+ever spawned (`ventInjected`) and capping against *that* instead — a
+true stability floor, correct regardless of how reactions later move
+that matter between free and bound states, since nothing in this closed
+system ever destroys aa/nt/lipid matter. Re-verified: vent-off run
+exactly reproduces pre-change behavior (0 violations, ledger constant);
+vent-on run adds exactly 300/300/300 (aa/nt/lipid), matching the cap
+precisely, 0 violations.
+
+**Rendering verified by draw-call interception, not just a screenshot**:
+monkey-patching `CanvasRenderingContext2D.fill()`/`arc()` in a headless
+Playwright page to catch the vent marker's distinctive fill color the
+moment it's actually drawn turned out far more reliable than trying to
+pixel-hunt a small marker through repeated zoom/pan (cumulative
+zoom-step error made manually centering on it unreliable) — confirmed
+the marker draws at a stable screen position every frame with the
+correct pulsing alpha, which is stronger proof the mechanic is really
+executing than a screenshot crop would have been anyway.
+
+**The actual A/B question — does the vent increase bootstrap
+likelihood — is not answered by this round's data, honestly**: a 3-seed
+sweep at 6000 ticks each (deliberately scaled down from this project's
+usual 40,000-tick/10-seed sweeps to fit this session's time budget, and
+said so going in) produced **zero bootstrap candidates in every single
+run, vent on or off** — 6000 ticks is just too short a horizon at this
+density; past rounds routinely needed 40,000-80,000 ticks to see real
+candidates. That question needs a longer, more patient sweep than this
+session had room for.
+
+**What the same sweep did find, consistently, across all 3 seeds — a
+real and unexpected result worth recording plainly**: standing vesicle
+count dropped by roughly half with the vent on (93→44, 93→43, 105→44).
+Not noise — nearly identical across three different seeds. The likely
+mechanism: `lipidAssembly()`'s cluster-formation gate needs a forming
+lipid cluster to hold together via weak local attraction (strength
+0.02) long enough to clear its own "6 of 8 angular sectors" closure
+check; the vent's persistent shear (deliberately differential by
+distance from the vent, for exactly the whole-pool mixing this was
+built for) may be actively working against that weak clustering force
+before a cluster can close, especially near the vent itself where the
+current is what freshly-jetted lipids first experience. This wasn't
+predicted going in and isn't confirmed as the mechanism (no isolated
+diagnostic run yet) — recorded honestly as a real, reproducible,
+currently-unexplained-in-depth cost the current mechanic carries,
+directly relevant to whether it nets out positive for the original
+question once a longer sweep can actually produce bootstrap data to
+compare.
+
+**Perf**: a focused, isolated comparison (400 ticks each, same seed,
+warmed up first to avoid JIT noise) measured +14.5% average per-tick
+cost with the vent on (48.1ms → 55.1ms/tick in this session's
+container) — modest and bounded, not a runaway cost, though this
+session's absolute ms/tick numbers ran higher across the board than
+this repo's earlier-recorded baselines (likely just this particular
+sandboxed environment being slower, not a regression — the *relative*
+overhead is the meaningful number here).
+
+**Honest state to hand off**: the mechanic is real, correctly
+conserving mass (after a caught-and-fixed bug), rendering correctly,
+and saving/restoring correctly (`SAVE_VERSION` bumped to 7). Whether it
+actually helps bootstrap likelihood — the whole reason for building it —
+is genuinely unanswered, and it has a real, consistently-reproduced
+side effect (roughly halved vesicle count) that could plausibly cut
+against the goal rather than for it. Next steps, if this branch
+continues: a proper long-horizon multi-seed sweep to get a real
+bootstrap-likelihood answer, and a diagnostic isolating whether the
+vesicle-count drop is really the shear-vs-clustering mechanism
+hypothesized above (e.g. measuring cluster-formation attempt rate near
+vs. far from the vent) before concluding the current strength needs
+tuning down.
+
 ## Tech constraint from last time
 
 Original build environment blocked the npm registry/CDNs (git-only
