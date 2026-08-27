@@ -46,8 +46,18 @@ const SAVE_KEY = 'evo-save-v2';
 // but it would silently treat an already-DNA lineage as freshly RNA again
 // (losing its earned lower mutation rate) rather than erroring, exactly
 // the "half-loads into a corrupt-but-plausible state" failure mode this
-// version bump exists to prevent.)
-const SAVE_VERSION = 6;
+// version bump exists to prevent.
+// v7: Origin gained the hydrothermal vent (vent/ventDebt/ventBaseline —
+// see origin.ts's ventFluxPerTick comment). A v6 save would deserialize
+// with vent=undefined rather than a real point or explicit null —
+// moveParticles()'s `if (this.vent)` guard happens to degrade gracefully
+// (falsy, so the current term is just skipped), but ventDebt/ventBaseline
+// would be undefined too, and spawnVentFlux() would throw the moment it
+// ran (`this.ventDebt += undefined` -> NaN propagating silently is the
+// more likely failure than a clean crash) — a real, if delayed and
+// confusing, corruption rather than the clean discard this bump gives
+// instead.)
+const SAVE_VERSION = 7;
 export function saveGame(origin, world) {
     try {
         const payload = {

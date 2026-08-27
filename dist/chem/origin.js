@@ -32,7 +32,7 @@ function clamp(v, min, max) {
 const MIN_TEMPLATE_LENGTH = 6;
 const MAX_POLYMER_LENGTH = 40; // a hard cap keeps fold search + memory bounded
 export class Origin {
-    constructor(width, height, seed) {
+    constructor(width, height, seed, ventEnabled = true) {
         this.particles = new Map();
         this.vesicles = new Map();
         this.tick = 0;
@@ -84,6 +84,59 @@ export class Origin {
         // actually removing it.
         this.energyCapacity = 200;
         this.energyFluxPerTick = 2.5; // expected new energy particles/tick (fractional, accumulated)
+        // A hydrothermal vent — a real, physically-grounded source of both
+        // fresh prebiotic matter and the current to move it. Everything else
+        // in the pool only ever gets rearranged (see this file's header
+        // comment on the closed-loop matter philosophy); the vent, like the
+        // energy flux above, is a deliberate exception — new matter entering
+        // from one real, localized point, the same way real geochemistry at
+        // an alkaline hydrothermal vent (H2/CO2 reacting at mineral surfaces)
+        // continuously synthesizes organics rather than a diffuse everywhere-
+        // at-once seed. `seedPrimordialSoup`'s own one-time density dose is
+        // unchanged by this — the vent is a modest ongoing supplement on top
+        // of it, not yet the dominant source (that's a larger, separate
+        // redesign, not this one).
+        this.ventFluxPerTick = 0.4; // expected new particles/tick per kind (aa/nt/lipid) — same fractional-debt-accumulator pattern as energyFluxPerTick
+        // A performance/stability floor, not a claim a real vent would run
+        // dry — same role energyCapacity plays for the energy flux. Measured
+        // relative to how many of that kind seedPrimordialSoup put in the
+        // pool to start with (see ventBaseline below), not an absolute cap —
+        // at the shipped 8x density that baseline is already in the
+        // thousands, so an absolute 300 would silently spawn nothing at all.
+        this.ventCapPerKind = 300;
+        // Well above moveParticles()'s existing 0.6/1.1 speed caps — the very
+        // next movement step clamps the *magnitude* back down to the cap but
+        // preserves *direction* (moveParticles() already does this
+        // unconditionally), so a freshly-vented particle gets a real outward
+        // "running start" at max ambient speed in a random direction, then
+        // decays into ordinary Brownian motion over the following ticks as
+        // drag and noise wash the extra momentum out.
+        this.ventJetSpeed = 2.5;
+        // The actual whole-pool "agitation" — a small, coherent, per-tick
+        // tangential (rotational) velocity bias around the vent, applied to
+        // every particle every tick in moveParticles(), on top of (never
+        // replacing) its existing independent Brownian motion. Tangential,
+        // not radial: a purely radial push would just pile everything against
+        // the walls over time, not help far-apart molecules meet; a real
+        // buoyant vent plume drives broader convection in the surrounding
+        // body of water, not just local turbulence at the outlet, which is
+        // what this represents. Constant magnitude (not divided by distance)
+        // means angular velocity falls off with distance from the vent — real
+        // differential rotation, which shears adjacent "rings" of material
+        // past each other over time (actual mixing) rather than carrying
+        // everyone around in the same rigid rotation (which wouldn't mix
+        // anything — same molecules stay same neighbors forever).
+        //
+        // Calibrated, not guessed: same steady-state math
+        // vesicleChemotaxisBiasStrength's own comment uses — a bias re-applied
+        // every tick against drag=0.96 compounds to a steady-state
+        // contribution of biasStrength/(1-drag) = 25x. At 0.015 that's
+        // ~0.375/tick, comfortably under the 0.6/1.1 movement speed caps, so
+        // this adds real, compounding circulation without permanently pegging
+        // every particle at max speed in lockstep (which a much higher value
+        // would — a rigid, cap-pegged whirl doesn't actually mix anything
+        // either, for the same reason a non-differential rotation doesn't).
+        this.ventCurrentStrength = 0.015;
         this.lipidAssemblyRadius = 7;
         // Raised from 0.02 as part of the second abiogenesis-tuning pass (see
         // NOTES.md) — a vesicle's interior nucleotide/energy supply is
@@ -268,12 +321,26 @@ export class Origin {
         this.nextId = 1;
         this.nextVesicleId = 1;
         this.energyDebt = 0; // fractional accumulator for energyFluxPerTick
+        this.ventDebt = 0; // fractional accumulator for ventFluxPerTick, one shared debt spent on all three kinds together
+        // How many of each kind were free right after seedPrimordialSoup ran —
+        // ventCapPerKind's cap is measured against *this*, not zero, so the
+        // vent's cap means "this many beyond what the pool started with," not
+        // "this many total" (which would silently spawn nothing at the
+        // shipped 8x density, already in the thousands per kind). Stays
+        // {0,0,0} for an Origin built directly via the constructor rather than
+        // seedPrimordialSoup — the cap then just means ventCapPerKind total,
+        // which is still a sensible floor.
+        this.ventBaseline = { aa: 0, nt: 0, lipid: 0 };
         this.width = width;
         this.height = height;
         this.rng = new Rng(seed);
+        // Left-of-center, not dead-center — gives the current's rotation a
+        // real long axis to fan material across before it reaches a wall,
+        // instead of being symmetric-and-cancelling from the middle.
+        this.vent = ventEnabled ? { x: width * 0.15, y: height * 0.5 } : null;
     }
-    static seedPrimordialSoup(width, height, seed) {
-        const o = new Origin(width, height, seed);
+    static seedPrimordialSoup(width, height, seed, opts = {}) {
+        const o = new Origin(width, height, seed, opts.vent ?? true);
         // Every canonical amino acid and nucleotide gets a real shot at being
         // in the soup — no thumb on the scale toward whichever ones happen to
         // fold well. Base composition (~18 copies of each of the 20 real amino
@@ -313,46 +380,58 @@ export class Origin {
             o.spawnLipid();
         for (let i = 0; i < 60 * SOUP_DENSITY_MULTIPLIER; i++)
             o.spawnEnergy();
+        o.ventBaseline = {
+            aa: AMINO_ACID_CODES.length * 18 * SOUP_DENSITY_MULTIPLIER,
+            nt: NUCLEOTIDE_CODES.length * 70 * SOUP_DENSITY_MULTIPLIER,
+            lipid: 240 * SOUP_DENSITY_MULTIPLIER,
+        };
         return o;
     }
     // --- spawning ----------------------------------------------------------
     randomPos() {
         return { x: this.rng.range(0, this.width), y: this.rng.range(0, this.height) };
     }
-    spawnAminoAcid(code) {
+    /** A random-direction, fixed-magnitude kick well above moveParticles()'s
+     * speed cap — see ventJetSpeed's own comment on why the direction
+     * survives the cap even though the magnitude doesn't. */
+    jetVelocity() {
+        const angle = this.rng.range(0, Math.PI * 2);
+        return { vx: Math.cos(angle) * this.ventJetSpeed, vy: Math.sin(angle) * this.ventJetSpeed };
+    }
+    /** `at`/`jet` are only ever passed by spawnVentFlux() — every other
+     * call site (seedPrimordialSoup's own seeding) is unaffected, still
+     * a uniform-random position and the original small ambient velocity. */
+    spawnAminoAcid(code, at, jet = false) {
         const p = {
             id: this.nextId++,
             kind: 'aa',
             code,
-            ...this.randomPos(),
-            vx: this.rng.range(-0.3, 0.3),
-            vy: this.rng.range(-0.3, 0.3),
+            ...(at ?? this.randomPos()),
+            ...(jet ? this.jetVelocity() : { vx: this.rng.range(-0.3, 0.3), vy: this.rng.range(-0.3, 0.3) }),
             vesicleId: null,
         };
         this.particles.set(p.id, p);
         return p;
     }
-    spawnNucleotide(code) {
+    spawnNucleotide(code, at, jet = false) {
         const p = {
             id: this.nextId++,
             kind: 'nt',
             code,
-            ...this.randomPos(),
-            vx: this.rng.range(-0.3, 0.3),
-            vy: this.rng.range(-0.3, 0.3),
+            ...(at ?? this.randomPos()),
+            ...(jet ? this.jetVelocity() : { vx: this.rng.range(-0.3, 0.3), vy: this.rng.range(-0.3, 0.3) }),
             vesicleId: null,
         };
         this.particles.set(p.id, p);
         return p;
     }
-    spawnLipid() {
+    spawnLipid(at, jet = false) {
         const p = {
             id: this.nextId++,
             kind: 'lipid',
             tailLength: this.rng.bool(0.5) ? 1 : 2,
-            ...this.randomPos(),
-            vx: this.rng.range(-0.2, 0.2),
-            vy: this.rng.range(-0.2, 0.2),
+            ...(at ?? this.randomPos()),
+            ...(jet ? this.jetVelocity() : { vx: this.rng.range(-0.2, 0.2), vy: this.rng.range(-0.2, 0.2) }),
             vesicleId: null,
         };
         this.particles.set(p.id, p);
@@ -393,6 +472,7 @@ export class Origin {
         this.grid.rebuild([...this.particles.values()]);
         this.moveParticles();
         this.spawnEnergyFlux();
+        this.spawnVentFlux();
         // Each of these passes removes and creates particles, so the grid
         // built above goes stale the moment the first one runs — rebuilding
         // between every pass, not just once per tick, is what this fixes.
@@ -437,6 +517,19 @@ export class Origin {
             const drag = 0.96;
             p.vx = p.vx * drag + this.rng.gaussian(0, 0.06);
             p.vy = p.vy * drag + this.rng.gaussian(0, 0.06);
+            // The vent's persistent current — a coherent tangential bias on top
+            // of (never replacing) the independent Brownian term just above.
+            // See ventCurrentStrength's own comment for why tangential, why
+            // constant-magnitude, and how its strength was calibrated.
+            if (this.vent) {
+                const dx = p.x - this.vent.x;
+                const dy = p.y - this.vent.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist > 0.01) {
+                    p.vx += (-dy / dist) * this.ventCurrentStrength;
+                    p.vy += (dx / dist) * this.ventCurrentStrength;
+                }
+            }
             const speedCap = p.kind === 'peptide' || p.kind === 'rna' ? 0.6 : 1.1;
             const speed = Math.hypot(p.vx, p.vy);
             if (speed > speedCap) {
@@ -483,6 +576,44 @@ export class Origin {
             this.energyDebt -= 1;
             this.spawnEnergy();
             freeEnergy++;
+        }
+    }
+    /** The matter half of the vent — see ventFluxPerTick's own comment for
+     * why this is a deliberate exception to the closed-loop matter
+     * philosophy, and ventCapPerKind's for why the cap is relative to
+     * seedPrimordialSoup's baseline rather than absolute. One shared debt
+     * spent on all three kinds together (not three independent debts) —
+     * simpler, and there's no real reason a vent's aa/nt/lipid output
+     * should drift out of lockstep with each other. */
+    spawnVentFlux() {
+        if (!this.vent)
+            return;
+        this.ventDebt += this.ventFluxPerTick;
+        let freeAa = 0;
+        let freeNt = 0;
+        let freeLipid = 0;
+        for (const p of this.particles.values()) {
+            if (p.kind === 'aa')
+                freeAa++;
+            else if (p.kind === 'nt')
+                freeNt++;
+            else if (p.kind === 'lipid')
+                freeLipid++;
+        }
+        while (this.ventDebt >= 1) {
+            this.ventDebt -= 1;
+            if (freeAa < this.ventBaseline.aa + this.ventCapPerKind) {
+                this.spawnAminoAcid(this.rng.pick(AMINO_ACID_CODES), this.vent, true);
+                freeAa++;
+            }
+            if (freeNt < this.ventBaseline.nt + this.ventCapPerKind) {
+                this.spawnNucleotide(this.rng.pick(NUCLEOTIDE_CODES), this.vent, true);
+                freeNt++;
+            }
+            if (freeLipid < this.ventBaseline.lipid + this.ventCapPerKind) {
+                this.spawnLipid(this.vent, true);
+                freeLipid++;
+            }
         }
     }
     // --- catalysis lookup --------------------------------------------------
@@ -1590,6 +1721,9 @@ export class Origin {
             vesicles: [...this.vesicles.values()].map((v) => ({ ...v, memberIds: [...v.memberIds] })),
             history: this.history,
             bootstrapCandidates: this.bootstrapCandidates,
+            vent: this.vent,
+            ventDebt: this.ventDebt,
+            ventBaseline: this.ventBaseline,
         };
     }
     static deserialize(data) {
@@ -1606,6 +1740,11 @@ export class Origin {
             o.vesicles.set(v.id, { ...v, memberIds: new Set(v.memberIds) });
         o.history = data.history;
         o.bootstrapCandidates = data.bootstrapCandidates;
+        // Overrides the constructor's own default vent — same reason rng
+        // gets swapped in above rather than trusted from the constructor.
+        o.vent = data.vent;
+        o.ventDebt = data.ventDebt;
+        o.ventBaseline = data.ventBaseline;
         return o;
     }
 }

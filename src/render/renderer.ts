@@ -241,6 +241,24 @@ export class Renderer {
     ctx.lineWidth = 1.5;
     ctx.strokeRect(topLeft.x, topLeft.y, w, h);
 
+    // The vent — a visual confirmation the mechanic is actually doing
+    // something, not just a number in the chemistry stats. A hot
+    // orange/red glow (distinct from the cooler pale-gold/purple palette
+    // everything else in the pool uses) reusing the same pulse technique
+    // energy particles already use below.
+    if (origin.vent) {
+      const vp = this.worldToScreen(poolOffset.x + origin.vent.x, poolOffset.y + origin.vent.y);
+      const pulse = 0.5 + 0.5 * Math.sin(this.animT * 0.15);
+      const r = (4 + pulse * 2) * this.camera.zoom * 0.4;
+      ctx.beginPath();
+      ctx.arc(vp.x, vp.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 110, 60, ${0.35 + pulse * 0.35})`;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 160, 100, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
     for (const v of origin.vesicles.values()) {
       const p = this.worldToScreen(poolOffset.x + v.x, poolOffset.y + v.y);
       const r = v.radius * this.camera.zoom;
