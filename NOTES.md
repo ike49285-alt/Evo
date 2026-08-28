@@ -1,5 +1,110 @@
 # Evo — notes on the current design
 
+## Handover (read this first)
+
+**State as of this handover**: the closed-loop-soup redesign (see
+"Branch experiment: a hydrothermal vent" and the sections after it,
+below) is **fully merged onto the repo's real default branch**,
+`claude/cell-lab-evolution-simulator-nu6bbe` — confirmed via `git
+rev-parse`, an exact fast-forward, no merge commit, 0 divergence. The
+default branch is NOT `main`/`master` — there is no `main` branch in
+this repo. `claude/closed-loop-soup` (the branch all that work was
+developed on) is now superseded/redundant now that its tip is on
+default; don't keep developing there.
+
+**What's live on default now, in order**: hydrothermal vent
+(continuous matter source + agitation current) → full-dish pool
+(patch-seeded, not diluted — the pool spans the whole dish, not a
+corner of it) → division-cooldown fix (vesicles were re-fusing
+immediately after splitting) → vent radial-dispersal + patch-anchored
+position fixes (particles were orbiting in fixed circles instead of
+actually spreading) → wall recycling (free soup despawns at walls and
+recycles through the vent instead of piling up) → manual soup-spawning
+tool (Chemistry tab: place specific chemistry by hand, including
+forced-catalytic/ribozyme) → a jumpy-Chemistry-tab CSS fix.
+
+**Two real, still-true caveats now on the main line — not fixed, not
+hidden, explicitly accepted by the user**:
+1. The full-dish patch-seeded pool shows a measured *regression* in
+   peptide/RNA growth vs. the old small-pool baseline (see the Phase B
+   section below for the actual numbers and the untested hypothesis for
+   why). User's call: "I like it as is." Not chased with a fix.
+2. The original question the whole vent mechanic was built to answer —
+   does agitation actually increase real bootstrap likelihood — is
+   **still genuinely unanswered**. Every sweep run so far (this whole
+   redesign's lifetime) was too short a horizon to produce a real
+   signal either way.
+
+**Next task, not yet started**: gene editing — letting the player
+directly view and edit a *living individual's own genes* (raw
+nucleotide symbols, real re-translation/re-fold through the existing
+pipeline), scoped and designed but zero code written yet. Concrete
+design, confirmed against the actual current code (not guessed):
+
+- Attaches to the Tree tab's existing "Raw gene sequence" section
+  (`buildGeneList()` in `src/main.ts`, inside `renderLiveDetail()`) —
+  currently read-only plain text, the right existing surface to extend
+  rather than a new screen.
+- Edit flow: an "Edit Genes" toggle swaps the read-only list for
+  clickable nucleotide chips (A/U/G/C, cycle on click). Edits accumulate
+  in a **local draft** `GeneSequence`, not the live individual's actual
+  genome — visually marked as changed. An explicit "Apply Mutation"
+  commits it: `cell.genome = genomeFromSequence(draftSequence,
+  cell.genome.brain, cell.genome.isDna)` (`src/sim/genome.ts`) — the
+  *exact same* function birth/mutation already use, so edited traits/
+  proteins/fold are the real pipeline's output, not a special-cased
+  preview. "Cancel" discards the draft.
+- Why a draft + explicit Apply, not live-per-keystroke: `renderLiveDetail()`
+  is documented as built once per life; only position/age/energy bars
+  refresh every frame (`updateLiveVitals()`) — genome/proteins/brain/
+  sequence deliberately aren't part of that per-frame path. Re-decoding
+  and rebuilding the whole panel (protein list, radar chart) on every
+  single chip click would fight that design.
+- **Speciation needs zero new code**: `World.checkSpeciation()`
+  (`src/sim/world.ts`) already runs `geneticDistance(cell.genome.sequence,
+  lineage.referenceSequence)` against `speciationThreshold=0.34`, but
+  only at the individual's *next reproduction attempt*, not
+  immediately at edit time — confirmed by reading the actual call
+  sites (only inside the reproduction pathway). An edit big enough to
+  cross that threshold founds a real new species naturally, the same
+  way ordinary drift already does, the next time the edited individual
+  reproduces — this was an explicit user decision ("yes, let it happen
+  naturally"), not an assumption.
+- User's explicit scope decisions (asked directly, not assumed):
+  **individual-only** editing (not a species template), raw nucleotide
+  symbols (not a higher-level "pick a trait" abstraction), natural
+  speciation on edit (see above).
+- No changes needed to `genes.ts`, `genome.ts`, `virtunism.ts`, or
+  `world.ts` — every mechanism (`genomeFromSequence`, `Virtunism.genome`
+  being a plain mutable field, `checkSpeciation`) already exists and is
+  directly reusable. New code is UI only: `src/main.ts` (edit/apply/
+  cancel wiring, an editable variant of `buildGeneList()`) and
+  `style.css` (`.gene-chip` + an "edited" marker class).
+- Real edge case flagged, not yet resolved either way: an edit that
+  shrinks `genome.size` also shrinks `maxEnergy` — whether an
+  individual's current `energy` exceeding the new (smaller) `maxEnergy`
+  is handled gracefully anywhere, or just renders an over-100% bar,
+  hasn't been checked yet. Check this during implementation, don't
+  assume.
+- **Branch**: user explicitly said start this on a **new branch cut
+  from the now-updated default branch** — not on `claude/closed-loop-soup`
+  (superseded) and not directly on default.
+
+**Session conventions worth knowing, established over many rounds**:
+verify before committing (headless scripts + Playwright, not "looks
+right"); document real findings honestly in this file even when
+negative or unresolved, in the same round they're found; scratch/
+verification scripts live in a session-scratchpad directory, never
+committed to the repo; rebuild `dist/` and republish the artifact
+bundle after any shipped change (bundling scripts — `bundle.mjs`,
+`build_artifact.mjs` — are scratchpad-only, not in the repo, so a fresh
+session needs to recreate or re-derive them if the artifact needs
+rebuilding — see this file's own bundling-approach notes elsewhere if
+present, or reconstruct from `src/`/`index.html`/`style.css` directly).
+
+## Older design notes below (mostly still accurate, Phase-B section
+   above is the most recent authoritative state for the pool specifically)
+
 One continuous world, not two screens. `src/chem/` (the chemistry — free
 amino acids and nucleotides bonding, folding, catalyzing, replicating) and
 `src/sim/` (the organelle/Virtunism ecosystem from the previous attempt)
