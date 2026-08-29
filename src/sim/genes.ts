@@ -47,6 +47,73 @@ export interface GeneSequence {
   genes: Gene[];
 }
 
+/** A deep copy: fresh outer array *and* a fresh array per gene. Sharing
+ * matters here in a way it doesn't for most data in this project — a
+ * living cell's own sequence object is, in two real cases, the very same
+ * object as its lineage's speciation baseline (World.addSpeciesFromSequence
+ * hands founder #0 the identical object it stored as
+ * LineageInfo.referenceSequence; World.checkSpeciation stores the promoted
+ * cell's own sequence as the new lineage's reference), and
+ * crossoverGeneSequence splices parent Gene arrays in by reference. Any
+ * caller that intends to *modify* a sequence rather than derive a new one
+ * from it must start here — an in-place write would otherwise rewrite the
+ * cell's own species baseline to match itself, pinning its genetic
+ * distance from that baseline at 0 and silently disabling speciation for
+ * the whole lineage. */
+export function cloneGeneSequence(seq: GeneSequence): GeneSequence {
+  return { genes: seq.genes.map((g) => [...g]) };
+}
+
+/** Every structural invariant a GeneSequence has always had but nothing
+ * ever checked, because until the Tree tab's gene editor every sequence in
+ * the program was produced by this file (randomGeneSequence /
+ * mutateGeneSequence / crossoverGeneSequence) and provably satisfied them.
+ * Returns a human-readable reason, or null if the sequence is sound —
+ * deliberately not a throw, since its one caller wants to show the reason
+ * inline rather than take down the frame.
+ *
+ * Worth the code despite the editor being structurally unable to violate
+ * any of it (fixed gene count, fixed positions, symbols cycled within
+ * NUCLEOTIDE_CODES): the blast radius if anything ever does is severe and
+ * silent. decodeUnitFromSymbols scores an unknown symbol via
+ * NUCLEOTIDE_CODES.indexOf -> -1, and lerp below is unclamped, so a single
+ * stray symbol drives `size` negative — past TRAIT_LIMITS entirely — which
+ * makes radius, maxEnergy and reproduceThreshold all negative and leaves
+ * Virtunism.canReproduce() unconditionally true. A sequence shorter than
+ * CORE_GENE_COUNT throws out of decodeCoreTraits instead.
+ *
+ * Deliberately NOT called from genomeFromSequence: that is the birth hot
+ * path (every reproduction, every tick), where mutation and crossover
+ * provably preserve these invariants, so a full-sequence scan there would
+ * be real per-tick cost for no benefit. */
+export function validateGeneSequence(seq: GeneSequence): string | null {
+  if (seq.genes.length < CORE_GENE_COUNT) {
+    return `A genome needs at least ${CORE_GENE_COUNT} core genes; this one has ${seq.genes.length}.`;
+  }
+  const proteinCount = seq.genes.length - CORE_GENE_COUNT;
+  if (proteinCount > TRAIT_LIMITS.maxProteins) {
+    return `A genome can carry at most ${TRAIT_LIMITS.maxProteins} protein genes; this one has ${proteinCount}.`;
+  }
+  for (let i = 0; i < seq.genes.length; i++) {
+    const gene = seq.genes[i];
+    const isCore = i < CORE_GENE_COUNT;
+    const expected = isCore ? GENE_LENGTH : PROTEIN_GENE_LENGTH;
+    const label = isCore ? `core gene ${i}` : `protein gene ${i - CORE_GENE_COUNT + 1}`;
+    if (gene.length !== expected) {
+      return `${label} must be ${expected} symbols long; it is ${gene.length}.`;
+    }
+    for (let j = 0; j < gene.length; j++) {
+      // Runtime check against a value the type system already believes is
+      // a NucleotideCode — the whole point is guarding a boundary the
+      // types can't, so the widening cast is deliberate.
+      if (!(NUCLEOTIDE_CODES as readonly string[]).includes(gene[j] as string)) {
+        return `${label} carries an unknown symbol "${gene[j]}" at position ${j + 1}.`;
+      }
+    }
+  }
+  return null;
+}
+
 // --- decoding ------------------------------------------------------------
 // Sum-based, not positional — every symbol contributes equally, so no
 // single symbol dominates a decoded value (see the point-mutation-heavy-

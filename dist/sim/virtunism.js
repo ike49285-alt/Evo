@@ -253,9 +253,53 @@ export class Virtunism {
         child.attachedTo = this;
         // Spread siblings out around this one rather than stacking on one spot.
         child.localAngle = (siblingCount / 5) * Math.PI * 2 + rng.range(-0.3, 0.3);
-        child.localDist = this.radius + child.radius + 1;
+        child.localDist = Virtunism.jointDistance(this, child);
         this.attachedChildren.push(child);
         return child;
+    }
+    /** The joint distance between a bonded parent and child — both bodies'
+     * radii plus a small gap. Extracted so budOffspring (which establishes a
+     * joint at bud time) and replaceGenome (which has to re-establish one
+     * when a body changes size mid-life) can't drift apart: there is exactly
+     * one definition of this rule. */
+    static jointDistance(parent, child) {
+        return parent.radius + child.radius + 1;
+    }
+    /** Replaces this individual's genome mid-life and repairs every invariant
+     * the simulation only ever establishes at birth. Nothing in the sim does
+     * this — a mutated genome always belongs to a *new* individual (see
+     * genome.ts) — so this exists solely for the Tree tab's gene editor, and
+     * lives here because all three invariants it repairs are defined in this
+     * file:
+     *
+     *  - `energy` is clamped to maxEnergy only by eat(), on the way *up*. A
+     *    smaller genome lowers maxEnergy underneath a cell that is already
+     *    full, leaving it permanently over its own ceiling (and so
+     *    permanently past reproduceThreshold).
+     *  - `speed` is re-derived every tick by act() — but only for *solo*
+     *    cells. World.moveColonyRigid writes only the colony root's speed and
+     *    World's movement loop skips bonded members entirely, so a non-root
+     *    member's stale speed would outlive the edit forever and feed
+     *    World.buildInputs an out-of-range speedNorm (which, unlike
+     *    energyNorm, is not clamped there).
+     *  - `localDist` is fixed at bud time, correct for a body that never
+     *    changes size and wrong the instant one does. Only the *immediate*
+     *    joints move: localDist is parent-relative, so a grandchild's joint
+     *    is unaffected by this cell's radius.
+     *
+     * The caller owns validating the sequence and building the Genome through
+     * the ordinary genomeFromSequence pipeline; this only takes the result.
+     * Positions aren't re-cascaded here — World.cascadeColonyPositions does
+     * that on the next tick — so a re-seated colony can look slightly gapped
+     * until the sim is unpaused. */
+    replaceGenome(genome) {
+        this.genome = genome;
+        this.energy = Math.min(this.energy, this.maxEnergy);
+        this.speed = Math.min(this.speed, deriveMaxSpeed(this.genome));
+        if (this.attachedTo !== null)
+            this.localDist = Virtunism.jointDistance(this.attachedTo, this);
+        for (const child of this.attachedChildren)
+            child.localDist = Virtunism.jointDistance(this, child);
     }
     isDead() {
         return this.energy <= 0 || this.age >= this.genome.maxAge;

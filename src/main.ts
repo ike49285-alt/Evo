@@ -1,10 +1,19 @@
 import { Renderer } from './render/renderer.js';
 import { ReproductionMode, ProteinPhenotype } from './sim/types.js';
-import { deriveEnergyCapturePower, derivePredationPower, randomGenome } from './sim/genome.js';
+import { deriveEnergyCapturePower, derivePredationPower, genomeFromSequence, Genome, randomGenome } from './sim/genome.js';
 import { World, SpeciesSummary, TreeNode } from './sim/world.js';
 import { Virtunism } from './sim/virtunism.js';
 import { NeuralNet } from './sim/nn.js';
-import { CORE_GENE_COUNT, GeneSequence, LOCUS } from './sim/genes.js';
+import {
+  cloneGeneSequence,
+  CORE_GENE_COUNT,
+  decodeCoreTraits,
+  decodeProteinGene,
+  GeneSequence,
+  LOCUS,
+  validateGeneSequence,
+} from './sim/genes.js';
+import { NucleotideCode, NUCLEOTIDE_CODES } from './chem/elements.js';
 import { CATALYSIS_CLASSES } from './chem/polymer.js';
 import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
@@ -824,19 +833,84 @@ interface LiveDetailRefs {
   reproBarLabel: HTMLElement;
   reproStatusEl: HTMLElement;
   radarCanvas: HTMLCanvasElement;
+  /** Not a per-frame ref like the rest — the one anchor the gene editor
+   * re-renders in place (entering/cancelling edit mode, expanding a
+   * different gene) so toggling the editor doesn't rebuild the whole
+   * panel and reset its scroll. An *applied* edit is different: it
+   * changes stat blocks, the protein list and the radar too, so that path
+   * takes the full rebuild instead (see refreshSelectionUI's genome-
+   * identity check). */
+  geneSection: HTMLElement;
 }
 let detailRefs: LiveDetailRefs | null = null;
 // `${id}:${'alive'|'gone'}` for whatever the detail panel was last fully
 // rebuilt for — the panel's *structure* (identity header, protein list,
 // gene list, brain summary, radar canvas, alive-vs-historical layout)
-// only ever needs to change when the selection itself changes or a live
-// selection dies; every other frame just updates the small live-vitals
-// set above in place. A genome never changes after its individual is
-// born (mutation always produces a *new* individual with a new id — see
-// genome.ts), so nothing genome-derived here needs more than this.
+// only ever needs to change when the selection itself changes, a live
+// selection dies, or — since the Tree tab's gene editor — a living
+// individual's genome is actually replaced mid-life
+// (Virtunism.replaceGenome). That last case is tracked separately by
+// lastRenderedGenome below rather than folded into this string, because
+// it isn't a property of the *selection*; every other frame just updates
+// the small live-vitals set above in place.
 let lastDetailSignature: string | null = null;
+// The exact Genome object the panel was last built from. genomeFromSequence
+// always returns a *fresh* object, so reference identity is an exact,
+// allocation-free "is this panel still describing this genome?" test — and
+// unlike a hand-bumped epoch counter, a future caller that swaps a genome
+// some other way can't forget to bump it.
+let lastRenderedGenome: Genome | null = null;
+
+/** An in-progress, uncommitted edit of one *living* individual's gene
+ * sequence. Module-level and keyed by individual id rather than held in
+ * the detail panel's DOM, because that DOM is not durable:
+ * renderLiveDetail()/renderHistoricalDetail() both end in
+ * treeDetail.replaceChildren(), and refreshSelectionUI() runs every single
+ * frame — so if the individual dies mid-edit the panel flips to the
+ * historical view and every edit node vanishes with it.
+ *
+ * `sequence` is a deep copy (cloneGeneSequence) taken at edit-start and
+ * owned solely by this object, which is what makes mutating it in place on
+ * each chip click safe *and* keeps the live simulation completely
+ * unaffected until Apply. It is also why no auto-pause is needed: ticks
+ * passing while the player edits provably cannot touch this. */
+interface GeneDraft {
+  individualId: number;
+  sequence: GeneSequence;
+  /** gene.join('') per gene at edit-start — the only thing "this gene has
+   * been changed" is measured against. */
+  baseline: readonly string[];
+  /** Which single gene is currently expanded into chips, if any. Exactly
+   * one at a time: see renderGeneSection's comment on why. */
+  expandedIndex: number | null;
+  error: string | null;
+}
+let geneDraft: GeneDraft | null = null;
+
+// Which individuals the player has hand-edited this session. Deliberately
+// session-only and NOT saved: Virtunism.isPlayerDesigned is readonly *and*
+// is inherited by every descendant, so reusing it would retroactively
+// relabel a whole lineage; and persisting a new flag would change
+// SerializedVirtunism's shape and cost a SAVE_VERSION bump, invalidating
+// every existing save. That's the same call save.ts already makes for
+// paused/speed/camera — provenance worth showing while you can still see
+// it, not worth breaking saves over.
+const handEditedIds = new Set<number>();
+
+/** The single owner of the "this draft no longer has a live individual to
+ * land on" rule — its individual died, or the selection moved on. Called
+ * at the top of refreshSelectionUI() so every frame enforces it, not just
+ * the paths that happen to go through selectIndividual(). */
+function discardDraftIfOrphaned(live: Virtunism | null): void {
+  if (geneDraft !== null && (live === null || live.id !== geneDraft.individualId)) geneDraft = null;
+}
 
 function selectIndividual(id: number | null): void {
+  // Discard an in-progress gene edit whose individual is no longer the
+  // selected one. Doing it here covers every route into a new selection in
+  // one place — tree-node clicks, dish taps, ancestry links, Clear, and
+  // Reset World (which calls selectIndividual(null)).
+  if (geneDraft !== null && geneDraft.individualId !== id) geneDraft = null;
   selectedIndividualId = id;
   refreshSelectionUI();
 }
@@ -1031,6 +1105,246 @@ function buildGeneList(sequence: GeneSequence): HTMLElement {
   return list;
 }
 
+/** Cycles a nucleotide A -> U -> G -> C -> A, in NUCLEOTIDE_CODES' own
+ * order so a chip's cycle matches every other place the alphabet is
+ * listed. Cycling *within* the alphabet at a fixed position is also what
+ * makes the editor structurally incapable of producing an invalid
+ * sequence — validateGeneSequence on Apply is a guard against future
+ * callers, not against this one. */
+function nextNucleotide(symbol: NucleotideCode): NucleotideCode {
+  return NUCLEOTIDE_CODES[(NUCLEOTIDE_CODES.indexOf(symbol) + 1) % NUCLEOTIDE_CODES.length];
+}
+
+function geneLabel(i: number): string {
+  return i < CORE_GENE_COUNT ? CORE_GENE_LABELS[i] : `protein ${i - CORE_GENE_COUNT + 1}`;
+}
+
+function changedGeneCount(draft: GeneDraft): number {
+  let n = 0;
+  for (let i = 0; i < draft.sequence.genes.length; i++) {
+    if (draft.sequence.genes[i].join('') !== draft.baseline[i]) n++;
+  }
+  return n;
+}
+
+/** What the expanded gene decodes to under the draft, against what the
+ * individual is still actually running (cell.genome is untouched until
+ * Apply). This is the whole payoff of expanding only one gene at a time:
+ * the room a full chip grid would have eaten pays for showing the player
+ * what their edit actually *does* — including the very common case where
+ * it does nothing, because decodeUnit is a sum over symbol indices and so
+ * is order-independent (genes.ts), which makes a great many edits
+ * genuinely synonymous. Without this line those edits look broken. */
+function describeGeneEdit(cell: Virtunism, draft: GeneDraft, i: number): string {
+  if (i < CORE_GENE_COUNT) {
+    const name = CORE_GENE_LABELS[i] as keyof ReturnType<typeof decodeCoreTraits>;
+    const was = cell.genome[name];
+    const now = decodeCoreTraits(draft.sequence)[name];
+    const fmt = (v: number | string): string =>
+      typeof v === 'number' ? (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(2)) : v;
+    return was === now ? `${name} ${fmt(was)} · unchanged` : `${name} ${fmt(was)} → ${fmt(now)}`;
+  }
+  const protein = decodeProteinGene(draft.sequence.genes[i]);
+  const fn = protein.fold.catalysisClass
+    ? `${protein.fold.catalysisClass}${protein.fold.isCatalyst ? ` · strength ${protein.fold.catalysisStrength.toFixed(2)}` : ''}`
+    : 'no function';
+  return `${fn} · ${protein.fold.folded ? 'folded' : 'unfolded'} · ${protein.sequence.length} aa`;
+}
+
+/** Commits a draft onto the living individual. Everything risky about the
+ * whole feature is concentrated here, in order: validate; deep-copy so the
+ * applied sequence shares no array with the draft the UI still holds *or*
+ * with the lineage's speciation baseline (LineageInfo.referenceSequence is
+ * literally the same object a founder or a just-speciated cell carries —
+ * an in-place write would pin the cell's distance from its own baseline at
+ * 0 and silently disable speciation for the lineage); build through the
+ * ordinary genomeFromSequence pipeline, carrying `brain` and `isDna`
+ * across by hand because neither is encoded in the sequence; then let
+ * Virtunism.replaceGenome repair the birth-time invariants.
+ *
+ * Speciation is deliberately NOT forced here. World.checkSpeciation runs
+ * only at the individual's next reproduction, so a big enough edit founds
+ * a new species naturally, exactly the way ordinary drift already does. */
+function applyGeneEdit(container: HTMLElement, cell: Virtunism): void {
+  const draft = geneDraft;
+  if (draft === null || draft.individualId !== cell.id) return;
+
+  const reason = validateGeneSequence(draft.sequence);
+  if (reason !== null) {
+    draft.error = reason;
+    renderGeneSection(container, cell);
+    return;
+  }
+
+  const genome = genomeFromSequence(cloneGeneSequence(draft.sequence), cell.genome.brain, cell.genome.isDna);
+  cell.replaceGenome(genome);
+
+  // TreeNode.hue is snapshotted at birth (World.recordBirth) and is what
+  // the tree view draws each node from, while the dish renderer reads
+  // genome.hue live — so without this a hue edit recolors the dish dot and
+  // not the tree dot. World.checkSpeciation already rewrites node.hue
+  // post-birth, so this is an established thing to do, not a new seam.
+  const treeNode = world.treeNodes.get(cell.id);
+  if (treeNode) treeNode.hue = genome.hue;
+
+  handEditedIds.add(cell.id);
+  geneDraft = null;
+  // No explicit rebuild: refreshSelectionUI runs every frame and its
+  // genome-identity check picks this up, so there stays exactly one
+  // full-rebuild path rather than two that can disagree.
+}
+
+/** Fills the "Raw gene sequence" section — read-only by default, or the
+ * editor once the player has opened a draft on this individual. Rebuilt in
+ * place (into the same container) rather than by rebuilding the whole
+ * detail panel, so toggling edit mode doesn't reset the panel's scroll or
+ * needlessly re-make the radar canvas.
+ *
+ * Only ever expands ONE gene into chips at a time. A full genome is 5 core
+ * genes of 10 symbols plus up to 16 protein genes of 60 — over a thousand
+ * chips if every symbol got its own node, against the ~60 elements this
+ * panel's read-only list costs today, which is precisely what
+ * buildGeneList's own comment says it avoids. One gene at a time caps the
+ * worst case at 60 chips, keeps that promise intact for every collapsed
+ * row, matches how editing actually happens (you change one locus, then
+ * look at what it did), and needs no event delegation — which this
+ * codebase has nowhere else. */
+function renderGeneSection(container: HTMLElement, cell: Virtunism): void {
+  container.replaceChildren();
+  const draft = geneDraft !== null && geneDraft.individualId === cell.id ? geneDraft : null;
+  const rerender = (): void => renderGeneSection(container, cell);
+
+  const title = document.createElement('div');
+  title.className = 'tree-detail-section-title';
+  title.textContent = 'Raw gene sequence';
+  const status = document.createElement('span');
+  status.className = 'gene-edit-status';
+  title.appendChild(status);
+  container.appendChild(title);
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'gene-edit-toolbar';
+  container.appendChild(toolbar);
+
+  if (draft === null) {
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Edit genes';
+    editBtn.addEventListener('click', () => {
+      geneDraft = {
+        individualId: cell.id,
+        sequence: cloneGeneSequence(cell.genome.sequence),
+        baseline: cell.genome.sequence.genes.map((g) => g.join('')),
+        expandedIndex: null,
+        error: null,
+      };
+      rerender();
+    });
+    toolbar.appendChild(editBtn);
+    container.appendChild(buildGeneList(cell.genome.sequence));
+    return;
+  }
+
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.className = 'btn primary';
+  applyBtn.textContent = 'Apply changes';
+  applyBtn.addEventListener('click', () => applyGeneEdit(container, cell));
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'btn';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', () => {
+    geneDraft = null;
+    rerender();
+  });
+  toolbar.append(applyBtn, cancelBtn);
+
+  /** Title count + Apply's enabled state, refreshed on every chip click
+   * without re-rendering anything (see GeneDraft's doc comment). */
+  const refreshEditStatus = (): void => {
+    const n = changedGeneCount(draft);
+    status.textContent = n === 0 ? ' · editing' : ` · editing · ${n} gene${n === 1 ? '' : 's'} changed`;
+    applyBtn.disabled = n === 0;
+  };
+  refreshEditStatus();
+
+  const hint = document.createElement('p');
+  hint.className = 'tree-detail-empty-hint';
+  hint.textContent =
+    'Click a gene to open it, then click a symbol to cycle A → U → G → C. ' +
+    'Nothing in the dish changes until you press Apply. The dish keeps running — ' +
+    'pause from the top bar if you want time.';
+  container.appendChild(hint);
+
+  if (draft.error !== null) {
+    const err = document.createElement('p');
+    err.className = 'gene-edit-error';
+    err.textContent = draft.error;
+    container.appendChild(err);
+  }
+
+  const list = document.createElement('div');
+  // `editing` scopes the row layout to edit mode only, so the read-only
+  // list keeps exactly the block/break-all rendering it has always had.
+  list.className = 'gene-list editing';
+  draft.sequence.genes.forEach((gene, i) => {
+    const row = document.createElement('div');
+    row.className = 'gene-row';
+    const expanded = draft.expandedIndex === i;
+    if (gene.join('') !== draft.baseline[i]) row.classList.add('edited');
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'gene-row-toggle';
+    toggle.textContent = `${expanded ? '▾' : '▸'} ${geneLabel(i)}:`;
+    toggle.addEventListener('click', () => {
+      draft.expandedIndex = expanded ? null : i;
+      rerender();
+    });
+    row.appendChild(toggle);
+
+    if (!expanded) {
+      const seq = document.createElement('span');
+      seq.className = 'gene-seq';
+      seq.textContent = gene.join('') + (row.classList.contains('edited') ? '  (edited)' : '');
+      row.appendChild(seq);
+    } else {
+      const chips = document.createElement('div');
+      chips.className = 'gene-chips';
+      const preview = document.createElement('div');
+      preview.className = 'gene-preview';
+      preview.textContent = describeGeneEdit(cell, draft, i);
+
+      gene.forEach((symbol, j) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'gene-chip';
+        chip.textContent = symbol;
+        if (symbol !== draft.baseline[i][j]) chip.classList.add('changed');
+        chip.addEventListener('click', () => {
+          const next = nextNucleotide(gene[j]);
+          gene[j] = next;
+          // Targeted updates only — one array slot, one chip, the row's
+          // marker, the preview and the header count. Re-rendering the
+          // section on every click would rebuild 60 chips and lose focus.
+          chip.textContent = next;
+          chip.classList.toggle('changed', next !== draft.baseline[i][j]);
+          row.classList.toggle('edited', gene.join('') !== draft.baseline[i]);
+          preview.textContent = describeGeneEdit(cell, draft, i);
+          refreshEditStatus();
+        });
+        chips.appendChild(chip);
+      });
+      row.append(chips, preview);
+    }
+    list.appendChild(row);
+  });
+  container.appendChild(list);
+}
+
 /** Rebuilds the full detail panel for a selection that's no longer
  * alive — World's tree node can outlive the Virtunism it describes
  * (cleanupDead() removes the individual itself, but the tree keeps the
@@ -1100,6 +1414,12 @@ function renderLiveDetail(node: TreeNode, cell: Virtunism): LiveDetailRefs {
   const statusEl = document.createElement('span');
   statusEl.className = 'tree-detail-status';
   head.append(`#${node.id} `, nameSpan, statusEl);
+  if (handEditedIds.has(cell.id)) {
+    const editedMark = document.createElement('span');
+    editedMark.className = 'gene-edit-status';
+    editedMark.textContent = ' · hand-edited';
+    head.appendChild(editedMark);
+  }
   wrap.appendChild(head);
   wrap.appendChild(buildParentsLine(node));
 
@@ -1137,8 +1457,13 @@ function renderLiveDetail(node: TreeNode, cell: Virtunism): LiveDetailRefs {
   addSectionTitle(wrap, 'Brain');
   wrap.appendChild(buildBrainSummary(cell.genome.brain));
 
-  addSectionTitle(wrap, 'Raw gene sequence');
-  wrap.appendChild(buildGeneList(cell.genome.sequence));
+  // Its own container rather than appended straight onto `wrap`, so the
+  // gene editor can re-render just this subtree (entering/cancelling edit
+  // mode, expanding a gene) without rebuilding the whole panel.
+  const geneSection = document.createElement('div');
+  geneSection.className = 'gene-section';
+  wrap.appendChild(geneSection);
+  renderGeneSection(geneSection, cell);
 
   // Attach before the radar is ever drawn — drawRadarChart sizes itself
   // from the canvas's real laid-out clientWidth/clientHeight, which reads
@@ -1158,6 +1483,7 @@ function renderLiveDetail(node: TreeNode, cell: Virtunism): LiveDetailRefs {
     reproBarLabel: reproBar.labelValue,
     reproStatusEl,
     radarCanvas,
+    geneSection,
   };
 }
 
@@ -1173,7 +1499,9 @@ function updateLiveVitals(refs: LiveDetailRefs, cell: Virtunism): void {
   refs.ageBarLabel.textContent = `${Math.floor(cell.age)} / ${Math.round(cell.genome.maxAge)} ticks (${pctLabel(ageRatio)})`;
   refs.ageBarFill.style.width = fillWidth(ageRatio);
 
-  // eat() already clamps energy to maxEnergy, so this ratio is naturally <= 1.
+  // Energy is clamped to maxEnergy on the way *up* by eat(), and on the way
+  // *down* by Virtunism.replaceGenome (the gene editor can shrink maxEnergy
+  // out from under a cell that's already full), so this ratio stays <= 1.
   const energyRatio = cell.energy / cell.maxEnergy;
   refs.energyBarLabel.textContent = `${cell.energy.toFixed(1)} / ${cell.maxEnergy.toFixed(1)} (${pctLabel(energyRatio)})`;
   refs.energyBarFill.style.width = fillWidth(energyRatio);
@@ -1207,9 +1535,11 @@ function updateLiveVitals(refs: LiveDetailRefs, cell: Virtunism): void {
 function refreshSelectionUI(): void {
   describeSelection();
   if (selectedIndividualId === null) {
+    geneDraft = null;
     if (lastDetailSignature !== null) {
       treeDetail.replaceChildren();
       lastDetailSignature = null;
+      lastRenderedGenome = null;
       detailRefs = null;
     }
     return;
@@ -1219,14 +1549,29 @@ function refreshSelectionUI(): void {
     // Pruned out from under the selection entirely (no living descendant
     // left anywhere) — describeSelection() above already cleared
     // selectedIndividualId for this case.
+    geneDraft = null;
     treeDetail.replaceChildren();
     lastDetailSignature = null;
+    lastRenderedGenome = null;
     detailRefs = null;
     return;
   }
   const live = findLiveSelected();
+  discardDraftIfOrphaned(live);
   const signature = `${node.id}:${live ? 'alive' : 'gone'}`;
-  if (signature !== lastDetailSignature) {
+  // A genome swap on the *same*, still-living individual (the gene editor's
+  // Apply) changes the stat blocks, protein list, radar and gene list, none
+  // of which the per-frame vitals path touches — so it needs the same full
+  // rebuild a selection change does, even though the signature is unchanged.
+  const genomeChanged = live !== null && live.genome !== lastRenderedGenome;
+  if (signature !== lastDetailSignature || genomeChanged) {
+    // Preserve scroll only for an in-place genome swap on the same
+    // individual: the gene section sits at the bottom of a scrolling panel,
+    // so rebuilding under the player's cursor would otherwise yank them back
+    // to the top the instant they hit Apply. A selection *change* should
+    // still land at the top, as it always has.
+    const keepScroll = signature === lastDetailSignature;
+    const prevScroll = treeDetail.scrollTop;
     lastDetailSignature = signature;
     if (live) {
       detailRefs = renderLiveDetail(node, live);
@@ -1235,6 +1580,8 @@ function refreshSelectionUI(): void {
       renderHistoricalDetail(node);
       detailRefs = null;
     }
+    lastRenderedGenome = live?.genome ?? null;
+    if (keepScroll) treeDetail.scrollTop = prevScroll;
   } else if (detailRefs && live) {
     updateLiveVitals(detailRefs, live);
   }

@@ -12,6 +12,11 @@ this repo. `claude/closed-loop-soup` (the branch all that work was
 developed on) is now superseded/redundant now that its tip is on
 default; don't keep developing there.
 
+**This round** added the **gene editor** (see its own section below), on
+`claude/elf-eyes-observation-9cin5d` — cut clean from the default branch
+tip with 0 divergence, which is what the previous handover asked for.
+
+
 **What's live on default now, in order**: hydrothermal vent
 (continuous matter source + agitation current) → full-dish pool
 (patch-seeded, not diluted — the pool spans the whole dish, not a
@@ -23,8 +28,8 @@ recycles through the vent instead of piling up) → manual soup-spawning
 tool (Chemistry tab: place specific chemistry by hand, including
 forced-catalytic/ribozyme) → a jumpy-Chemistry-tab CSS fix.
 
-**Two real, still-true caveats now on the main line — not fixed, not
-hidden, explicitly accepted by the user**:
+**Three real, still-true caveats — not fixed, not hidden, explicitly
+accepted by the user**:
 1. The full-dish patch-seeded pool shows a measured *regression* in
    peptide/RNA growth vs. the old small-pool baseline (see the Phase B
    section below for the actual numbers and the untested hypothesis for
@@ -34,61 +39,43 @@ hidden, explicitly accepted by the user**:
    **still genuinely unanswered**. Every sweep run so far (this whole
    redesign's lifetime) was too short a horizon to produce a real
    signal either way.
+3. **The Tree of Life needs visual work.** Three real defects, all
+   confirmed in source and all user-observed, none fixed:
+   a. *Blurry.* `src/render/renderer.ts` handles devicePixelRatio properly
+      for the dish (`dpr = min(devicePixelRatio, 2)`, backing store sized
+      `rect.width * dpr`, then `ctx.scale`). `src/ui/treeview.ts:66-71`
+      and all four canvas routines in `src/ui/chart.ts` do **not** — they
+      set `canvas.width = clientWidth` in CSS pixels. So on any high-DPI
+      screen the tree and every chart render at 1x beside a 2x dish. Not a
+      one-liner: every routine computes layout from `const w =
+      canvas.width`, treating the backing store as the CSS drawing space,
+      so each must move to `clientWidth`/`clientHeight` plus
+      `ctx.setTransform(dpr,0,0,dpr,0,0)` or every coordinate halves.
+      Two adjacent quirks to fix in the same pass: `drawSparkline`
+      (`chart.ts:6-9`) sets `canvas.width` but never `canvas.height`; and
+      `main.ts`'s deferred-draw arrangement (canvases read 0 while their
+      panel is `display:none`) must be preserved, not sized eagerly.
+   b. *Dense trees smear into an unreadable band.* `yOf`
+      (`treeview.ts:135`) spreads every leaf slot across the full canvas
+      height against a fixed `3.2`px node radius (`:194`). The canvas floor
+      is `min-height: 160px` (`style.css`), ~128px usable after padding.
+      Default `maxPopulation` is 320 and the pop-cap control accepts up to
+      20,000 — at 320 leaves in 128px that is ~0.4px per slot against a
+      3.2px radius, roughly **8x overlap**; even a ~500px desktop canvas
+      gives ~1.5px per slot (~4x). `hitTestTree` uses `radius + 4` = 11px,
+      so a click at that density has ~20 candidates and precise selection
+      is impossible.
+   c. *No labels, no zoom, no pan.* The only text drawn is the
+      `'time (tick) ->'` axis label (`:236`).
+   Explicitly **ruled out by user observation**: horizontal node drift.
+   The code does rescale x to `minTick`/`maxTick` every frame
+   (`treeview.ts:120-134`), which in principle slides every node as the
+   retained span changes, but the user confirms it is not happening in
+   practice. Not a defect to chase.
 
-**Next task, not yet started**: gene editing — letting the player
-directly view and edit a *living individual's own genes* (raw
-nucleotide symbols, real re-translation/re-fold through the existing
-pipeline), scoped and designed but zero code written yet. Concrete
-design, confirmed against the actual current code (not guessed):
-
-- Attaches to the Tree tab's existing "Raw gene sequence" section
-  (`buildGeneList()` in `src/main.ts`, inside `renderLiveDetail()`) —
-  currently read-only plain text, the right existing surface to extend
-  rather than a new screen.
-- Edit flow: an "Edit Genes" toggle swaps the read-only list for
-  clickable nucleotide chips (A/U/G/C, cycle on click). Edits accumulate
-  in a **local draft** `GeneSequence`, not the live individual's actual
-  genome — visually marked as changed. An explicit "Apply Mutation"
-  commits it: `cell.genome = genomeFromSequence(draftSequence,
-  cell.genome.brain, cell.genome.isDna)` (`src/sim/genome.ts`) — the
-  *exact same* function birth/mutation already use, so edited traits/
-  proteins/fold are the real pipeline's output, not a special-cased
-  preview. "Cancel" discards the draft.
-- Why a draft + explicit Apply, not live-per-keystroke: `renderLiveDetail()`
-  is documented as built once per life; only position/age/energy bars
-  refresh every frame (`updateLiveVitals()`) — genome/proteins/brain/
-  sequence deliberately aren't part of that per-frame path. Re-decoding
-  and rebuilding the whole panel (protein list, radar chart) on every
-  single chip click would fight that design.
-- **Speciation needs zero new code**: `World.checkSpeciation()`
-  (`src/sim/world.ts`) already runs `geneticDistance(cell.genome.sequence,
-  lineage.referenceSequence)` against `speciationThreshold=0.34`, but
-  only at the individual's *next reproduction attempt*, not
-  immediately at edit time — confirmed by reading the actual call
-  sites (only inside the reproduction pathway). An edit big enough to
-  cross that threshold founds a real new species naturally, the same
-  way ordinary drift already does, the next time the edited individual
-  reproduces — this was an explicit user decision ("yes, let it happen
-  naturally"), not an assumption.
-- User's explicit scope decisions (asked directly, not assumed):
-  **individual-only** editing (not a species template), raw nucleotide
-  symbols (not a higher-level "pick a trait" abstraction), natural
-  speciation on edit (see above).
-- No changes needed to `genes.ts`, `genome.ts`, `virtunism.ts`, or
-  `world.ts` — every mechanism (`genomeFromSequence`, `Virtunism.genome`
-  being a plain mutable field, `checkSpeciation`) already exists and is
-  directly reusable. New code is UI only: `src/main.ts` (edit/apply/
-  cancel wiring, an editable variant of `buildGeneList()`) and
-  `style.css` (`.gene-chip` + an "edited" marker class).
-- Real edge case flagged, not yet resolved either way: an edit that
-  shrinks `genome.size` also shrinks `maxEnergy` — whether an
-  individual's current `energy` exceeding the new (smaller) `maxEnergy`
-  is handled gracefully anywhere, or just renders an over-100% bar,
-  hasn't been checked yet. Check this during implementation, don't
-  assume.
-- **Branch**: user explicitly said start this on a **new branch cut
-  from the now-updated default branch** — not on `claude/closed-loop-soup`
-  (superseded) and not directly on default.
+**Gene editing is now SHIPPED** (this round) — see "Gene editor" below
+for the full writeup, including three claims in the old plan for this
+feature that turned out to be wrong when checked against the code.
 
 **Session conventions worth knowing, established over many rounds**:
 verify before committing (headless scripts + Playwright, not "looks
@@ -1627,6 +1614,162 @@ No `SAVE_VERSION` bump for either change — manually-spawned particles
 are plain `Particle`/`PeptideParticle`/`RnaParticle` objects already
 covered by the existing generic serialization, and wall-recycling only
 changes `ventInjected`'s runtime behavior, not its shape.
+
+## Gene editor: editing a living individual's genes
+
+Shipped. The Tree tab's "Raw gene sequence" section now has an **Edit
+genes** mode: click a gene to expand it into clickable nucleotide chips,
+click a symbol to cycle A -> U -> G -> C, watch a live decoded preview,
+then Apply or Cancel. Individual-only, raw symbols, and speciation left to
+happen naturally at the individual's next reproduction — all three as
+previously scoped.
+
+### The previous handover's plan was wrong in three places
+
+It claimed: *"No changes needed to `genes.ts`, `genome.ts`,
+`virtunism.ts`, or `world.ts` ... New code is UI only."* Checking each
+claim against the code rather than trusting it:
+
+1. **"UI only" does not hold.** Two functions were added to `genes.ts`
+   (`cloneGeneSequence`, `validateGeneSequence`) and two to
+   `virtunism.ts` (`replaceGenome`, a `jointDistance` static that
+   `budOffspring` now shares). It *is* achievable UI-only — every field
+   involved is public and `maxEnergy` is a live getter — but only by
+   having `main.ts` own the `localDist` formula that otherwise lives in
+   exactly one place, and hard-coding gene-length constants in the view
+   layer while leaving the sim unguarded for any future caller. Both are
+   the drift this codebase's comments exist to prevent.
+2. **The aliasing hazard was mis-aimed.** `crossoverGeneSequence` does
+   splice parent Gene arrays in by reference (`genes.ts:200-207`), but its
+   only call site is `mateVirtunisms`, which wraps it in `mutateGenome` —
+   and `mutateGeneSequence` rebuilds every gene via `.map()`. So
+   **parent/sibling sharing is latent, never live**. The live case is
+   sharper and was the real target: `World.addSpeciesFromSequence` hands
+   founder #0 the *same object* it stored as `LineageInfo.referenceSequence`,
+   and `checkSpeciation` does the same for a promoted cell. An in-place
+   edit would have rewritten the cell's own species baseline to match
+   itself, pinning its genetic distance from that baseline at 0 and
+   silently disabling speciation for the entire lineage. Same mitigation
+   (fresh arrays at both levels), different thing to assert.
+3. **The energy edge case is narrower than flagged, but a *speed* case
+   was missed entirely.** `World.buildInputs` already clamps `energyNorm`,
+   so an over-cap energy corrupts no brain input — it only renders a >100%
+   text label. But `speedNorm` is **not** clamped, and nothing ever
+   re-derives a *non-root colony member's* `speed`: World's movement loop
+   skips bonded members and `moveColonyRigid` writes only the root's. So a
+   motor-shrinking edit on a colony member would have left a permanently
+   too-high speed feeding the brain forever. `replaceGenome` clamps it.
+
+Also found, not in the plan at all: **`TreeNode.hue` is snapshotted at
+birth** and is what the tree view draws each node from, while the renderer
+reads `genome.hue` live — so a hue edit recolored the dish dot and not the
+tree dot. Apply now writes `node.hue`, which `checkSpeciation` already
+does post-birth, so it is an established seam rather than a new one.
+
+### One gene at a time, and why
+
+A full genome is 5 core genes of 10 symbols plus up to 16 protein genes of
+60. A chip per symbol would be **1010 chips** against the ~60 elements the
+read-only list costs today — exactly the blowup `buildGeneList`'s own
+comment says it avoids. Expanding only one gene caps the worst case at 60.
+Measured, on a 21-gene individual: `#tree-detail *` = **183 read-only, 206
+in edit mode collapsed, 267 with a 60-chip protein gene open**. No event
+delegation needed, which matters because this codebase has none anywhere.
+
+The room that buys pays for a **live decoded preview** of the expanded
+gene, and that turned out to be load-bearing rather than decorative,
+because of something the verification caught:
+
+**`decodeUnit` is a sum over symbol indices, so it is order-independent.**
+A first draft of the aliasing test flipped an entire core locus from
+`CUUCGUACCC` to `GGGGGGGGGG` and measured a genetic distance of *exactly
+0* — both sum to 20 and decode to 0.6667. Many edits are genuinely
+synonymous. Without the preview a player flips ten symbols, sees nothing
+happen, and concludes the feature is broken; with it they read
+`size 1.22 - unchanged`. This is a real property of the encoding, not a
+bug, and it is the strongest argument for the preview line.
+
+### Decisions
+
+- **No auto-pause.** `paused` has exactly one writer in the whole app;
+  auto-pausing would add two new couplings around it. The draft is a
+  private deep copy, so ticks passing during an edit provably cannot touch
+  it — verified by leaving a dirty draft open for ~90 frames of a running
+  sim and confirming the chips still held their drafted values. The hint
+  text points at the top bar instead.
+- **Validator added anyway**, returning a reason string rather than
+  throwing, and deliberately *not* called from `genomeFromSequence` (the
+  birth hot path). The editor structurally cannot emit a bad sequence, but
+  the measured blast radius if anything ever did is severe: an all-`X`
+  size gene yields `size = -0.4` (past `TRAIT_LIMITS.size.min` of 0.5),
+  `maxEnergy = -12`, `reproduceThreshold = -5.04`, and
+  **`canReproduce()` unconditionally true at zero energy** — unbounded
+  reproduction. Note the plan also predicted a negative *radius*; that is
+  wrong. `radius = 5 + size*5 + proteins*0.55` is still 5.2 at that size,
+  only below any legitimate genome's, not negative.
+- **No `SAVE_VERSION` bump** (stays 8). A genome built by
+  `genomeFromSequence` is structurally identical to a born one and
+  `serializeGenome` is a whole-object spread; an edited individual
+  round-trips identically, colony joints included, and a world containing
+  no edited individuals round-trips unchanged. The v8 "identity changed"
+  precedent does not apply — that was about resumed worlds silently
+  diverging from fresh ones. A bump would discard every existing save for
+  nothing.
+- **Provenance is session-only** (`handEditedIds`, rendered as
+  `- hand-edited` in the detail head). `isPlayerDesigned` is `readonly`
+  *and* inherited by every descendant, so reusing it would retroactively
+  relabel a whole lineage; persisting a new flag would change
+  `SerializedVirtunism`'s shape and cost a version bump. Same call
+  `save.ts` already makes for paused/speed/camera.
+- **Panel rebuild keys on genome object identity**, not a hand-bumped
+  epoch. `genomeFromSequence` always returns a fresh object, so
+  `live.genome !== lastRenderedGenome` is an exact, allocation-free test
+  that a future caller swapping a genome some other way cannot forget to
+  bump. Scroll position is preserved across an in-place swap (the gene
+  section sits at the bottom of a scrolling panel) but not across a
+  selection change.
+
+### Verified
+
+Headless (5 scripts): the lineage-baseline aliasing case both before and
+after the fix, with every gene array proven fresh at both levels; the
+validator rejecting 11 malformed shapes while accepting 200 trials each of
+`randomGeneSequence`, `mutateGeneSequence` (incl. 10 generations deep),
+`crossoverGeneSequence`, `randomGenome`, `mutateGenome`, `crossoverGenome`;
+the measured blast radius above; brain carried as the *same object*; the
+isDna ratchet holding through a replicase-stripping edit and still
+promoting on a replicase-adding one; energy clamped (204 -> 42 on a
+size-minimising edit); a non-root colony member's speed still bounded 200
+ticks later; joints re-seated with the grandchild's own joint correctly
+untouched; and the save round-trip.
+
+Speciation timing, asserted precisely: an edit measured past
+`speciationThreshold` changes **nothing** at edit time — same `lineageId`,
+same lineage count, `isSpeciationEvent` still false — and founds a new
+species with the right `parentLineageId` at the next reproduction.
+
+Playwright: DOM counts above; a dirty draft surviving ~90 frames of a
+running sim with live stat blocks unchanged; Apply updating the stat
+blocks and preserving scroll; Cancel reverting; selection-change mid-edit
+discarding the draft; **death mid-edit** (driven deterministically by
+minimising the `maxAge` locus while paused, re-opening the draft, then
+unpausing) leaving no edit DOM behind and no draft re-homed onto the next
+selection; portrait 390x844 with 60 chips wrapping inside the panel
+(`scrollWidth 361 <= clientWidth 361`), 21px tap targets, no horizontal
+scroll anywhere. Zero console errors throughout.
+
+**Honest gap:** the validator's *UI surfacing* path (Apply showing
+`.gene-edit-error`) is not exercised end-to-end. Reaching it needs an
+invalid sequence, which the editor structurally cannot create, and the app
+exposes no `world` global to inject one — and adding a debug global to
+shipped code purely to test an unreachable branch was not worth it. The
+validator itself is thoroughly covered headless; only the wiring from
+Apply to the error line rests on inspection.
+
+**Known, accepted:** `replaceGenome` doesn't re-cascade colony positions —
+`World.cascadeColonyPositions` does that on the next tick — so applying to
+a colony member *while paused* leaves it looking slightly gapped until
+unpause.
 
 ## Tech constraint from last time
 
