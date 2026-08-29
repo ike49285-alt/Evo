@@ -88,11 +88,11 @@ right"); document real findings honestly in this file even when
 negative or unresolved, in the same round they're found; scratch/
 verification scripts live in a session-scratchpad directory, never
 committed to the repo; rebuild `dist/` and republish the artifact
-bundle after any shipped change (bundling scripts — `bundle.mjs`,
-`build_artifact.mjs` — are scratchpad-only, not in the repo, so a fresh
-session needs to recreate or re-derive them if the artifact needs
-rebuilding — see this file's own bundling-approach notes elsewhere if
-present, or reconstruct from `src/`/`index.html`/`style.css` directly).
+bundle after any shipped change. **The bundler is committed now** —
+`tools/build-artifact.mjs`, run with `npm run build:artifact`. This
+supersedes the old note that the bundling scripts were scratchpad-only and
+a fresh session had to recreate or re-derive them; see "Shipping Evo as a
+single-file Artifact" below.
 
 ## Older design notes below (mostly still accurate, Phase-B section
    above is the most recent authoritative state for the pool specifically)
@@ -1905,6 +1905,77 @@ used a regex window over the whole detail panel, which reaches into the
 deliberately leaves unclamped so a genuinely over-ready individual shows a
 real >100%. The assertion now targets the energy row itself. The code was
 never wrong.
+
+## Shipping Evo as a single-file Artifact
+
+`tools/build-artifact.mjs`, `npm run build:artifact`. Committed this round,
+which is a deliberate break with the old handover note telling each fresh
+session to re-derive it: that convention is about scratch *verification*
+scripts, and a repeatable build step is not one. Re-deriving a bundler every
+session was pure waste.
+
+Output is `evo-artifact.html` (~506 KB, gitignored — it is build output).
+
+### Let tsc do the bundling
+
+The obvious approach — concatenate `dist/*.js`, strip `import`/`export` — is
+the fragile one. All 21 modules would share a single scope, so any two
+top-level names that collide break it silently, and it has to special-case
+the re-export edge (`sim/types.ts` re-exports from `chem/polymer.ts` while
+`chem/origin.ts` imports back out of `sim/`).
+
+Instead:
+
+```
+tsc --ignoreConfig --ignoreDeprecations 6.0 --module system \
+    --outFile <tmp> --target es2020 --lib es2020,dom --strict --skipLibCheck \
+    src/main.ts
+```
+
+Every module comes out as a `System.register(name, deps, declare)` call with
+its **own scope**, so collisions are structurally impossible and the
+`setters`/`execute` split handles dependency order. The only missing piece is
+a loader, and the one in the build script is ~40 lines with no dependency —
+it implements just what tsc emits: register, the two shapes of the `exports`
+callback (`exports("n", v)` and `exports({a, b})`), setters, execute.
+
+**Order is the whole job in that loader.** Declare every module first, then
+wire setters so each module holds a live reference to its dependencies'
+export *objects*, and only then execute — dependencies before dependents.
+Executing in registration order instead leaves a module reading `dep_1.Thing`
+before dep's `execute()` has assigned it. The same exports object is handed
+to every dependent's setter, which is what stands in for ES module live
+bindings.
+
+**Deprecation to track:** `outFile` and `module=system` are deprecated in
+TypeScript 6 and stop working in 7 (hence `--ignoreDeprecations 6.0`). When
+that lands this needs a real bundler, or the shim needs to consume plain ESM.
+
+### Assembly detail that would otherwise be a silent boot crash
+
+The artifact is `<title>` + inlined `style.css` + the `#app` markup lifted
+from `index.html`'s body + one plain `<script>`, with no
+doctype/html/head/body (the Artifact wrapper supplies those).
+
+That script **must go last**. `index.html` uses `<script type="module" src>`,
+which defers automatically — that is the only reason the app's ~40
+module-scope `el()` lookups find their elements. An inline classic script
+does not defer, so placing it above the markup makes every one of those
+lookups throw.
+
+### Verified
+
+The point of a single file is that it works with nothing else present, so it
+is tested from `file://` with no server: **zero subresource requests** beyond
+the document (the strongest form of the claim — it catches anything a grep
+for `src=` would miss); boots with a stocked dish; tick advancing; canvas
+hash changing between frames so it is genuinely painting; all four tabs open
+and Chemistry is correctly absent; Release Random Population works; a tree
+node selects and the gene editor expands a locus into 10 chips; the run
+survives a reload via localStorage; Reset works through the in-page confirm
+overlay (the app avoids `window.confirm` precisely because it ships
+sandboxed — this verifies that decision end to end); portrait 390x844 holds
+with no horizontal scroll. Zero console errors.
 
 ## Tech constraint from last time
 

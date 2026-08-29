@@ -1,3 +1,7 @@
 node_modules/
 .DS_Store
 *.log
+
+# Build output: the single-file Artifact bundle (tools/build-artifact.mjs).
+# Regenerate with `npm run build:artifact` -- 500+ KB, not worth versioning.
+evo-artifact.html
