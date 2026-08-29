@@ -13,7 +13,7 @@
       <div class="brand">
         <span class="brand-dot"></span>
         <h1>Evo</h1>
-        <span class="tagline">abiogenesis to ecosystem</span>
+        <span class="tagline">a stable virtual ecosystem</span>
       </div>
       <div class="controls">
         <button id="btn-play" class="btn primary" title="Play / pause the simulation">Pause</button>
@@ -29,7 +29,7 @@
           <label for="pop-cap-input">Pop cap</label>
           <input type="number" id="pop-cap-input" min="20" max="20000" step="10" value="320" />
         </div>
-        <button id="btn-reset" class="btn danger" title="Wipe the pool and every evolved lineage, start over">Reset World</button>
+        <button id="btn-reset" class="btn danger" title="Wipe every evolved lineage and start over from a fresh dish">Reset World</button>
       </div>
     </header>
 
@@ -43,26 +43,22 @@
           <div><span class="hud-label">Vesicles</span><span id="hud-vesicles">0</span></div>
           <div><span class="hud-label">Sim time/tick</span><span id="hud-perf">0.0ms</span></div>
         </div>
-        <div class="hint">Drag to pan · Scroll to zoom · the glowing pool is the primordial soup</div>
+        <div class="hint">Drag to pan · Scroll to zoom · tap a virtunism to inspect it</div>
       </div>
 
       <aside id="sidebar" class="sidebar">
         <div class="tab-panels">
           <section id="tab-designer" class="tab-panel active">
             <p class="panel-hint">
-              Life starts on its own in the primordial pool (the glowing
-              region in the dish) — free amino acids and nucleotides
-              occasionally bond, fold into catalysts, and a lucky
-              self-replicator sealed inside a lipid membrane becomes a
-              protocell that swims out as a real founding lineage, no
-              button required. There's no body-plan editor here — every
-              functional part traces back to a real folded protein (see
-              the Species tab), so there's nothing left to hand-pick.
-              This releases a population from a fresh, fully random gene
-              sequence instead — a way to seed a test population without
-              waiting on a natural bootstrap, not a design tool. Its
-              brain starts random either way — evolution shapes how it
-              actually behaves over the generations that follow.
+              The dish is stocked once, at the start, and after that
+              nothing steps in: if every lineage dies out, it stays dead
+              until you release something new from here. There's no
+              body-plan editor — every functional part traces back to a
+              real folded protein (see the Species tab), so there's
+              nothing to hand-pick. This releases a population from a
+              fresh, fully random gene sequence, guaranteed a viable way
+              to feed itself. Its brain starts random — evolution shapes
+              how it actually behaves over the generations that follow.
             </p>
 
             <label class="field">
@@ -100,10 +96,10 @@
 
           <section id="tab-species" class="tab-panel">
             <p class="panel-hint">
-              One card per species currently alive in the dish — whether it
-              swam out of the pool, was hand-designed, or split off from
-              another lineage once its genes drifted far enough to earn its
-              own name. Tap a card for its full stat star.
+              One card per species currently alive in the dish — whether
+              you released it, or it split off from another lineage once its
+              genes drifted far enough to earn its own name. Tap a card for
+              its full stat star.
             </p>
             <div id="species-list" class="species-list"></div>
           </section>

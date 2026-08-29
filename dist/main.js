@@ -25,6 +25,23 @@ const WORLD_HEIGHT = 1500;
 // translation, and reintroducing it later would cost more than keeping
 // it costs now.
 const POOL_OFFSET = { x: 0, y: 0 };
+// Stage 0 — the primordial pool, the vent, vesicles, and the abiogenesis
+// bootstrap that turned a protocell into a founder — is retired by default:
+// the stage was judged not to earn its complexity. Nothing is deleted.
+// Flip SOUP_DEFAULT, or load the page with ?soup=1, and the whole thing
+// comes back exactly as it was; ?soup=0 forces it off even if the default
+// ever flips back.
+//
+// Worth being precise about what is NOT retired here, because the folder
+// name misleads: src/chem/polymer.ts's foldPeptide and elements.ts's
+// CODON_TABLE are not soup code. They are how a gene becomes a capability
+// at all (decodeProteinGene -> foldPeptide -> catalysisClass ->
+// classPowerCache -> every derive* in genome.ts), and they also drive
+// speciation, founder viability and every organism the renderer draws.
+// Those stay running in both modes.
+const SOUP_DEFAULT = false;
+const soupParam = new URLSearchParams(window.location.search).get('soup');
+const SOUP_ENABLED = soupParam === null ? SOUP_DEFAULT : soupParam === '1';
 function el(id) {
     const found = document.getElementById(id);
     if (!found)
@@ -81,8 +98,43 @@ function confirmDialog(message) {
 // and gets restored here on load if a save exists — a page reload or an
 // accidentally-closed tab doesn't cost you a run.
 const restored = loadGame();
-let origin = restored?.origin ?? Origin.seedPrimordialSoup(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+/** A pool for the current mode. With Stage 0 retired this is a genuinely
+ * empty, vent-less Origin: the constructor is public and separate from the
+ * seedPrimordialSoup factory, so "no soup" costs nothing but an unused
+ * object — and keeps `origin` non-null at every call site, so no null checks
+ * leak through the rest of the file. Since frame() also stops calling
+ * origin.update() in that mode, nothing is ever injected and it stays
+ * empty. */
+function makePool() {
+    const seed = Date.now() & 0xffffffff;
+    return SOUP_ENABLED
+        ? Origin.seedPrimordialSoup(WORLD_WIDTH, WORLD_HEIGHT, seed)
+        : new Origin(WORLD_WIDTH, WORLD_HEIGHT, seed, /* ventEnabled */ false);
+}
+let origin = restored?.origin ?? makePool();
 let world = restored?.world ?? new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+const BOOT_SEED_COUNT = 12;
+/** Stocks a brand-new dish with one starting population.
+ *
+ * With Stage 0 retired, nothing else ever puts life into the world: World's
+ * constructor deliberately builds an empty dish (see its own comment on why
+ * there is no hand-designed starter species), and with no pool to bootstrap
+ * from, "empty" would mean empty forever — the player would open the app to
+ * a dead dish and have to find the Designer tab to start anything.
+ *
+ * Uses exactly the path the Designer's own Release button drives, so a
+ * seeded founder is the same kind of thing a player-released one is:
+ * randomGenome runs ensureEnergyCapable, so it is guaranteed a real route to
+ * feed itself rather than a random loadout that might starve immediately.
+ *
+ * Deliberately only ever called for a *fresh* dish — first boot with no
+ * save, and Reset. Never on extinction: a dish that dies stays dead, which
+ * is the promise the closed loop makes everywhere else. */
+function seedStartingPopulation() {
+    world.addSpeciesFromSequence(randomGenome(world.rng).sequence, BOOT_SEED_COUNT);
+}
+if (!SOUP_ENABLED && restored === null)
+    seedStartingPopulation();
 const canvas = el('sim-canvas');
 const renderer = new Renderer(canvas);
 let paused = false;
@@ -216,7 +268,10 @@ function handleDishTap(sx, sy) {
     // The manual-spawn tool (Chemistry tab, wired further down) hijacks
     // dish taps while armed — placing chemistry takes priority over
     // selecting an individual, and doesn't fall through to hit-testing.
-    if (spawnArmed) {
+    // Unreachable with Stage 0 retired (the tab is hidden, so nothing can arm
+    // it), but gated rather than left as a live branch into a pool that is
+    // never simulated.
+    if (SOUP_ENABLED && spawnArmed) {
         placeManualSpawn(worldPt.x, worldPt.y);
         return;
     }
@@ -283,11 +338,18 @@ function applyPopCap() {
 }
 popCapInput.addEventListener('change', applyPopCap);
 el('btn-reset').addEventListener('click', async () => {
-    const ok = await confirmDialog('Reset the whole world — wipe the pool and every evolved lineage, and start over from scratch?');
+    const ok = await confirmDialog(SOUP_ENABLED
+        ? 'Reset the whole world — wipe the pool and every evolved lineage, and start over from scratch?'
+        : 'Reset the whole world — wipe every evolved lineage and start over from a freshly stocked dish?');
     if (!ok)
         return;
-    origin = Origin.seedPrimordialSoup(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+    origin = makePool();
     world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+    // A reset is a fresh dish, so with Stage 0 retired it needs restocking for
+    // the same reason first boot does — otherwise Reset hands the player a
+    // permanently empty world.
+    if (!SOUP_ENABLED)
+        seedStartingPopulation();
     applyPopCap(); // the cap is a topbar-level setting, not per-world state — a reset shouldn't silently drop it back to the default
     renderer.fitToWorld(world);
     selectIndividual(null);
@@ -336,6 +398,19 @@ document.querySelectorAll('#tab-rail .tab-btn').forEach((btn) => {
         el(`tab-${activeTab}`).classList.add('active');
     });
 });
+// With Stage 0 retired, the Chemistry tab and the pool-only HUD readout are
+// hidden rather than removed from the markup. That is not squeamishness:
+// el() throws on a missing id, and roughly twenty `os-*` lookups (including
+// osRetiredNotice, at module scope) run at startup — deleting the panel
+// while leaving those lookups would be a hard boot crash rather than a
+// quiet no-op. Hiding keeps every id resolvable and makes re-enabling the
+// stage a pure flag flip with nothing to restore.
+if (!SOUP_ENABLED) {
+    document.querySelector('#tab-rail .tab-btn[data-tab="chemistry"]')?.setAttribute('hidden', '');
+    el('tab-chemistry').hidden = true;
+    // By id rather than the hudVesicles const, which is declared further down.
+    el('hud-vesicles').parentElement?.setAttribute('hidden', '');
+}
 // --- designer form (random-seed test tool) ---------------------------------
 // No body-plan fields anymore — there's no organelle catalog left to
 // hand-pick from, every functional part is a real folded protein (see
@@ -559,8 +634,17 @@ function updateHudAndStats() {
     hudTick.textContent = String(live.tick);
     hudPop.textContent = String(live.population);
     hudGen.textContent = String(live.maxGeneration);
-    hudVesicles.textContent = String(origin.vesicles.size);
-    hudPerf.textContent = `${(world.perf.lastTickMs + origin.perf.lastTickMs).toFixed(2)}ms`;
+    // Both of these are pool measurements. With Stage 0 retired the vesicle
+    // row is hidden outright (below) rather than pinned at 0, and the frame
+    // cost is the world's alone — origin.update() never runs, so folding in
+    // its stale lastTickMs would report time nothing spends.
+    if (SOUP_ENABLED) {
+        hudVesicles.textContent = String(origin.vesicles.size);
+        hudPerf.textContent = `${(world.perf.lastTickMs + origin.perf.lastTickMs).toFixed(2)}ms`;
+    }
+    else {
+        hudPerf.textContent = `${world.perf.lastTickMs.toFixed(2)}ms`;
+    }
     sPop.textContent = String(live.population);
     // Distinct lineages actually represented among living individuals right
     // now — world.lineages itself never shrinks (it's the permanent
@@ -632,7 +716,9 @@ function updateSpeciesPanel() {
     if (species.length === 0) {
         const empty = document.createElement('p');
         empty.className = 'species-empty';
-        empty.textContent = "Nothing alive yet — the pool hasn't bootstrapped a founder.";
+        empty.textContent = SOUP_ENABLED
+            ? "Nothing alive yet — the pool hasn't bootstrapped a founder."
+            : 'Nothing alive. The dish does not restock itself — release a new species from the Designer tab to start it again.';
         speciesList.appendChild(empty);
         return;
     }
@@ -1445,19 +1531,29 @@ function frame() {
     if (!paused) {
         const frameStart = performance.now();
         for (let i = 0; i < speed; i++) {
-            if (!stage0Retired) {
+            if (SOUP_ENABLED && !stage0Retired) {
                 origin.update(1);
                 autoBootstrap();
             }
             world.update(1);
-            updateStage0Retirement();
+            // Stage-0 retirement is a property of the pool, so it has nothing to
+            // track when the pool is retired outright. Skipping it is also what
+            // makes extinction final in that mode: its own extinction branch is
+            // the only thing in the app that ever revived a dead dish.
+            if (SOUP_ENABLED)
+                updateStage0Retirement();
             if (performance.now() - frameStart > TICK_TIME_BUDGET_MS)
                 break;
         }
     }
-    renderer.draw(world, origin, POOL_OFFSET, { showVision, highlightId: selectedIndividualId, hidePool: stage0Retired });
+    renderer.draw(world, origin, POOL_OFFSET, {
+        showVision,
+        highlightId: selectedIndividualId,
+        hidePool: !SOUP_ENABLED || stage0Retired,
+    });
     updateHudAndStats();
-    updateChemistryPanel();
+    if (SOUP_ENABLED)
+        updateChemistryPanel();
     refreshSelectionUI();
     updateTree();
     updateSpeciesPanel();

@@ -12,10 +12,15 @@ this repo. `claude/closed-loop-soup` (the branch all that work was
 developed on) is now superseded/redundant now that its tip is on
 default; don't keep developing there.
 
-**This round** added the **gene editor** (see its own section below), on
-`claude/elf-eyes-observation-9cin5d` — cut clean from the default branch
-tip with 0 divergence, which is what the previous handover asked for.
+**This round**, on `claude/elf-eyes-observation-9cin5d` (cut clean from the
+default branch tip with 0 divergence, as the previous handover asked): the
+**gene editor**, then **Stage 0 retired by default** — the primordial pool
+is switched off, not deleted. Both have their own sections below.
 
+
+**Stage 0 is now OFF by default** (see "Stage 0 retired" below). Everything
+listed next is still in the code and comes back in full with `?soup=1` — it
+is switched off, not deleted.
 
 **What's live on default now, in order**: hydrothermal vent
 (continuous matter source + agitation current) → full-dish pool
@@ -1770,6 +1775,136 @@ Apply to the error line rests on inspection.
 `World.cascadeColonyPositions` does that on the next tick — so applying to
 a colony member *while paused* leaves it looking slightly gapped until
 unpause.
+
+## Stage 0 retired: the pool is off, not deleted
+
+User's call: the abiogenesis stage was "a bad call" and should go. Chosen
+form after scoping: **hide it behind a flag rather than delete it**, so the
+decision is one line to reverse.
+
+```ts
+const SOUP_DEFAULT = false;
+const soupParam = new URLSearchParams(window.location.search).get('soup');
+const SOUP_ENABLED = soupParam === null ? SOUP_DEFAULT : soupParam === '1';
+```
+
+`?soup=1` brings the whole stage back; `?soup=0` forces it off even if the
+default ever flips. Keeping both modes reachable is not just politeness to a
+future decision — it is what makes the change testable, and the browser
+suite exercises both.
+
+### The folder name misleads, and it nearly cost the organism model
+
+"Delete `src/chem/`" sounds like it removes the soup. It does not.
+`src/chem/` holds two unrelated things:
+
+- **The abiogenesis stage** — `origin.ts` (2,077 lines), `particle.ts`,
+  `vesicle.ts`, `bridge.ts`. Genuinely severable: nothing in `sim/` imports
+  any of it, and `bridge.ts` has exactly one caller (`autoBootstrap`).
+- **The organism's protein system** — `polymer.ts`'s `foldPeptide` and
+  `elements.ts`'s `CODON_TABLE`. This is not soup code. It is how a gene
+  becomes a capability at all: `decodeProteinGene` → `foldPeptide` →
+  `catalysisClass` → `classPowerCache` → every `derive*` in `genome.ts`. It
+  also drives speciation (`geneticDistance` is 50% protein-class histogram),
+  founder viability, all species statistics, and every visual feature the
+  renderer draws on an organism. Delete it and every virtunism has zero
+  traits.
+
+Hiding sidesteps the question entirely — nothing under `src/chem/` or
+`src/sim/` is edited at all — but it is worth writing down for whoever
+next reads "just delete the chemistry folder" and believes it.
+
+### The dish had to be given a way to start
+
+The blocker found while scoping, and the only genuinely new mechanism this
+round: **`World` has no starter species.** Its own comment says a dish
+starts genuinely empty and life enters either from the pool or from the
+Designer's release button. Switch the pool off with nothing else changed and
+the app opens to an empty dish that stays empty forever.
+
+So `seedStartingPopulation()` stocks a fresh dish with 12 individuals via
+the exact path the Designer's Release button already drives —
+`randomGenome(world.rng)` → `world.addSpeciesFromSequence` — which runs
+`ensureEnergyCapable`, so a seeded founder is guaranteed a real route to
+feed itself rather than a random loadout that starves.
+
+Called from **exactly two places**, both fresh-dish paths: first boot with
+no save, and Reset. Never on extinction.
+
+### Extinction is now final, and says so
+
+`updateStage0Retirement`'s extinction branch was the only thing in the app
+that ever revived a dead dish (it un-latched the pool so abiogenesis got
+another shot). It is soup-only, so with Stage 0 retired it does not run and
+a total extinction is permanent — which is what the README already promises
+everywhere else: *"nothing steps in to save it."* The Species tab's
+empty-state copy was reworded to name the Designer tab instead of the pool,
+so a player who returns to a dead dish is told what happened and what to do.
+
+### Two things the plan got wrong, both caught by verification
+
+**1. `element.hidden` did nothing.** The plan said hide the Chemistry tab
+button and the Vesicles HUD readout with the `hidden` attribute. Playwright
+reported both still fully visible: `#tab-rail .tab-btn` and `.hud > div` are
+both `display: flex`, and an author rule beats the UA stylesheet's
+`[hidden] { display: none }`. The codebase had already hit this once and
+solved it locally (`.confirm-overlay[hidden]`); generalised now to
+`[hidden] { display: none !important; }` near the top of `style.css` so the
+attribute means what it says everywhere.
+
+**2. Turning the vent off does NOT make the pool inert.** The plan asserted
+that constructing `new Origin(..., ventEnabled: false)` meant "nothing is
+ever injected". Measured: a vent-less pool ticked 2,000 times accumulates
+**200 particles**. `Origin.update()` calls `spawnEnergyFlux()`
+(`origin.ts:757`) independently of `spawnVentFlux()` — it is the ambient
+"sunlight" top-up and has nothing to do with the vent.
+
+So the real guarantee is that `frame()` never calls `origin.update()` when
+the soup is off. **That gate is load-bearing, not belt-and-braces**, and the
+headless check now pins the 200-particle number precisely so that a future
+change making a vent-less pool genuinely inert gets noticed rather than
+silently widening what the flag promises. Constructing it vent-less is still
+right (no vent marker, matching intent) — it just isn't the mechanism.
+
+### Save format: unchanged, and verified across the flag
+
+`SAVE_VERSION` stays **8**, and `save.ts` is not touched. Because an
+`Origin` object still exists in both modes, `SaveFile` keeps its `origin`
+field and nothing about the shape changes. Verified end-to-end in the
+browser, in both directions: a run saved with the pool **on** reloads
+cleanly with it **off** (population restored, pool neither drawn nor
+ticked), and flipping back to `?soup=1` restores that pool with its matter
+intact. Deleting the stage instead would have forced a v9 bump and
+invalidated every existing save — the concrete payoff of hiding.
+
+### Verified
+
+Headless: a vent-less pool starts empty and produces no vesicles and no
+founders even when ticked (with the 200-particle finding above pinned); a
+seeded pool has 7,520 particles for contrast; the boot-seed path produces 12
+living founders, all energy-capable, still alive and at generation 13 after
+3,000 ticks; a wiped world stays wiped for 3,000 ticks; and
+`seedStartingPopulation()` has exactly two call sites, both guarded, neither
+referencing population or extinction.
+
+Playwright, both modes: default hides the Chemistry tab, its panel and the
+Vesicles readout, leaves the other four tabs, boots a stocked and running
+dish, and reports a world-only perf number; `?soup=1` restores the tab, the
+populated pool (aa≈2,230), its advancing tick and the eyedropper; `?soup=0`
+forces it off; a canvas hash proves the dish genuinely renders differently
+with and without the pool; Reset restocks rather than emptying. Zero console
+errors in every mode.
+
+All previous suites re-run clean, including the whole gene-editor set
+against the new pre-seeded default.
+
+One test correction worth noting, since it briefly looked like a
+regression: the gene-editor suite's "energy label never exceeds 100%" check
+used a regex window over the whole detail panel, which reaches into the
+*next* row — "Toward reproduction threshold", which `updateLiveVitals`
+deliberately leaves unclamped so a genuinely over-ready individual shows a
+real >100%. The assertion now targets the energy row itself. The code was
+never wrong.
 
 ## Tech constraint from last time
 

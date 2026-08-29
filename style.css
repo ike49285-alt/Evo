@@ -58,6 +58,16 @@
 
 * { box-sizing: border-box; }
 
+/* Nearly every component here sets its own display (usually flex), and an
+   author rule beats the UA stylesheet's [hidden] { display: none } — so
+   `el.hidden = true` silently does nothing on most of this UI. Caught for
+   real: hiding the retired Chemistry tab button and its Vesicles HUD
+   readout left both fully visible, because #tab-rail .tab-btn and
+   .hud > div are both display:flex. This makes the attribute mean what it
+   says everywhere; .confirm-overlay[hidden] further down predates it and is
+   now redundant, but harmless. */
+[hidden] { display: none !important; }
+
 html, body {
   height: 100%;
   margin: 0;
