@@ -2028,12 +2028,19 @@ Tapping still works alongside panning via the dish's own rule: a pointer that
 moved under 6px is a tap, anything more is a drag, and a pinch is never a tap.
 Hit-testing moved to CSS pixels, since the backing store is no longer 1:1.
 
-### The hint is gone
+### The hint, traded down rather than deleted
 
-The Tree tab's `.panel-hint` paragraph was removed outright, which is most of
-the vertical space the panel was spending on prose. Worth knowing: it carried
-the only explanation of what a collapsed tip means. The tab is now
-self-explanatory only to someone who already knows.
+The Tree tab's `.panel-hint` paragraph is gone; a single `.tree-hint` line
+replaces it. Removing it outright reclaimed the space but took with it the
+only explanation of what a collapsed tip is — and zoom/pan is undiscoverable
+on a canvas, so there were now two things the view could not say for itself.
+One line says both: *"Tips are collapsed clades, sized by population. Drag to
+pan, scroll or pinch to zoom in."*
+
+Measured at 390x844: toolbar **90px**, tree canvas **254px** — against the
+~250px the paragraph alone used to take. Fit and Clear are wrapped in a
+`.tree-actions` row so the narrow-viewport rule that turns the toolbar into a
+column doesn't give each button its own line and eat the height back.
 
 ## Shipping Evo as a single-file Artifact
 

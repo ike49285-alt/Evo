@@ -270,9 +270,15 @@
 
           <section id="tab-tree" class="tab-panel">
             <div class="tree-toolbar">
+              <p class="tree-hint">
+                Tips are collapsed clades, sized by population. Drag to pan,
+                scroll or pinch to zoom in.
+              </p>
               <span id="tree-info" class="tree-info"></span>
-              <button id="tree-fit" class="btn" title="Reset the tree view">Fit</button>
-              <button id="tree-clear" class="btn" title="Deselect">Clear</button>
+              <div class="tree-actions">
+                <button id="tree-fit" class="btn" title="Reset the tree view">Fit</button>
+                <button id="tree-clear" class="btn" title="Deselect">Clear</button>
+              </div>
             </div>
             <canvas id="chart-tree"></canvas>
             <div id="tree-detail" class="tree-detail"></div>

@@ -421,6 +421,18 @@ canvas.chart {
 
 .tree-toolbar { display: flex; align-items: flex-start; gap: 12px; flex: 0 0 auto; }
 .tree-toolbar .panel-hint { flex: 1 1 auto; margin: 0; }
+/* Deliberately one line, not the paragraph this replaced: it exists to say
+   the two things the canvas cannot say for itself — that a fat tip is a whole
+   clade rather than one big individual, and that the view pans and zooms at
+   all, which is otherwise undiscoverable. */
+.tree-hint {
+  flex: 1 1 auto; margin: 0;
+  font-size: var(--fs-body); color: var(--text-dim); line-height: 1.4;
+}
+/* Keeps Fit and Clear side by side when the narrow-viewport rule below turns
+   the toolbar into a column — otherwise each button claims its own row and
+   eats the height this hint was trimmed to save. */
+.tree-actions { display: flex; gap: 8px; flex: 0 0 auto; }
 .tree-info { flex: 0 1 260px; font-size: var(--fs-body); color: var(--text-dim); text-align: right; }
 /* flex-basis as a percentage, not a fixed px, so the tree/detail split
    holds proportionally across whatever real height this panel gets (a
