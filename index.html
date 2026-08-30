@@ -270,22 +270,9 @@
 
           <section id="tab-tree" class="tab-panel">
             <div class="tree-toolbar">
-              <p class="panel-hint">
-                Ancestry over time; lines trace parent → child. Small dots are
-                individual virtunisms. Larger ringed dots at the right are
-                whole clades collapsed into one tip, sized by how many living
-                individuals they stand for — without that, a few hundred
-                living virtunisms overlap into an unreadable band exactly where
-                you want to look. A dashed amber edge marks a real speciation
-                event — the individual's genes had drifted far enough to found
-                a new species. Tap any dot — or a virtunism in the dish, on any
-                tab — for its full breakout below: position, age, genome, the
-                works. Tapping a collapsed tip opens its newest living member.
-                Dim dots are extinct, kept only because a still-living
-                descendant traces back through them.
-              </p>
               <span id="tree-info" class="tree-info"></span>
-              <button id="tree-clear" class="btn">Clear</button>
+              <button id="tree-fit" class="btn" title="Reset the tree view">Fit</button>
+              <button id="tree-clear" class="btn" title="Deselect">Clear</button>
             </div>
             <canvas id="chart-tree"></canvas>
             <div id="tree-detail" class="tree-detail"></div>

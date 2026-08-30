@@ -50,6 +50,49 @@ export interface TreeNodeScreenPos {
   radius: number; // hit-test radius, already includes a little slack
 }
 
+/** Pan/zoom for the tree, kept as plain data so main.ts owns the state and
+ * this module stays a pure draw call.
+ *
+ * The centre is normalised (0..1 of the laid-out tree) rather than in pixels,
+ * so resizing the panel — or rotating a phone — doesn't throw the view
+ * somewhere unrelated. */
+export interface TreeCamera {
+  cx: number;
+  cy: number;
+  zoom: number;
+}
+
+export const TREE_ZOOM_MIN = 1;
+export const TREE_ZOOM_MAX = 24;
+
+export function defaultTreeCamera(): TreeCamera {
+  return { cx: 0.5, cy: 0.5, zoom: 1 };
+}
+
+export function panTreeCamera(cam: TreeCamera, dxCss: number, dyCss: number, w: number, h: number): void {
+  cam.cx -= dxCss / Math.max(1, w * cam.zoom);
+  cam.cy -= dyCss / Math.max(1, h * cam.zoom);
+}
+
+/** Zooms about a point, so whatever is under the cursor or pinch stays under
+ * it — the same anchored-zoom the dish canvas uses. */
+export function zoomTreeCameraAt(
+  cam: TreeCamera,
+  sxCss: number,
+  syCss: number,
+  factor: number,
+  w: number,
+  h: number,
+): void {
+  const beforeX = cam.cx + (sxCss / w - 0.5) / cam.zoom;
+  const beforeY = cam.cy + (syCss / h - 0.5) / cam.zoom;
+  cam.zoom = Math.min(TREE_ZOOM_MAX, Math.max(TREE_ZOOM_MIN, cam.zoom * factor));
+  const afterX = cam.cx + (sxCss / w - 0.5) / cam.zoom;
+  const afterY = cam.cy + (syCss / h - 0.5) / cam.zoom;
+  cam.cx += beforeX - afterX;
+  cam.cy += beforeY - afterY;
+}
+
 /**
  * Lays out and draws the tree, time flowing left-to-right (x = birth tick,
  * auto-scaled to whatever span is currently retained) with branches spread
@@ -61,19 +104,36 @@ export interface TreeNodeScreenPos {
 export function drawTree(
   canvas: HTMLCanvasElement,
   nodes: ReadonlyMap<number, TreeNodeData>,
-  opts: { selectedId: number | null },
+  opts: { selectedId: number | null; camera?: TreeCamera },
 ): Map<number, TreeNodeScreenPos> {
   const positions = new Map<number, TreeNodeScreenPos>();
   const ctx = canvas.getContext('2d');
   if (!ctx) return positions;
 
-  const cssWidth = Math.max(1, Math.round(canvas.clientWidth));
-  const cssHeight = Math.max(1, Math.round(canvas.clientHeight));
-  if (canvas.width !== cssWidth) canvas.width = cssWidth;
-  if (canvas.height !== cssHeight) canvas.height = cssHeight;
-  const w = canvas.width;
-  const h = canvas.height;
+  // Match the dish renderer: back the canvas at device resolution and do all
+  // layout in CSS pixels. Without this the tree drew at 1x beside a 2x dish
+  // and looked soft on every phone and retina display.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.round(canvas.clientWidth));
+  const h = Math.max(1, Math.round(canvas.clientHeight));
+  const backingW = Math.max(1, Math.round(w * dpr));
+  const backingH = Math.max(1, Math.round(h * dpr));
+  if (canvas.width !== backingW) canvas.width = backingW;
+  if (canvas.height !== backingH) canvas.height = backingH;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+
+  const cam = opts.camera ?? defaultTreeCamera();
+  /** Layout is computed to fill the panel, then mapped through the camera.
+   * Marker sizes and line widths are deliberately NOT scaled by zoom — the
+   * geometry spreads out so crowded detail separates, while the marks stay a
+   * readable size, the way a map behaves. And because the canvas is redrawn
+   * from the layout every frame rather than being a scaled bitmap, zooming
+   * re-rasterises at native resolution instead of blurring. */
+  const view = (bx: number, by: number): { x: number; y: number } => ({
+    x: ((bx / w - cam.cx) * cam.zoom + 0.5) * w,
+    y: ((by / h - cam.cy) * cam.zoom + 0.5) * h,
+  });
   if (nodes.size === 0) {
     ctx.fillStyle = NEUTRAL;
     ctx.font = '12px sans-serif';
@@ -133,7 +193,10 @@ export function drawTree(
   // ~13px per slot: enough that a weighted tip can be drawn big enough to
   // compare against its neighbours and still carry its population count,
   // which a tighter budget squeezes out entirely.
-  const leafBudget = Math.max(6, Math.min(40, Math.floor(slotHeight / 13)));
+  // Scaled by zoom, which is the real payoff: zooming in spreads the layout
+  // out, so more tips fit at the same on-screen spacing and collapsed clades
+  // genuinely open up rather than just getting further apart.
+  const leafBudget = Math.max(6, Math.min(600, Math.floor((slotHeight * cam.zoom) / 13)));
 
   const frontier: number[] = [...roots];
   for (;;) {
@@ -281,9 +344,9 @@ export function drawTree(
 
   /** Where a node's own branch begins — its birth. Distinct from where its
    * marker is drawn, which for a collapsed tip is the present. */
-  const originX = (id: number): number => xOf(nodes.get(id)?.birthTick ?? 0);
-  const markerX = (id: number): number => xOf(drawnTick(id));
-  const rowY = (id: number): number => yOf(slot.get(id) ?? 0);
+  const originX = (id: number): number => view(xOf(nodes.get(id)?.birthTick ?? 0), 0).x;
+  const markerX = (id: number): number => view(xOf(drawnTick(id)), 0).x;
+  const rowY = (id: number): number => view(0, yOf(slot.get(id) ?? 0)).y;
 
   for (const id of drawn) {
     if (!nodes.has(id)) continue;

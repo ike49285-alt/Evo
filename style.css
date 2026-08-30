@@ -430,8 +430,12 @@ canvas.chart {
 #chart-tree {
   flex: 1 1 55%; width: 100%; min-height: 160px;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
-  cursor: pointer;
+  /* Same reasoning as #sim-canvas above: the tree pans and pinch-zooms now,
+     and without touch-action the browser claims the gesture for page
+     scrolling first, so a drag scrolls the sidebar instead of the tree. */
+  cursor: grab; touch-action: none;
 }
+#chart-tree:active { cursor: grabbing; }
 .specimen-name { font-family: var(--font-serif); color: var(--accent-2); }
 
 /* The full per-individual breakout, appended below the tree canvas --

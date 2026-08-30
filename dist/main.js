@@ -7,7 +7,7 @@ import { CATALYSIS_CLASSES } from './chem/polymer.js';
 import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
 import { drawSparkline, drawScatter, drawRadarChart } from './ui/chart.js';
-import { drawTree, hitTestTree } from './ui/treeview.js';
+import { defaultTreeCamera, drawTree, hitTestTree, panTreeCamera, zoomTreeCameraAt, } from './ui/treeview.js';
 import { loadGame, saveGame } from './save.js';
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 1500;
@@ -1495,19 +1495,94 @@ function refreshSelectionUI() {
         updateLiveVitals(detailRefs, live);
     }
 }
-treeCanvas.addEventListener('click', (e) => {
+// --- tree pan / zoom -------------------------------------------------------
+// Mirrors the dish canvas's own gestures (drag to pan, wheel or pinch to zoom,
+// anchored on the cursor) rather than inventing a second interaction model.
+// The tree is redrawn from its layout every frame, so zooming re-rasterises at
+// native resolution instead of magnifying a bitmap — and the leaf budget grows
+// with zoom, so collapsed clades genuinely open up as you go in.
+const treeCamera = defaultTreeCamera();
+// Pointer id -> last CSS-pixel position, so one finger pans and two pinch.
+const treePointers = new Map();
+let treePinchDist = 0;
+let treeDragMoved = 0;
+const treeCssPoint = (e) => {
     const rect = treeCanvas.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * treeCanvas.width;
-    const y = ((e.clientY - rect.top) / rect.height) * treeCanvas.height;
-    const hit = hitTestTree(treePositions, x, y);
-    if (hit !== null)
-        selectIndividual(hit);
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+};
+const treeSize = () => ({
+    w: Math.max(1, treeCanvas.clientWidth),
+    h: Math.max(1, treeCanvas.clientHeight),
+});
+treeCanvas.addEventListener('pointerdown', (e) => {
+    treeCanvas.setPointerCapture(e.pointerId);
+    treePointers.set(e.pointerId, treeCssPoint(e));
+    if (treePointers.size === 1)
+        treeDragMoved = 0;
+    if (treePointers.size === 2) {
+        const [a, b] = [...treePointers.values()];
+        treePinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+    }
+});
+treeCanvas.addEventListener('pointermove', (e) => {
+    const prev = treePointers.get(e.pointerId);
+    if (!prev)
+        return;
+    const next = treeCssPoint(e);
+    treePointers.set(e.pointerId, next);
+    const { w, h } = treeSize();
+    if (treePointers.size >= 2) {
+        const [a, b] = [...treePointers.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        if (treePinchDist > 0 && dist > 0) {
+            zoomTreeCameraAt(treeCamera, (a.x + b.x) / 2, (a.y + b.y) / 2, dist / treePinchDist, w, h);
+        }
+        treePinchDist = dist;
+        treeDragMoved = Infinity; // a pinch is never a tap
+        return;
+    }
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    treeDragMoved += Math.hypot(dx, dy);
+    panTreeCamera(treeCamera, dx, dy, w, h);
+});
+const endTreePointer = (e) => {
+    treePointers.delete(e.pointerId);
+    if (treePointers.size < 2)
+        treePinchDist = 0;
+};
+treeCanvas.addEventListener('pointerup', (e) => {
+    // A drag that barely moved is a tap. Same threshold the dish uses, so a
+    // slightly shaky tap still selects rather than silently panning.
+    if (treeDragMoved < 6) {
+        const { x, y } = treeCssPoint(e);
+        const hit = hitTestTree(treePositions, x, y);
+        if (hit !== null)
+            selectIndividual(hit);
+    }
+    endTreePointer(e);
+});
+treeCanvas.addEventListener('pointercancel', endTreePointer);
+treeCanvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const { x, y } = treeCssPoint(e);
+    const { w, h } = treeSize();
+    zoomTreeCameraAt(treeCamera, x, y, e.deltaY < 0 ? 1.12 : 1 / 1.12, w, h);
+}, { passive: false });
+el('tree-fit').addEventListener('click', () => {
+    const fresh = defaultTreeCamera();
+    treeCamera.cx = fresh.cx;
+    treeCamera.cy = fresh.cy;
+    treeCamera.zoom = fresh.zoom;
 });
 el('tree-clear').addEventListener('click', () => selectIndividual(null));
 function updateTree() {
     if (activeTab !== 'tree')
         return;
-    treePositions = drawTree(treeCanvas, world.treeNodes, { selectedId: selectedIndividualId });
+    treePositions = drawTree(treeCanvas, world.treeNodes, {
+        selectedId: selectedIndividualId,
+        camera: treeCamera,
+    });
     // The radar canvas is only ever drawn here, gated the same way the
     // tree canvas itself already is — a canvas sizes itself from its real
     // laid-out clientWidth/clientHeight (see drawRadarChart), which is 0

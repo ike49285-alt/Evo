@@ -46,11 +46,10 @@ accepted by the user**:
    signal either way.
 3. **The Tree of Life needs visual work.** Three real defects, all
    confirmed in source and all user-observed, none fixed:
-   a. *Blurry.* `src/render/renderer.ts` handles devicePixelRatio properly
-      for the dish (`dpr = min(devicePixelRatio, 2)`, backing store sized
-      `rect.width * dpr`, then `ctx.scale`). `src/ui/treeview.ts:66-71`
-      and all four canvas routines in `src/ui/chart.ts` do **not** — they
-      set `canvas.width = clientWidth` in CSS pixels. So on any high-DPI
+   a. *Blurry.* **FIXED for the tree** — `treeview.ts` now backs its canvas
+      at device resolution and lays out in CSS pixels, verified at both 1x
+      and 2x. The four canvas routines in `src/ui/chart.ts` still set
+      `canvas.width = clientWidth` in CSS pixels and remain soft. So on any high-DPI
       screen the tree and every chart render at 1x beside a 2x dish. Not a
       one-liner: every routine computes layout from `const w =
       canvas.width`, treating the backing store as the CSS drawing space,
@@ -63,8 +62,9 @@ accepted by the user**:
    b. *Dense trees smear into an unreadable band.* **FIXED** — see
       "Tree of Life: collapsing the present" below. Was ~16x node overlap
       at the canvas floor; now no two marks come closer than ~14px.
-   c. *No labels, no zoom, no pan.* The only text drawn is the
-      `'time (tick) ->'` axis label (`:236`).
+   c. *No labels, no zoom, no pan.* **Zoom and pan FIXED** — drag to pan,
+      wheel or pinch to zoom, anchored on the cursor, with a Fit button.
+      Branch labels are still absent.
    Explicitly **ruled out by user observation**: horizontal node drift.
    The code does rescale x to `minTick`/`maxTick` every frame
    (`treeview.ts:120-134`), which in principle slides every node as the
@@ -1988,6 +1988,52 @@ assignment did not help; nor did re-applying on the next animation frame. It
 is left as the simple assignment with the finding written down rather than
 dressed up as fixed. What matters — the panel keeping its place instead of
 snapping to the top — still holds, and that is what the test now asserts.
+
+## Tree of Life: zoom, pan, and real resolution
+
+User asked to "make the tree voxel (vertex?) based so you can zoom and keep
+resolution", and to drop the Tree tab's explanatory hint to reclaim space.
+
+### Vector-crisp without an SVG rewrite
+
+The instinct behind "vector" is right, but it does not need SVG. The canvas is
+redrawn from the layout every frame, so giving it a camera and redrawing under
+the new transform re-rasterises at native resolution — zooming never magnifies
+a bitmap. Two changes deliver it:
+
+- **devicePixelRatio**, mirroring `renderer.ts`: the backing store is sized
+  `css * min(dpr, 2)` and layout is done in CSS pixels. Verified in-browser at
+  both 1x (359x256 backing for 359x256 css) and 2x (718x512 for 359x256).
+  This was standing caveat 3a.
+- **A camera** (`TreeCamera { cx, cy, zoom }`, normalised centre so resizing or
+  rotating a phone doesn't throw the view somewhere unrelated), with
+  cursor-anchored `zoomTreeCameraAt` and `panTreeCamera` mirroring the dish
+  canvas's own gestures rather than inventing a second interaction model.
+  Drag pans, wheel and pinch zoom, a Fit button resets. This was caveat 3c.
+
+`touch-action: none` on `#chart-tree` is load-bearing exactly as it is on
+`#sim-canvas` — without it the browser claims drags and pinches for page
+scrolling before any handler sees them.
+
+### Zoom buys detail, not magnification
+
+The leaf budget scales with zoom (`slotHeight * zoom / 13`), so going in
+spreads the layout and lets genuinely more tips fit at the same on-screen
+spacing — collapsed clades open up instead of merely drifting apart.
+Measured on the test fixture: **20 marks at 1x, 44 at 2x, 95 at 4x, 192 at
+8x**, monotonic. Marker sizes and line widths are deliberately *not* scaled,
+so marks stay a readable size the way a map behaves.
+
+Tapping still works alongside panning via the dish's own rule: a pointer that
+moved under 6px is a tap, anything more is a drag, and a pinch is never a tap.
+Hit-testing moved to CSS pixels, since the backing store is no longer 1:1.
+
+### The hint is gone
+
+The Tree tab's `.panel-hint` paragraph was removed outright, which is most of
+the vertical space the panel was spending on prose. Worth knowing: it carried
+the only explanation of what a collapsed tip means. The tab is now
+self-explanatory only to someone who already knows.
 
 ## Shipping Evo as a single-file Artifact
 
