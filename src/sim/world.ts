@@ -8,7 +8,7 @@ import {
 } from './virtunism.js';
 import { createFood, Food, getNextFoodId, setNextFoodId } from './food.js';
 import { deriveMaxSpeed, deriveMotorPower, derivePredationPower, deriveStructureMitigation, genomeFromSequence, hasBud } from './genome.js';
-import { decodeCoreTraits, GeneSequence, geneticDistance, mutateGeneSequence } from './genes.js';
+import { decodeCoreTraits, GeneSequence, geneticDistance, genomeDistance, mutateGeneSequence } from './genes.js';
 import { generateSpeciesName } from './speciesNames.js';
 import { NeuralNet } from './nn.js';
 import { Rng } from './rng.js';
@@ -212,6 +212,32 @@ export class World {
   // metric random walk with reference-reset, not a bug — the tuning
   // question is the steady-state cadence, not eliminating recurrence.
   readonly speciationThreshold = 0.34;
+  // How far two genomes may diverge and still interbreed. This replaced a
+  // flat `b.lineageId !== a.lineageId` test, which made reproductive
+  // isolation an administrative fact rather than a biological one: two
+  // individuals were incapable of breeding because a bookkeeping integer
+  // differed, no matter how similar their genomes actually were. Worse, in
+  // combination with the old ordering of checkSpeciation it made speciation
+  // *sterilising* — an individual promoted to a new lineage found itself
+  // the sole member of its species, unable to breed with the siblings it
+  // was genetically all but identical to.
+  //
+  // Deliberately NOT hard-wired to speciationThreshold even though 0.34 is
+  // its swept value. They measure different things — speciation compares an
+  // individual against its lineage's fixed reference sequence, this compares
+  // two living individuals against each other — and the metric's protein
+  // term normalises by a pair-dependent maxTotal (genes.ts), so no bound
+  // relating the two follows from the one holding. Swept independently; see
+  // NOTES.md for the table.
+  readonly mateCompatibilityThreshold = 0.34;
+  // What recombination buys: sexual offspring take point mutations (and
+  // brain-weight mutations) at this fraction of the asexual rate. Without
+  // it, a sexual child paid the full asexual mutational load *on top of*
+  // crossover — both costs, neither benefit — which is not the trade real
+  // biology makes. Composes with the DNA ratchet's own multiplier rather
+  // than overriding it; see mutateGenome. SWEPT — NOTES.md carries the
+  // table, including the arms that failed.
+  readonly sexualPointMutationMultiplier = 0.7;
   // Below this population, a newborn gets real per-tick internal
   // chemistry (Virtunism.runInternalChemistry — stochastic expression
   // noise, not a frozen fold-derived constant); at or above it, a
@@ -783,13 +809,20 @@ export class World {
         threatDist = d / sr;
       }
 
+      // The mate-seeking sense has to agree with the rule that actually
+      // decides matings, or the brain spends its life steering toward
+      // partners it cannot breed with. This used to test lineage equality,
+      // matching handleReproduction's old lineage gate; now that mating is
+      // decided by real divergence, so is this. genomeDistance last, for the
+      // same reason as there — it is the expensive test, and it only runs on
+      // a candidate that has already passed everything cheaper.
       if (
         wantsMate &&
-        other.lineageId === cell.lineageId &&
         other.genome.reproductionMode === 'sexual' &&
         other.canMate() &&
         d < bestMateD &&
-        this.inFOV(cell, other.x, other.y)
+        this.inFOV(cell, other.x, other.y) &&
+        genomeDistance(cell.genome, other.genome) <= this.mateCompatibilityThreshold
       ) {
         bestMateD = d;
         mateDx = dx / sr;
@@ -960,7 +993,17 @@ export class World {
     for (const cell of this.cells) {
       if (!cell.alive || !cell.attachedTo || !cell.attachedTo.alive) continue;
       const parent = cell.attachedTo;
-      const transfer = (parent.energy - cell.energy) * rate * dt;
+      const wanted = (parent.energy - cell.energy) * rate * dt;
+      // Capped by the *receiver's* remaining headroom, in whichever
+      // direction the flow runs. This was an unclamped `+=` on both sides,
+      // which meant a colony could push a small-genomed member above its
+      // own maxEnergy and park it there — the same free ride the
+      // photosynthesis clamp closes, arriving through a different pipe.
+      // The cap is applied to `wanted` before either side is touched so
+      // the transfer stays exactly conserved: whatever the receiver is
+      // allowed to take is precisely what the donor gives up.
+      const headroom = wanted > 0 ? cell.maxEnergy - cell.energy : parent.maxEnergy - parent.energy;
+      const transfer = Math.sign(wanted) * Math.min(Math.abs(wanted), Math.max(0, headroom));
       parent.energy -= transfer;
       cell.energy += transfer;
     }
@@ -1063,35 +1106,103 @@ export class World {
       lineageCounts.set(lineageId, (lineageCounts.get(lineageId) ?? 0) + 1);
     };
 
-    // Sexual pairing: two same-lineage, mating-ready virtunisms produce one
-    // crossed-over child once they're within sensing range of each other —
-    // always ejected as a free virtunism (sexual reproduction is the
-    // "spread to a new lineage" path).
+    // Sexual pairing: two mating-ready, *genetically compatible* virtunisms
+    // produce one crossed-over child once they're within sensing range of
+    // each other — always ejected as a free virtunism (sexual reproduction
+    // is the "spread to a new lineage" path). The pairing is anisogamous:
+    // one of the two funds the offspring at full asexual cost and the other
+    // contributes gametes, so a sexual birth consumes two adults' cooldowns
+    // to produce the one child an asexual birth produces from one. That is
+    // the twofold cost of sex, and it arises from the mechanism rather than
+    // from a penalty constant.
     for (const a of this.cells) {
       if (this.cells.length + newborns.length >= this.maxPopulation) break;
       if (mated.has(a.id) || !a.canMate() || !roomFor(a.lineageId)) continue;
       const meetRange = a.genome.senseRadius;
       const candidates = this.virtunismGrid.queryRadius(a.x, a.y, meetRange);
       for (const b of candidates) {
+        // Ordered cheapest test first, deliberately. The compatibility test
+        // is the most expensive thing in this loop and it sits last, so it
+        // only ever runs on a pair that has already cleared readiness,
+        // range and field of view — a few per tick rather than
+        // O(cells x candidates).
         if (b === a || mated.has(b.id) || !b.canMate()) continue;
-        if (b.lineageId !== a.lineageId) continue;
-        const d = Math.hypot(b.x - a.x, b.y - a.y);
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
         const range = Math.max(a.genome.senseRadius, b.genome.senseRadius);
-        if (d < range && (this.inFOV(a, b.x, b.y) || this.inFOV(b, a.x, a.y))) {
-          this.checkSpeciation(a);
-          const child = mateVirtunisms(a, b, this.rng, richModeNow());
-          newborns.push(child);
-          // Neither parent already having isDna is what makes this the
-          // real transition moment, not just ordinary inheritance — see
-          // crossoverGenome's comment on why two RNA parents can still
-          // produce a DNA child via recombination.
-          const isDnaTransition = child.genome.isDna && !a.genome.isDna && !b.genome.isDna;
-          this.recordBirth(child, a.id, b.id, isDnaTransition);
-          mated.add(a.id);
-          mated.add(b.id);
-          grow(a.lineageId);
-          break;
-        }
+        if (dx * dx + dy * dy >= range * range) continue;
+        if (!this.inFOV(a, b.x, b.y) && !this.inFOV(b, a.x, a.y)) continue;
+        if (genomeDistance(a.genome, b.genome) > this.mateCompatibilityThreshold) continue;
+
+        // Captured before checkSpeciation runs below, and used for both the
+        // child's lineage and the population cap. `roomFor` above was tested
+        // against this same pre-speciation id, so growing a *different*
+        // (post-speciation) counter would leave the two permanently
+        // disagreeing about how full a lineage is.
+        // Role assignment. Both partners have already cleared the one
+        // shared reproduction bar (canMate), so both could have funded a
+        // child; the coin decides which actually does. That is what makes
+        // a mating consume two would-be parents to produce the single
+        // offspring one of them would have produced alone.
+        //
+        // Neither "whoever is `a`" nor "whoever has more energy" would do.
+        // `this.cells` is birth-ordered and the spatial grid preserves
+        // insertion order, so the outer-loop individual is systematically
+        // the *oldest* eligible one in the dish: making it pay would tax age
+        // rather than sex. Picking by energy instead ties the investment to
+        // whoever is currently fittest, which is defensible biology
+        // (condition-dependent sex allocation) but confounds the mutation-
+        // rate sweep by correlating the cost with fitness. A coin between
+        // qualified candidates keeps the cost of sex measuring the cost of
+        // sex. A heritable mating type is the principled long-term answer
+        // and is a much larger change — it needs a sixth core locus, which
+        // shifts every LOCUS index, changes what every existing gene
+        // sequence means, and (since geneticDistance divides its core term
+        // by CORE_GENE_COUNT) would invalidate the swept speciationThreshold
+        // and force a save-format bump. Separate project; noted in NOTES.md
+        // so it isn't quietly re-proposed as a small tweak.
+        const eggIsA = this.rng.bool(0.5);
+        const egg = eggIsA ? a : b;
+        const sperm = eggIsA ? b : a;
+
+        // The child joins the EGG's lineage — maternal inheritance, matching
+        // which parent actually provisions it. Using the outer-loop
+        // individual's lineage instead would look neutral and would not be:
+        // `a` is systematically the oldest eligible cell in the dish (see the
+        // role-assignment note above), so the child's species label would
+        // track age rather than parentage — the same positional bias the coin
+        // exists to avoid.
+        //
+        // Captured before checkSpeciation runs below, and used for the
+        // child's lineage, the tree edge and the population cap alike. The
+        // cap has to be tested against the lineage actually about to grow,
+        // and `roomFor(a.lineageId)` in the outer loop cannot know yet which
+        // of the pair that will be — so it is re-tested here.
+        const childLineageId = egg.lineageId;
+        if (!roomFor(childLineageId)) continue;
+        const child = mateVirtunisms(egg, sperm, this.rng, richModeNow(), childLineageId, this.sexualPointMutationMultiplier);
+        newborns.push(child);
+        // Neither parent already having isDna is what makes this the
+        // real transition moment, not just ordinary inheritance — see
+        // crossoverGenome's comment on why two RNA parents can still
+        // produce a DNA child via recombination.
+        const isDnaTransition = child.genome.isDna && !a.genome.isDna && !b.genome.isDna;
+        this.recordBirth(child, egg.id, sperm.id, isDnaTransition);
+        mated.add(a.id);
+        mated.add(b.id);
+        grow(childLineageId);
+        // After the mating, never before it. Run first (as it was), it
+        // reassigned a.lineageId while the old rule required partners to
+        // share one — so the instant an individual speciated it became
+        // reproductively isolated from the entire population it had just
+        // been a member of, and the only same-lineage partner it would ever
+        // have was the child it was in the middle of conceiving. Both
+        // parents are checked: either may have drifted past threshold, and
+        // there is no reason only the outer-loop one should get to found a
+        // species.
+        this.checkSpeciation(a);
+        this.checkSpeciation(b);
+        break;
       }
     }
 

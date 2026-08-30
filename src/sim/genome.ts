@@ -439,18 +439,36 @@ export function randomGenome(rng: Rng, reproductionMode: ReproductionMode = 'ase
   return genomeFromSequence(sequence, NeuralNet.random(BRAIN_TOPOLOGY, rng));
 }
 
-/** Produces a mutated child genome from a parent. Parent is untouched. */
-export function mutateGenome(parent: Genome, rng: Rng): Genome {
+/** Produces a mutated child genome from a parent. Parent is untouched.
+ *
+ * `extraRateMultiplier` is the sexual-reproduction discount (see
+ * mateVirtunisms). It composes with the DNA ratchet's multiplier rather
+ * than replacing it: the two are independent fidelity mechanisms — one is
+ * a better-copying molecule, the other is recombination substituting for
+ * mutation as a source of variation — and a genome that has earned both
+ * should get both. Deliberately no floor: a sexual DNA lineage really can
+ * end up close to mutationally frozen, and if that turns out to matter it
+ * should show up in the sweep as a measured effect rather than being
+ * pre-empted by a second unswept constant. */
+export function mutateGenome(parent: Genome, rng: Rng, extraRateMultiplier = 1): Genome {
   // A DNA parent's point mutations happen at a real, deliberately reduced
   // rate — see DNA_MUTATION_RATE_MULTIPLIER's comment. isDna itself is
   // passed through as inheritedIsDna: the ratchet only ever moves toward
   // DNA, ordinary mutation can't revert it.
-  const rateMultiplier = parent.isDna ? DNA_MUTATION_RATE_MULTIPLIER : 1;
+  const rateMultiplier = (parent.isDna ? DNA_MUTATION_RATE_MULTIPLIER : 1) * extraRateMultiplier;
   const sequence = mutateGeneSequence(parent.sequence, rng, rateMultiplier);
   // Strength scaled down to match the brain's Xavier-init weight range
   // (roughly ±0.2-0.3) rather than the old flat [-1,1] one — mutation
   // noise should perturb a weight, not routinely swamp it.
-  return genomeFromSequence(sequence, parent.brain.mutate(rng, 0.12, 0.15), parent.isDna);
+  //
+  // The discount reaches the brain's *rate* too, and has to: most of the
+  // behavioural phenotype lives in these weights, and NeuralNet.crossover
+  // has just recombined them. Scaling only the gene sequence would leave
+  // sexual offspring still paying full mutational load across the part of
+  // the genome that matters most, which is exactly the double-charge this
+  // parameter exists to end. Strength is left alone — a mutation should be
+  // rarer, not weaker.
+  return genomeFromSequence(sequence, parent.brain.mutate(rng, 0.12 * extraRateMultiplier, 0.15), parent.isDna);
 }
 
 /** Crossover of two same-lineage parents (for sexual reproduction). Core

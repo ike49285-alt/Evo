@@ -1400,28 +1400,42 @@ function updateLiveVitals(refs, cell) {
     const ageRatio = cell.age / cell.genome.maxAge;
     refs.ageBarLabel.textContent = `${Math.floor(cell.age)} / ${Math.round(cell.genome.maxAge)} ticks (${pctLabel(ageRatio)})`;
     refs.ageBarFill.style.width = fillWidth(ageRatio);
-    // Energy is clamped to maxEnergy on the way *up* by eat(), and on the way
-    // *down* by Virtunism.replaceGenome (the gene editor can shrink maxEnergy
-    // out from under a cell that's already full), so this ratio stays <= 1.
+    // Energy is clamped to maxEnergy on the way *up* by eat() and
+    // photosynthesize(), by World.diffuseColonyEnergy on the colony transfer
+    // path, and at every birth site by settleNewborn; and on the way *down*
+    // by Virtunism.replaceGenome (the gene editor can shrink maxEnergy out
+    // from under a cell that's already full). So this ratio stays <= 1.
+    //
+    // It did not used to. Three of those five clamps are new: photosynthesis
+    // income, colony diffusion and newborn provisioning were all unclamped,
+    // and this comment was simply false — measured at 7.1-36.5% of samples
+    // over the ceiling depending on seed, peaking at 7.5x.
     const energyRatio = cell.energy / cell.maxEnergy;
     refs.energyBarLabel.textContent = `${cell.energy.toFixed(1)} / ${cell.maxEnergy.toFixed(1)} (${pctLabel(energyRatio)})`;
     refs.energyBarFill.style.width = fillWidth(energyRatio);
-    // Real percentage toward whichever threshold this individual's own
-    // reproduction mode actually uses (Virtunism.reproduceThreshold for
-    // asexual, .matingThreshold for sexual) — not clamped in the label, so
-    // a genuinely over-ready individual (energy above threshold, still on
-    // cooldown) shows a real >100%, only the bar's fill width is capped.
-    const reproThreshold = cell.genome.reproductionMode === 'sexual' ? cell.matingThreshold : cell.reproduceThreshold;
-    const reproRatio = cell.energy / reproThreshold;
+    // Real percentage toward the reproduction bar. There is one bar now,
+    // shared by both modes — see Virtunism.canMate on why sexual no longer
+    // gets a cheaper one. Not clamped in the label, so a genuinely over-ready
+    // individual (energy above threshold, still on cooldown) shows a real
+    // >100%; only the bar's fill width is capped. The bar also rises with age
+    // past maturity (senescence), so a healthy old cell can drift back below
+    // 100% without losing any energy.
+    const isSexual = cell.genome.reproductionMode === 'sexual';
+    const reproRatio = cell.energy / cell.effectiveReproduceThreshold;
     refs.reproBarLabel.textContent = pctLabel(reproRatio);
     refs.reproBarFill.style.width = fillWidth(reproRatio);
-    const ready = cell.genome.reproductionMode === 'sexual' ? cell.canMate() : cell.canReproduce();
+    const ready = isSexual ? cell.canMate() : cell.canReproduce();
+    const immatureFor = Math.ceil(cell.maturityAge - cell.age);
     refs.reproStatusEl.textContent =
-        cell.reproCooldown > 0
-            ? `On cooldown: ${Math.ceil(cell.reproCooldown)} ticks remaining.`
-            : ready
-                ? 'Ready to reproduce right now.'
-                : 'Still building up energy.';
+        immatureFor > 0
+            ? `Immature: ${immatureFor} ticks to maturity.`
+            : cell.reproCooldown > 0
+                ? `On cooldown: ${Math.ceil(cell.reproCooldown)} ticks remaining.`
+                : ready
+                    ? isSexual
+                        ? 'Ready to mate — needs a compatible partner in range.'
+                        : 'Ready to reproduce right now.'
+                    : 'Still building up energy.';
 }
 /** The full-breakout panel's single entry point — called on every
  * selection change (tap/click/Clear, synchronously via selectIndividual)

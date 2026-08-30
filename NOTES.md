@@ -15,7 +15,24 @@ default; don't keep developing there.
 **This round**, on `claude/elf-eyes-observation-9cin5d` (cut clean from the
 default branch tip with 0 divergence, as the previous handover asked): the
 **gene editor**, then **Stage 0 retired by default** — the primordial pool
-is switched off, not deleted. Both have their own sections below.
+is switched off, not deleted — then the **Tree of Life** made legible and
+zoomable, and finally the **reproduction overhaul**. Each has its own
+section below.
+
+**The reproduction overhaul is the largest behavioural change on this
+branch**, and the one most worth reading before touching the sim. In short:
+sexual reproduction used to be energetically *cheaper* than asexual and so
+it swept; it now carries a real twofold cost, isolation is decided by real
+genetic divergence rather than by a lineage label, three unclamped energy
+inlets are closed, and reproduction has a maturity age and senescence. Two
+of that section's findings correct earlier notes in this file: **`maxAge`
+was never a neutral locus** (a 5,000-tick window was too short to see it —
+over 20,000 ticks it climbed 1291 → 1716 unopposed), and **photosynthesis
+was not the only unclamped energy path**, nor even the main one in every
+seed. It also records a *failed* design in full, because it looked correct
+and the assay that caught it is the one worth keeping: always run the
+invasion assay in **both** directions, and always against a drift-only
+null.
 
 
 **Stage 0 is now OFF by default** (see "Stage 0 retired" below). Everything
@@ -2112,6 +2129,411 @@ survives a reload via localStorage; Reset works through the in-page confirm
 overlay (the app avoids `window.confirm` precisely because it ships
 sandboxed — this verifies that decision end to end); portrait 390x844 holds
 with no horizontal scroll. Zero console errors.
+
+## Reproduction: giving sex a real cost and a real payoff
+
+Asked to explain what the reproduction system was actually doing, where it
+departed from biology, and how to fix it. The investigation turned up
+something the code did not intend, and it drove everything below.
+
+### The problem: sexual reproduction was *cheaper* than asexual
+
+With two equal parents at energy `E`:
+
+| | asexual | sexual (old) |
+|---|---|---|
+| parent pays | **50%** (`spawnChildGenome`) | **25%** each |
+| child receives | 0.5E | 0.25E + 0.25E = **0.5E** |
+| readiness gate | `maxEnergy * 0.42` | `maxEnergy * **0.3**` |
+| cooldown | 50 | 55 |
+
+Identical child, but each sexual parent kept 0.75E instead of 0.5E and
+requalified at a lower bar. `matingThreshold`'s own comment said the lower
+gate existed so sex would not be *"strictly worse than asexual"* — it
+overshot into strictly better. Real biology has the **twofold cost of sex**;
+this had it at a discount, so sex swept.
+
+**The measurement that made this legible was the neutral null**, which no
+earlier measurement had. The `reproductionMode` locus mutates recurrently,
+so some standing frequency of "sexual" exists with no selection at all —
+which means a raw "24% sexual after 4,000 ticks" is uninterpretable on its
+own. Running the identical world with the sexual path disabled
+(`mateCompatibilityThreshold` below zero, which no pair can satisfy) gives
+that drift-only baseline: **5.1%**. Against it, the competition arms ran
+**76–92%**. Sex was not drifting up. It was winning.
+
+A methodological trap worth recording, because it cost a full run: the
+obvious way to force founders asexual — slam every symbol at the
+`reproductionMode` locus to its lowest value — produces a locus that is
+*unreachable*, not merely asexual. `decodeUnit` is sum-based over 10
+symbols of index 0..3, so the threshold is a sum of 15 out of 30 and an
+all-lowest locus sits ~15 net point mutations away from ever flipping.
+Every arm read 0% sexual and looked like a broken simulation. A random
+genome's locus sits at an expected sum of 15, i.e. right at the boundary,
+so sum 14 (asexual) / 15 (sexual) is what "a random founder of this mode"
+actually means.
+
+### Four more departures, all confirmed in source and measured
+
+- **Recombination added mutational load instead of substituting for it.**
+  `mateVirtunisms` was `mutateGenome(crossoverGenome(a, b))` — sexual
+  offspring took the full asexual point-mutation pass *on top of*
+  recombination. Both costs, neither benefit.
+- **Species was a reproductive barrier by fiat** — `b.lineageId !== a.lineageId`.
+  Two individuals could be genetically identical and still unable to breed
+  because a bookkeeping integer differed. Worse, `checkSpeciation(a)` fired
+  immediately *before* mating and reassigned `a.lineageId`, so **speciation
+  was sterilising**: the moment an individual was promoted to a new lineage
+  it became reproductively isolated from the entire population it had just
+  been part of, and the only same-lineage partner it would ever have was
+  the child it was in the middle of conceiving.
+- **Energy had three unclamped inlets, not one.** `eat()` clamped to
+  `maxEnergy`; `photosynthesize()` did not, `World.diffuseColonyEnergy`
+  did not, and neither birth site clamped a newborn against *its own*
+  (freshly mutated, possibly smaller) ceiling. Measured over 8,000 ticks:
+  **6.1% / 9.9% / 36.5% of samples above their own ceiling** on seeds
+  42 / 7 / 11, peaking at **7.5x**. Seed 11 is the instructive one — it
+  hit 36.5% and 7.5x with *zero photosynthesisers alive in the dish*, so
+  photosynthesis was not merely "the main leak", it was not the leak there
+  at all. `Virtunism.replaceGenome`'s comment had already described this
+  exact failure mode for the gene editor; it just had not been applied at
+  the places the simulation reaches it from every tick.
+- **No maturity, no senescence.** A newborn could breed on its next tick,
+  fecundity was flat to `maxAge`, and then death was a step function. The
+  measured consequence: the `maxAge` locus was **neutral** — mean 1561 →
+  1564 over 5,000 ticks — because longevity cost nothing and most
+  individuals starved (mean age at death ~500–970) long before the ceiling
+  mattered.
+
+### What changed
+
+**1. Anisogamy — the twofold cost, expressed mechanically.** One partner
+takes the egg role and pays exactly what an asexual parent pays: half its
+body, which becomes the child's starting energy. The other pays a 5% token
+share, burned rather than handed over (real sperm contributes essentially no
+material), so a sexual child is provisioned identically to an asexual one.
+Both cooldowns are now **50, the same as asexual's** — that equality is
+load-bearing, not incidental: it leaves exactly two differences between the
+strategies (a sexual birth occupies two bodies and needs a partner in range;
+a sexual child gets recombination and reduced mutational load), so the later
+sweep has one free parameter to explain the balance instead of four. Leaving
+sex on 55 would have stacked a silent 10% fecundity penalty on top of the
+twofold cost and the sweep would have misattributed it to the mutation lever.
+
+The population-level effect is the point: with N ready individuals, asexual
+yields N offspring per cycle and sexual yields N/2, because each birth ties
+up two adults. That halving *is* the twofold cost, and it falls out of the
+mechanism rather than out of a tuned penalty constant.
+
+**Role selection is a coin, and the two obvious alternatives are both
+wrong.** Both partners have already cleared the one shared reproduction bar
+— the same `maxEnergy * 0.42` an asexual parent clears — so both *could*
+have funded a child and the coin only decides which actually does. There is
+exactly one definition of "can afford to produce an offspring" in the
+simulation and sex cannot buy one cheaper. (This is the second version of
+this rule; the first put a cheaper bar on the token-paying partner and
+failed. See the swept table below.) Picking the
+*positional* parent looks neutral and is not: `World.cells` is birth-ordered
+and the spatial grid preserves insertion order, so the outer-loop individual
+is systematically the oldest eligible one in the dish, and making it pay
+would tax age rather than sex. Picking the *higher-energy* parent is
+defensible biology (condition-dependent sex allocation) but ties the
+investment to whoever is currently fittest, which confounds the mutation
+sweep by correlating the cost of sex with fitness. A coin keeps the cost of
+sex measuring the cost of sex.
+
+**Deliberately not built: heritable mating types.** That is the principled
+long-term answer — real sexes, evolved rather than assigned per-mating — but
+it needs a sixth core locus, which shifts every `LOCUS` index, changes what
+every existing gene sequence means, and (because `geneticDistance` divides
+its core term by `CORE_GENE_COUNT`) would **invalidate the swept
+`speciationThreshold`** and force a save-format bump. It is a separate
+project, recorded here so it is not re-proposed as a small tweak.
+
+**2. Recombination now pays for itself.** `mutateGenome` gained an optional
+`extraRateMultiplier`, threaded from `World.sexualPointMutationMultiplier`
+through `mateVirtunisms`, so sexual offspring trade mutational load for
+recombination instead of paying both.
+
+It composes *multiplicatively* with the DNA ratchet rather than replacing
+it — the two are independent fidelity mechanisms (a better-copying molecule
+versus recombination substituting for mutation as a source of variation) and
+a genome that earned both should get both. Deliberately no floor: a sexual
+DNA lineage really can approach mutational freeze, and if that matters it
+should surface in the sweep as a measured effect rather than be pre-empted
+by a second unswept constant.
+
+It reaches the **brain's mutation rate too**, and had to. Most of the
+behavioural phenotype lives in those weights and `NeuralNet.crossover` has
+just recombined them; scaling only the gene sequence would leave sexual
+offspring paying full mutational load across the part of the genome that
+matters most — exactly the double-charge the parameter exists to end.
+Strength is untouched: a mutation should become rarer, not weaker.
+
+Verified linear, on the five fixed-position **core** genes only. The protein
+run is the wrong ruler — duplication/deletion/inversion shift gene positions,
+so a positional diff there scores one structural event as dozens of
+substitutions, and a naive measurement read 39.3 / 20.6 / **19.2** at
+multipliers 1.0 / 0.5 / 0.25, which looks like the lever saturating and is
+really just structural noise. On core genes the ratio to expectation is flat
+at 0.618 / 0.588 / 0.619 / 0.645 / 0.640 / 0.638 across multipliers
+1.0 → 0.15. That constant offset is itself a confirmation: 51.3% of random
+genomes are `isDna`, so the predicted composition is
+`0.487 x 1 + 0.513 x 0.25 = 0.615`. Measured 0.618. The ratchet composes
+exactly as designed.
+
+**3. Reproductive isolation is emergent.** The lineage-label test is gone,
+replaced by a real divergence test against `World.mateCompatibilityThreshold`.
+`checkSpeciation` now runs *after* the mating (and on both parents, not just
+the outer-loop one), and the child's lineage and the population cap both use
+the pre-speciation id — those two had silently disagreed, since `roomFor`
+tested the old id and `grow` incremented the new one.
+
+Efficiency was the obstacle and it is solved. `geneticDistance` re-translates
+and re-folds every protein of both genomes, which is fine once per individual
+against a fixed reference and far too expensive per candidate pair per tick.
+`Genome.classCountCache` already holds the exact tally the folding builds, so
+`genomeDistance` reads it instead: **20,100 pairs, bit-identical to
+`geneticDistance` on every one, 41x faster**. Both entry points route through
+one shared kernel deliberately — the mating rule and the speciation rule read
+the same threshold value, and a change that reached one but not the other
+would make individuals that count as one species unable to interbreed, or the
+reverse. The new test is also placed **last** in the candidate loop, after
+readiness, range and field of view, so the most expensive check runs on a few
+pairs per tick rather than O(cells x candidates).
+
+**4. Three energy clamps.** `photosynthesize` and `diffuseColonyEnergy` now
+clamp like `eat` does (diffusion caps against the *receiver's* headroom
+before either side is touched, so the transfer stays exactly conserved), and
+every birth site runs `settleNewborn`. Result: **0.00% of samples above
+ceiling, peak exactly 1.000x**, against 6.1–36.5% and 7.5x before, with
+population essentially unmoved (196 → 196, 195 → 196, 187 → 189). No
+carrying-capacity collapse, so the more elaborate "redistribute unabsorbed
+light by excluding at-cap cells from `totalDemand`" variant was measured for
+and not needed.
+
+**5. Maturity and senescence.** Reproduction now requires an age past
+`maturityAge`, expressed as a fraction of the individual's *own* `maxAge` so
+longevity costs something — buying a later death with a later first offspring
+is the r/K trade-off, and it is what gives the locus anything to be selected
+on. Past maturity the energy bar rises with age (declining fecundity rather
+than a second mortality curve, feeding the existing ledger instead of running
+alongside it).
+
+The keying is the subtle part and the obvious choice is wrong. Scale the
+decline by `age / maxAge` and a long-lived individual senesces more *slowly*
+— `maxAge` would then buy both a later death and a gentler decline, a pure
+win again, defeating the trade-off maturity exists to create. So the **onset**
+scales with `maxAge` (via `maturityAge`, the reward for longevity) while the
+**rate** past onset is in absolute ticks. A long-lived individual earns a
+later start to its decline; it does not also earn a shallower one.
+
+### The sweeps (including everything that failed)
+
+Following the `speciationThreshold` precedent above: swept, not chosen, and
+the arms that failed are recorded because they are the reason the final
+values are what they are.
+
+**Life history — `MATURITY_FRACTION` x `SENESCENCE_STRENGTH`.** Measured with
+the sexual path disabled, so this isolates the life-history change from
+anything to do with sex. 5 seeds x 4,000 ticks; pre-change baseline was
+mean pop ~208, 0 extinct.
+
+| maturity | senescence | mean pop | extinct | mean maxAge | max gen |
+|---|---|---|---|---|---|
+| 0.02 | 0    | 208 | 0/5 | 1394 | 11 |
+| 0.02 | 0.25 | 208 | 0/5 | 1375 | 15 |
+| 0.02 | 0.5  | 198 | 0/5 | 1381 | 21 |
+| 0.02 | 1.0  | **82**  | **2/5** | 1452 | 32 |
+| 0.05 | 0    | 208 | 0/5 | 1393 | 10 |
+| 0.05 | 0.25 | 208 | 0/5 | 1373 | 12 |
+| 0.05 | 0.5  | 207 | 0/5 | 1417 | 18 |
+| 0.05 | 1.0  | **62**  | **3/5** | 1429 | 26 |
+| 0.10 | 0    | 208 | 0/5 | 1435 | 7  |
+| 0.10 | 0.25 | 208 | 0/5 | 1397 | 10 |
+| 0.10 | 0.5  | 203 | 0/5 | 1416 | 15 |
+| 0.10 | 1.0  | **130** | **1/5** | 1429 | 22 |
+
+Senescence at 1.0 is lethal at every maturity level — the bar rises without
+bound, so a long-lived individual eventually needs more energy than its own
+`maxEnergy` and is sterile for life. **0.5 is the strongest setting that
+keeps every seed alive at full population**, and 0.10 is the largest maturity
+delay that costs nothing. Settled on **0.10 / 0.5**.
+
+Note the `max gen` column, which is the mechanism working: senescence forces
+turnover, so generations advance roughly 2x faster at 0.5 than at 0. Maturity
+pushes the other way, as it should.
+
+**The failed anisogamy design, recorded because it looked right.** The first
+implementation kept the original cheap `matingThreshold` (0.3) for the
+token-paying partner and put the full 0.42 bar only on the investing one.
+Swept across six mutation multipliers x 5 seeds:
+
+| mult | A→S | MIX | S→A |
+|---|---|---|---|
+| 1.0  | 41% | 65% | **97%** |
+| 0.7  | 46% | 70% | **96%** |
+| 0.5  | 67% | 78% | **98%** |
+| 0.35 | 34% | 57% | **97%** |
+| 0.25 | 49% | 78% | **95%** |
+| 0.15 | 61% | 61% | **99%** |
+
+Two things are wrong here and both are visible only because the assays were
+run in both directions. **S→A is pinned at 95–99% in every arm**: asexual
+could never invade a sexual population, at any mutation rate. And the A→S
+column is non-monotonic noise (41, 46, 67, 34, 49, 61) — the lever was doing
+nothing measurable, because a much larger effect was swamping it.
+
+That effect was the cheap gate. A cell at 35% of its ceiling cannot reproduce
+asexually at all, but under the low bar it could father a child for 5%. The
+strategy with the lower bar simply reproduces more often, and no amount of
+tuning the *other* side of the trade could correct it. Unifying the bar — both
+partners must clear the same 0.42 an asexual clears, then a coin decides which
+pays — is what fixed it, and it is the reason `matingThreshold` no longer
+exists.
+
+**The recombination discount — `sexualPointMutationMultiplier`.** With the bar
+unified, the lever finally has a measurable direction. 8 seeds x 4,000 ticks,
+three assays; the drift-only null is **5%**:
+
+| mult | A→S | MIX (mean / sex-majority seeds) | S→A |
+|---|---|---|---|
+| 1.0 (no discount) | 28% | 45%  ·  5/8 | 76% |
+| **0.7** | **42%** | **57%  ·  5/8** | **77%** |
+| 0.5 | 30% | 60%  ·  5/8 | 77% |
+
+One caveat on reading this table: the 1.0 and 0.5 rows were measured just
+before a bookkeeping refinement — the child now joins the *egg's* lineage
+rather than the outer-loop parent's (see `handleReproduction`). Re-measuring
+the 0.7 row afterwards left A→S and S→A bit-identical and moved MIX from 52%
+to 57%. So that refinement is worth about five points on one assay and
+nothing on the other two; the 0.7 row above is the post-change measurement,
+the other two are not, and the gap is smaller than the seed noise discussed
+next.
+
+**Settled on 0.7**, and the honest reading of this table matters more than the
+pick. MIX is the cleanest fitness readout (two equal lineages, one forced each
+way) and its mean rises monotonically as the discount deepens — 45 → 52 → 60 —
+so the lever has a real direction. But A→S (28/42/30) and S→A (76/77/77) sit
+inside seed noise across the whole range. **The defensible claim is the
+direction, not the precision of the value.** 0.7 is chosen because it sits
+closest to an even split on MIX: 57% mean, 5 of 8 seeds each way.
+
+Against the four criteria set before the sweep:
+
+- **Neither mode unconditionally dominant** — met. MIX splits 5/8 at the
+  chosen value, and per-seed outcomes span 3%–97%. The outcome is contingent
+  on the ecology that evolves, not predetermined.
+- **Bidirectional invasibility** — met. Sex invades asexual founders to 42%
+  against a 5% null; asexual invades a sexual population to ~23% on average
+  and wins outright in seed 808 (0% sexual remaining).
+- **No arm drives extinction** — met, at every value.
+- **Sex favoured under higher mutational load** — **not tested.** The
+  orthogonal `POINT_MUTATION_RATE` sweep that would make this a Muller's-
+  ratchet signature rather than a fitted number was scoped and not run. It is
+  the single most valuable follow-up here.
+
+Also worth stating plainly: at multiplier 1.0 — the discount fully disabled —
+sex still invades to 28% against a 5% null. Recombination is paying for
+itself in this model *before* any mutation-rate concession, which is the
+Fisher–Muller effect rather than the mutational-load one.
+
+### maxAge: the finding corrected itself
+
+The stated success criterion for maturity + senescence was "the `maxAge` locus
+should stop being neutral", on the basis of an earlier measurement showing
+mean 1561 → 1564 over 5,000 ticks. **That premise was wrong, and the 20,000-
+tick measurement is the reason.** Same protocol, 3 seeds, before and after:
+
+| | tick 0 | 5,000 | 10,000 | 20,000 |
+|---|---|---|---|---|
+| before | 1291 | 1307 | 1390 | **1716** (+426) |
+| after  | 1291 | 1335 | 1385 | **1443** (+153) |
+
+`maxAge` was never neutral. It was under **unopposed upward selection** —
+longevity bought more lifetime reproduction and cost nothing — and a
+5,000-tick window was simply too short to see it. Both the 5,000-tick
+before/after readings here (+32 and +8) are inside that same blind spot and
+say nothing on their own.
+
+What maturity actually does is supply the missing opposing force: scaling the
+immature period to the individual's *own* maxAge means a long life is bought
+with a late first offspring. The ratchet is damped to about a third of its
+unopposed rate rather than eliminated, which is the right outcome — longevity
+should still pay, it should just pay for itself.
+
+The general lesson is worth keeping: **do not call a locus in this model
+neutral off a 5,000-tick window.** That is roughly 10–15 generations.
+
+### Verified
+
+- **Distance equivalence** — `genomeDistance` vs `geneticDistance` over
+  **20,100 genome pairs: bit-identical on every one** (worst |delta| 0.000e+0),
+  self-distance exactly 0, symmetric. **41x faster** (2,110ms → 51ms over
+  20,000 pair evaluations).
+- **Energy ledger of one mating** — egg pays exactly half, sperm exactly 5%,
+  child receives exactly `min(half the egg's energy, the child's own
+  maxEnergy)`. Asexual parity confirmed against the same numbers.
+- **Cooldowns** — both parents 50, equal to asexual.
+- **No aliasing** — 0 shared `Gene` array objects between a child and either
+  parent, across multipliers 1.0 / 0.5 / 0.15 / **0.0**. This one matters:
+  `crossoverGeneSequence` splices parent gene arrays *by reference*, and it is
+  only safe because `pointMutateGene`'s `gene.map` always allocates. Anyone
+  "optimising" a zero-multiplier path by skipping `mutateGeneSequence` would
+  hand the child live references into both parents' genomes, and the gene
+  editor's in-place draft writes would then corrupt living cells.
+- **Substitution rate is linear in the multiplier** — measured on the five
+  fixed-position core genes (see above for why the protein run is the wrong
+  ruler). Ratio to expectation flat at 0.618 / 0.588 / 0.619 / 0.645 / 0.640 /
+  0.638 across multipliers 1.0 → 0.15, and that 0.615-ish constant is itself
+  the DNA ratchet composing exactly as designed: 51.3% of random genomes are
+  `isDna`, predicting `0.487 x 1 + 0.513 x 0.25 = 0.615`.
+- **Energy ceilings** — 0.00% of samples above ceiling, peak exactly 1.000x,
+  3 seeds x 8,000 ticks, against 6.1–36.5% and 7.5x before.
+- **Isolation is emergent** — two separately-registered lineages built from
+  the *same* sequence (distinct `lineageId`, genetic distance 0) now
+  interbreed. Under the old rule that was impossible by construction.
+- **Performance** — 5.698 → 5.797 ms/tick at population 208, a **1.7% cost**
+  for the new compatibility test. The ordering (readiness → range → FOV →
+  distance last) is what keeps it there; the distance test only ever runs on
+  a pair that has cleared everything cheaper.
+- **Save format unchanged** — no new persisted field, `save_roundtrip_check`
+  passes, and **SAVE_VERSION deliberately not bumped**. The v8 precedent for a
+  no-shape-change bump was that serialized state would *override* fresh
+  construction forever (the pool's own width/height). Nothing here does that:
+  a resumed v8 world's over-cap cells are pulled down by the new clamps on
+  their next tick, and maturity and senescence read the already-serialized
+  `age`. The resumed world converges on the new rules immediately instead of
+  diverging silently.
+- **Suites green** — `regress`, `ui_check`, `ui_check2`, `soup_ui_check`,
+  `tree_check`, `save_roundtrip_check`, `validator_check`, `alias_check`,
+  `apply_check`, `tsc` clean, and the artifact rebuilt (21 modules, 547.9 KB)
+  and re-verified standalone from `file://`.
+- **Population under the full change set** — 174 / 191 / 177 over 8,000 ticks
+  on seeds 7 / 11 / 42, against 196 / 196 / 189 with the clamps alone. The
+  ~8% drop is the twofold cost and the maturity delay doing exactly what they
+  are supposed to: fewer births per tick. No seed goes extinct, in any arm of
+  any sweep run this round.
+
+### Not done, deliberately
+
+- **Heritable mating types.** Real, evolved sexes rather than a coin flip per
+  mating. It needs a sixth core locus, which shifts every `LOCUS` index,
+  changes the meaning of every existing gene sequence, invalidates the swept
+  `speciationThreshold` (`geneticDistance` divides its core term by
+  `CORE_GENE_COUNT`), and forces a save-format bump. Separate project — and
+  it is the change that would let the twofold cost emerge from a sex *ratio*
+  instead of being imposed at the pairing gate.
+- **The mutational-load sweep** (criterion four above).
+- **A pre-existing asymmetry in the mating loop, found while rewriting it and
+  left alone:** the grid query uses `a.genome.senseRadius` while the range
+  test uses `max(a.senseRadius, b.senseRadius)`. A long-sighted `b` can pass
+  the range test but never be returned by the query, so mating is biased
+  toward the outer-loop individual's sense radius. Out of scope here, but it
+  is real.
+- **`maxLineageShare` still caps by lineage *label* while mating is now by
+  *genotype*.** Two genetically identical individuals in different lineage
+  labels interbreed freely but are population-capped separately.
 
 ## Tech constraint from last time
 

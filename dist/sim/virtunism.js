@@ -1,6 +1,35 @@
 import { crossoverGenome, deriveCanEat, deriveEnergyCapture, deriveEnergyCapturePower, deriveMaxSpeed, deriveMotorPower, derivePredationPower, deriveSensorCount, deriveStructureBonus, deriveStructurePower, deriveTurnRate, deserializeGenome, mutateGenome, serializeGenome, } from './genome.js';
 import { Rng } from './rng.js';
 let nextId = 1;
+// --- life history ----------------------------------------------------------
+// All three are SWEPT, not chosen — see NOTES.md for the tables, including
+// the arms that failed. The precedent is speciationThreshold, which this
+// project settled the same way.
+/** Fraction of an individual's own maxAge spent immature. At
+ * TRAIT_LIMITS.maxAge's {400, 2400} this is 40-240 ticks of adolescence
+ * against a 50-tick reproduction cooldown, so it is a real delay without
+ * being most of a lifetime. */
+const MATURITY_FRACTION = 0.1;
+/** How steeply the reproduction bar rises past maturity, and over what
+ * span. At strength 0.5 and scale 400, an individual 400 ticks past its
+ * maturity age needs 1.5x the energy to breed that it needed on the day it
+ * matured. SENESCENCE_SCALE is fixed at TRAIT_LIMITS.maxAge.min so the
+ * decline is measured in absolute ticks — see senescenceFactor for why that
+ * matters more than it looks.
+ *
+ * Strength was swept: 1.0 is lethal (2-3 of 5 seeds extinct, population
+ * collapsing from ~208 to 62-130), 0.5 is the strongest setting that keeps
+ * every seed alive at full population. The failure mode is that the bar
+ * rises without bound, so a long-lived individual eventually needs more
+ * energy than its own maxEnergy and is sterile for the rest of its life. */
+const SENESCENCE_STRENGTH = 0.5;
+const SENESCENCE_SCALE = 400;
+/** What the sperm-role parent pays. Small but deliberately non-zero:
+ * gametes and mate-searching are not free. The real cost of the sperm role
+ * is not this number at all — it is the cooldown, which takes a whole adult
+ * body out of the breeding pool for exactly as long as the egg parent's
+ * does. That is where the twofold cost actually lives. */
+const SPERM_COST_FRACTION = 0.05;
 /** The module-level id counter is process-global, not per-World — a saved
  * game has to restore it too, or a freshly-created virtunism after reload
  * could collide with an id that's still alive in the restored population. */
@@ -71,16 +100,64 @@ export class Virtunism {
     get maxEnergy() {
         return 60 * this.genome.size + this.genome.proteins.length * 3;
     }
+    /** There is exactly ONE energetic bar for "can afford to produce an
+     * offspring", and both sexual partners must clear it. This is the whole
+     * twofold cost of sex, and getting here took a failed design worth
+     * recording.
+     *
+     * The original code gave sexual reproduction a *lower* bar
+     * (`maxEnergy * 0.3`) than asexual's 0.42, on the stated reasoning that a
+     * mating already costs two ready individuals so taxing each of them
+     * further would make sex "strictly worse". That overshot: paired with a
+     * 25%/25% energy split against asexual's 50%, it made sex strictly
+     * better, and sex swept — 76-92% from asexual founders against a
+     * drift-only null of 5.1%.
+     *
+     * The first fix imposed real anisogamy (one partner pays the full 50%,
+     * the other a token 5%) but kept the cheap 0.3 gate for the token payer,
+     * and that was still not enough: measured across six mutation-rate arms
+     * and five seeds, asexual could never invade a sexual population —
+     * 95-99% sexual in every single arm. The reason is that the low gate
+     * hands a sexual individual a reproductive route that has no asexual
+     * equivalent. A cell sitting at 35% of its ceiling cannot reproduce
+     * asexually at all, but it could father a child for 5% — so the strategy
+     * with the lower bar simply reproduces more often, and no amount of
+     * recombination-cost tuning on the other side can correct it.
+     *
+     * With one shared bar, a sexual individual reaching it gets a coin flip:
+     * half the time it pays 50% as the egg, half the time 5% as the sperm,
+     * and either way the resulting child carries only half its genome. An
+     * asexual individual reaching the same bar pays 50% for a child carrying
+     * all of it. Two adults are consumed to make the one offspring one adult
+     * would have made alone. That is the twofold cost, and it now falls out
+     * of the mechanism instead of a penalty constant.
+     *
+     * Honest limitation: in real biology the twofold cost emerges from a sex
+     * *ratio* — half the population is male and bears no young. This model
+     * has no heritable sexes (see NOTES.md on why adding them is a separate
+     * project), so every sexual individual can take either role and the cost
+     * has to be imposed at the pairing gate instead of emerging from a ratio.
+     */
     get reproduceThreshold() {
         return this.maxEnergy * 0.42;
     }
-    /** Sexual mode gets a lower bar than asexual's reproduceThreshold — a
-     * mating event already costs two ready individuals instead of one, so
-     * making each of them individually harder to ready up on top of that
-     * would make sexual reproduction strictly worse than asexual rather than
-     * a genuine alternative with its own trade-offs. */
-    get matingThreshold() {
-        return this.maxEnergy * 0.3;
+    /** The age at which reproduction of any kind becomes possible, as a
+     * fraction of this individual's *own* maxAge rather than a flat number of
+     * ticks. That is the whole point: it makes longevity cost something.
+     * Buying a later death with a later first offspring is the classic r/K
+     * trade-off.
+     *
+     * Before this, maxAge bought a longer life for nothing, and the locus
+     * ratcheted upward unopposed: measured over 20,000 ticks it climbed
+     * 1291 -> 1716. (An earlier 5,000-tick measurement read 1561 -> 1564 and
+     * was mistaken for neutrality — the window was simply too short to see
+     * the trend, which is worth remembering before calling any locus in this
+     * model neutral.) With maturity scaled to maxAge the same measurement
+     * gives 1291 -> 1443, so the climb is damped to about a third of its
+     * unopposed rate rather than eliminated — longevity still pays, it just
+     * pays for itself now. */
+    get maturityAge() {
+        return this.genome.maxAge * MATURITY_FRACTION;
     }
     get isColonyMember() {
         return this.attachedTo !== null || this.attachedChildren.length > 0;
@@ -196,7 +273,15 @@ export class Virtunism {
         return deriveEnergyCapture(this.genome) * this.expressionMultiplier;
     }
     photosynthesize(dt, availabilityMultiplier) {
-        this.energy += this.baseSunlightDemand * availabilityMultiplier * dt;
+        // Clamped exactly as eat() is. It wasn't, and that was a standing free
+        // ride: a photosynthesizer's income never stopped, so it climbed past
+        // its own maxEnergy (measured over 8,000 ticks: 6.1-36.5% of samples
+        // above their own ceiling depending on seed, peaking at 7.5x) and sat
+        // permanently above reproduceThreshold. That turned
+        // reproduction into a pure function of the cooldown timer for every
+        // phototroph in the dish -- energy had stopped being the currency it
+        // is for every other cell.
+        this.energy = Math.min(this.maxEnergy, this.energy + this.baseSunlightDemand * availabilityMultiplier * dt);
     }
     eat(energy) {
         this.energy = Math.min(this.maxEnergy, this.energy + energy);
@@ -217,13 +302,39 @@ export class Virtunism {
         return (this.alive &&
             this.genome.reproductionMode === 'asexual' &&
             this.reproCooldown <= 0 &&
-            this.energy >= this.reproduceThreshold);
+            this.age >= this.maturityAge &&
+            this.energy >= this.effectiveReproduceThreshold);
     }
+    /** Readiness to take part in a mating, in either role — see the comment
+     * above on why there is only one bar and it is the asexual one. */
     canMate() {
         return (this.alive &&
             this.genome.reproductionMode === 'sexual' &&
             this.reproCooldown <= 0 &&
-            this.energy >= this.matingThreshold);
+            this.age >= this.maturityAge &&
+            this.energy >= this.effectiveReproduceThreshold);
+    }
+    /** Reproduction gets steadily more expensive with age past maturity —
+     * declining fecundity rather than a second mortality curve, since isDead
+     * is already a clean two-term check and this feeds the existing energy
+     * ledger instead of running alongside it.
+     *
+     * The keying is the subtle part, and the obvious choice is wrong. Scale
+     * the decline by `age / maxAge` and a long-lived individual senesces more
+     * *slowly* — maxAge would buy both a later death and a gentler decline,
+     * which is a pure win again and defeats the trade-off maturityAge exists
+     * to create. So: the ONSET scales with maxAge (via maturityAge, the
+     * reward for longevity), while the RATE past onset is in absolute ticks.
+     * A long-lived individual earns a later start to its decline. It does not
+     * also earn a shallower one. */
+    get senescenceFactor() {
+        const past = this.age - this.maturityAge;
+        if (past <= 0)
+            return 1;
+        return 1 + SENESCENCE_STRENGTH * (past / SENESCENCE_SCALE);
+    }
+    get effectiveReproduceThreshold() {
+        return this.reproduceThreshold * this.senescenceFactor;
     }
     /** Splits off a mutated, energy-costed child genome — shared by both the
      * "eject a free virtunism" and "bud an attached one" reproduction paths. */
@@ -241,7 +352,7 @@ export class Virtunism {
         const { genome, energy } = this.spawnChildGenome(rng);
         const angle = rng.range(0, Math.PI * 2);
         const dist = this.radius * 2.2;
-        return new Virtunism(genome, this.x + Math.cos(angle) * dist, this.y + Math.sin(angle) * dist, this.lineageId, this.generation + 1, energy, rng, this.isPlayerDesigned, richMode);
+        return settleNewborn(new Virtunism(genome, this.x + Math.cos(angle) * dist, this.y + Math.sin(angle) * dist, this.lineageId, this.generation + 1, energy, rng, this.isPlayerDesigned, richMode));
     }
     /** Asexual reproduction that instead buds a child permanently attached to
      * this virtunism — how colonies grow. Requires this one to carry a bud
@@ -249,7 +360,7 @@ export class Virtunism {
     budOffspring(rng, richMode) {
         const { genome, energy } = this.spawnChildGenome(rng);
         const siblingCount = this.attachedChildren.length;
-        const child = new Virtunism(genome, this.x, this.y, this.lineageId, this.generation + 1, energy, rng, this.isPlayerDesigned, richMode);
+        const child = settleNewborn(new Virtunism(genome, this.x, this.y, this.lineageId, this.generation + 1, energy, rng, this.isPlayerDesigned, richMode));
         child.attachedTo = this;
         // Spread siblings out around this one rather than stacking on one spot.
         child.localAngle = (siblingCount / 5) * Math.PI * 2 + rng.range(-0.3, 0.3);
@@ -385,26 +496,62 @@ export function deserializeVirtunisms(list) {
     return result;
 }
 /**
- * Sexual reproduction: crosses over both parents' genomes (traits, brain
- * weights, and organelles each independently drawn from one parent or the
- * other), mutates the result, and splits the energy cost between both
- * parents. Always produces a free-floating virtunism — sexual reproduction
- * is the "spread genes to a new lineage" path; budding (asexual + bud
- * organelle) is the "grow this colony" path. Requires the two virtunisms
- * to already be within sensing range of each other. `richMode` is decided
- * by the caller (World) at the moment of this birth.
+ * Sexual reproduction, anisogamous. Crosses over both parents' genomes
+ * (traits, brain weights, and organelles each independently drawn from one
+ * parent or the other), mutates the result, and charges the two parents
+ * very differently. Always produces a free-floating virtunism — sexual
+ * reproduction is the "spread genes to a new lineage" path; budding
+ * (asexual + bud organelle) is the "grow this colony" path.
+ *
+ * The asymmetry is the whole point, so the parameter names are `egg` and
+ * `sperm` rather than `a` and `b`. `egg` provisions the offspring and pays
+ * exactly what an asexual parent pays: half its body, which becomes the
+ * child's starting energy. `sperm` pays a token share, burned rather than
+ * handed over — real sperm contributes essentially no material — so the
+ * child is provisioned identically to an asexual child and sex cannot buy
+ * a better-fed offspring for less.
+ *
+ * Both cooldowns are 50, the same as asexual's, and that equality is
+ * load-bearing rather than incidental. It leaves exactly two differences
+ * between the strategies: a sexual birth occupies two bodies instead of one
+ * and needs a partner in range, and a sexual child gets recombination and a
+ * reduced mutational load. Giving sex a longer cooldown as well would
+ * quietly stack a fecundity penalty on top of the twofold cost, and the
+ * sweep would then misattribute it to the mutation-rate lever.
+ *
+ * `sexualPointMutationMultiplier` is what recombination buys. Without it,
+ * sexual offspring take the full asexual point-mutation pass *on top of*
+ * crossover — paying for both instead of trading one for the other — which
+ * is not how the mutational-load argument for sex works. World owns the
+ * value so it can be swept.
+ *
+ * `richMode` and `childLineageId` are decided by the caller (World) at the
+ * moment of this birth.
  */
-export function mateVirtunisms(a, b, rng, richMode) {
-    const childGenome = mutateGenome(crossoverGenome(a.genome, b.genome, rng), rng);
-    const shareA = a.energy * 0.25;
-    const shareB = b.energy * 0.25;
-    a.energy -= shareA;
-    b.energy -= shareB;
-    a.reproCooldown = 55;
-    b.reproCooldown = 55;
+export function mateVirtunisms(egg, sperm, rng, richMode, childLineageId, sexualPointMutationMultiplier = 1) {
+    const childGenome = mutateGenome(crossoverGenome(egg.genome, sperm.genome, rng), rng, sexualPointMutationMultiplier);
+    const childEnergy = egg.energy * 0.5;
+    egg.energy *= 0.5;
+    sperm.energy *= 1 - SPERM_COST_FRACTION;
+    egg.reproCooldown = 50;
+    sperm.reproCooldown = 50;
     const angle = rng.range(0, Math.PI * 2);
-    const dist = (a.radius + b.radius) * 0.6;
-    const midX = (a.x + b.x) / 2;
-    const midY = (a.y + b.y) / 2;
-    return new Virtunism(childGenome, midX + Math.cos(angle) * dist, midY + Math.sin(angle) * dist, a.lineageId, Math.max(a.generation, b.generation) + 1, shareA + shareB, rng, a.isPlayerDesigned || b.isPlayerDesigned, richMode);
+    const dist = (egg.radius + sperm.radius) * 0.6;
+    const midX = (egg.x + sperm.x) / 2;
+    const midY = (egg.y + sperm.y) / 2;
+    return settleNewborn(new Virtunism(childGenome, midX + Math.cos(angle) * dist, midY + Math.sin(angle) * dist, childLineageId, Math.max(egg.generation, sperm.generation) + 1, childEnergy, rng, egg.isPlayerDesigned || sperm.isPlayerDesigned, richMode));
+}
+/** A newborn's energy comes out of its parent's ledger, but its ceiling
+ * comes from its own freshly mutated genome — which can be *smaller* than
+ * the parent's. Without this, a child born under a shrinking mutation
+ * starts life permanently above its own maxEnergy, and so permanently past
+ * reproduceThreshold: the identical standing-over-ceiling state
+ * replaceGenome's comment describes, reached from the other direction.
+ *
+ * Applied at the birth sites rather than inside the constructor on purpose
+ * — deserializeVirtunisms restores a saved energy that is already correct
+ * for its genome, and a constructor clamp would silently rewrite it. */
+function settleNewborn(child) {
+    child.energy = Math.min(child.energy, child.maxEnergy);
+    return child;
 }

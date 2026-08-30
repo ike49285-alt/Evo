@@ -3,8 +3,17 @@ import { CatalysisClass, PeptideFold } from '../chem/polymer.js';
 
 export { CatalysisClass, PeptideFold };
 
-/** Asexual: solo mutated clone. Sexual: needs a same-lineage mate in
- * physical contact — the two genomes are crossed over, then mutated. */
+/** Asexual: solo mutated clone, costing the parent half its body.
+ *
+ * Sexual: needs a *genetically compatible* mate in physical contact —
+ * compatibility is measured by real divergence (World's
+ * mateCompatibilityThreshold), not by a shared lineage label as it once
+ * was — and the two genomes are crossed over, then mutated at a reduced
+ * rate, recombination standing in for some of the mutational load rather
+ * than being charged on top of it. The pairing is anisogamous: one partner
+ * takes the egg role and pays the same half-body an asexual parent pays,
+ * the other pays a token share — but both must clear the same bar first.
+ * See Virtunism.canMate. */
 export type ReproductionMode = 'asexual' | 'sexual';
 
 /**
