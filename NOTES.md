@@ -2693,6 +2693,41 @@ Also unfixed and worth knowing: **iOS deletes script-writable storage on its
 own schedule** (roughly seven days without interaction). Nothing the page does
 prevents that. It is the reason export exists.
 
+
+### The stat overlay is gone
+
+Follow-up, on the player's request. The HUD was six stat columns in a blurred
+panel pinned over the top-left of the dish. On a 390px phone it wrapped to two
+rows and covered roughly the top third of the canvas — and the canvas is the
+entire point of the app. It was removed outright rather than shrunk or made
+collapsible; that was the player's explicit call from four options.
+
+What moved rather than died:
+
+- **Population, living species, highest generation and colonies** were already
+  duplicated in the Ecosystem tab. Nothing was lost there.
+- **Tick and sim-time/tick** existed *only* in the overlay, so they were added
+  to the Ecosystem tab's stat grid. Tick in particular is the number that says
+  how far a run has got; deleting it from the app entirely would have been a
+  worse outcome than the one being fixed.
+- **The save-failure banner stays.** It is not a readout — it is hidden unless
+  something is actually wrong — so it was never part of what was annoying.
+
+One consequence worth naming, because it was a deliberate trade rather than an
+oversight: the calm "Saved 4s ago" line went with the overlay, and that line
+was how a *stalled* autosave was detectable. A rejected write throws and gets
+caught; an interval that simply stops does neither and would have become
+invisible again — exactly the failure class that lost a 100k-tick run. So
+staleness now escalates to the banner: if nothing has saved for 20 seconds
+(autosave runs every 5), the banner says so. Covered by a test that kills the
+timer without throwing anything.
+
+`updateHudAndStats` was renamed `updateStatsPanels`, since it no longer feeds a
+HUD. The browser suites that read population and tick out of the overlay now
+read the sidebar instead, via `textContent` rather than `innerText` — the
+sidebar stats live in a tab that is usually inactive, and Playwright's
+`innerText` returns empty for hidden elements.
+
 ## Tech constraint from last time
 
 Original build environment blocked the npm registry/CDNs (git-only

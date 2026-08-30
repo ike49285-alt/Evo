@@ -461,8 +461,6 @@ document.querySelectorAll<HTMLButtonElement>('#tab-rail .tab-btn').forEach((btn)
 if (!SOUP_ENABLED) {
   document.querySelector<HTMLElement>('#tab-rail .tab-btn[data-tab="chemistry"]')?.setAttribute('hidden', '');
   el('tab-chemistry').hidden = true;
-  // By id rather than the hudVesicles const, which is declared further down.
-  el('hud-vesicles').parentElement?.setAttribute('hidden', '');
 }
 
 // --- designer form (random-seed test tool) ---------------------------------
@@ -676,12 +674,9 @@ function updateChemistryPanel(): void {
 }
 
 // --- HUD + stats panel ----------------------------------------------------
-const hudTick = el('hud-tick');
-const hudPop = el('hud-pop');
-const hudGen = el('hud-gen');
-const hudVesicles = el('hud-vesicles');
-const hudPerf = el('hud-perf');
 
+const sTick = el('s-tick');
+const sPerf = el('s-perf');
 const sPop = el('s-pop');
 const sSpecies = el('s-species');
 const sGen = el('s-gen');
@@ -708,23 +703,16 @@ const cSenseVal = el('c-sense-val');
 const cFlagellaVal = el('c-flagella-val');
 const cChloroVal = el('c-chloro-val');
 
-function updateHudAndStats(): void {
+function updateStatsPanels(): void {
   const live = world.getLiveStats();
 
-  hudTick.textContent = String(live.tick);
-  hudPop.textContent = String(live.population);
-  hudGen.textContent = String(live.maxGeneration);
-  // Both of these are pool measurements. With Stage 0 retired the vesicle
-  // row is hidden outright (below) rather than pinned at 0, and the frame
-  // cost is the world's alone — origin.update() never runs, so folding in
-  // its stale lastTickMs would report time nothing spends.
-  if (SOUP_ENABLED) {
-    hudVesicles.textContent = String(origin.vesicles.size);
-    hudPerf.textContent = `${(world.perf.lastTickMs + origin.perf.lastTickMs).toFixed(2)}ms`;
-  } else {
-    hudPerf.textContent = `${world.perf.lastTickMs.toFixed(2)}ms`;
-  }
-
+  sTick.textContent = String(live.tick);
+  // With Stage 0 retired the frame cost is the world's alone — origin.update()
+  // never runs, so folding in its stale lastTickMs would report time nothing
+  // spends.
+  sPerf.textContent = SOUP_ENABLED
+    ? `${(world.perf.lastTickMs + origin.perf.lastTickMs).toFixed(2)}ms`
+    : `${world.perf.lastTickMs.toFixed(2)}ms`;
   sPop.textContent = String(live.population);
   // Distinct lineages actually represented among living individuals right
   // now — world.lineages itself never shrinks (it's the permanent
@@ -1644,7 +1632,7 @@ function updateLiveVitals(refs: LiveDetailRefs, cell: Virtunism): void {
 /** The full-breakout panel's single entry point — called on every
  * selection change (tap/click/Clear, synchronously via selectIndividual)
  * *and* unconditionally every frame (see frame() below), the same "just
- * always run it, it's cheap" precedent updateHudAndStats() already sets
+ * always run it, it's cheap" precedent updateStatsPanels() already sets
  * for work that needs to stay current regardless of which tab is active
  * — this is what makes tapping a cell in the dish populate this panel
  * silently even while a different tab is showing. */
@@ -1861,7 +1849,7 @@ function frame(): void {
     highlightId: selectedIndividualId,
     hidePool: !SOUP_ENABLED || stage0Retired,
   });
-  updateHudAndStats();
+  updateStatsPanels();
   if (SOUP_ENABLED) updateChemistryPanel();
   refreshSelectionUI();
   updateTree();
@@ -1876,7 +1864,6 @@ requestAnimationFrame(frame);
 // bare interval alone would miss — `visibilitychange` fires reliably on
 // tab close/switch, `beforeunload` is a backstop for browsers that skip it).
 // --- save data: export, import, and the status readout --------------------
-const hudSave = el('hud-save');
 const saveAlert = el<HTMLDivElement>('save-alert');
 const saveAlertMsg = el('save-alert-msg');
 const saveModal = el<HTMLDivElement>('save-modal');
@@ -1980,6 +1967,9 @@ function installWorld(nextOrigin: Origin, nextWorld: World): void {
  * before this existed, it could not. */
 let lastSaveAt: number | null = null;
 let lastSaveFailure: string | null = null;
+/** Measured from here until the first successful save, so "autosave has
+ * never run" is detectable at boot rather than only after one has. */
+const pageLoadedAt = Date.now();
 
 /** Single funnel for every save in the app, so no call site can save
  * without its result reaching the screen. */
@@ -1997,27 +1987,37 @@ function attemptSave(): void {
   renderSaveStatus();
 }
 
-function renderSaveStatus(): void {
-  const failing = lastSaveFailure !== null;
-  saveAlert.hidden = !failing;
-  if (failing) saveAlertMsg.textContent = lastSaveFailure ?? '';
+/** Autosave runs every 5s, so nothing should ever be this old. Past this
+ * the interval itself has stopped rather than a write being refused — a
+ * silent failure, and the more dangerous of the two, since nothing throws. */
+const SAVE_STALE_MS = 20000;
 
-  hudSave.classList.toggle('failing', failing);
-  if (failing) {
-    hudSave.textContent = 'FAILING';
+/** The dish carries no save readout any more (the stat overlay it lived in
+ * was covering a third of the screen on a phone and was removed), so the
+ * banner is the whole of the save UI now. It stays silent while things
+ * work and speaks up when they don't, which is the right shape for
+ * something you should never have to look at.
+ *
+ * Because the calm "saved 4s ago" line is gone, staleness has to escalate
+ * to the banner too. A rejected write throws and is caught; a dead
+ * interval does neither, and would otherwise be invisible — which is
+ * exactly the class of failure that lost a 100k-tick run in the first
+ * place. */
+function renderSaveStatus(): void {
+  if (lastSaveFailure !== null) {
+    saveAlertMsg.textContent = lastSaveFailure;
+    saveAlert.hidden = false;
     return;
   }
-  if (lastSaveAt === null) {
-    hudSave.textContent = 'not yet';
-    hudSave.classList.remove('stale');
+  const since = Date.now() - (lastSaveAt ?? pageLoadedAt);
+  if (since > SAVE_STALE_MS) {
+    saveAlertMsg.textContent = lastSaveAt === null
+      ? 'Autosave has not run since this page opened. Export your run to keep it.'
+      : `Nothing has saved for ${Math.round(since / 1000)}s. Export your run to keep it.`;
+    saveAlert.hidden = false;
     return;
   }
-  const secondsAgo = Math.round((Date.now() - lastSaveAt) / 1000);
-  hudSave.textContent = secondsAgo < 2 ? 'just now' : `${secondsAgo}s ago`;
-  // Autosave runs every 5s, so anything past ~15s means the interval
-  // itself has stopped — a different failure from a rejected write, and
-  // one a plain "last saved" timestamp would otherwise hide.
-  hudSave.classList.toggle('stale', secondsAgo > 15);
+  saveAlert.hidden = true;
 }
 
 // --- autosave ------------------------------------------------------------

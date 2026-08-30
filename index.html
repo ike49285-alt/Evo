@@ -37,14 +37,13 @@
     <main>
       <div id="canvas-wrap" class="canvas-wrap">
         <canvas id="sim-canvas"></canvas>
-        <div id="hud" class="hud">
-          <div><span class="hud-label">Tick</span><span id="hud-tick">0</span></div>
-          <div><span class="hud-label">Population</span><span id="hud-pop">0</span></div>
-          <div><span class="hud-label">Highest gen.</span><span id="hud-gen">0</span></div>
-          <div><span class="hud-label">Vesicles</span><span id="hud-vesicles">0</span></div>
-          <div><span class="hud-label">Sim time/tick</span><span id="hud-perf">0.0ms</span></div>
-          <div><span class="hud-label">Saved</span><span id="hud-save">never</span></div>
-        </div>
+        <!-- The stat overlay that used to live here is gone. It covered the
+             top third of the dish on a phone, and the dish is the point of
+             the app; population, species, generation and colony figures are
+             all in the Ecosystem tab, which is where you go to read numbers
+             rather than watch. The save-failure banner below is deliberately
+             NOT part of that removal — it is not a readout, it only appears
+             when something is actually wrong. -->
         <!-- Only ever shown when autosaving is actually broken. A run was
              once lost because this state existed only as a console warning
              nobody could see on a phone. -->
@@ -123,6 +122,11 @@
             </div>
 
             <div class="stat-grid">
+              <!-- Tick lived only in the dish overlay, which is gone; without
+                   this it would not be readable anywhere in the app, and it is
+                   the number that says how far a run has actually got. -->
+              <div class="stat"><span class="stat-label">Tick</span><span id="s-tick">0</span></div>
+              <div class="stat"><span class="stat-label">Sim time/tick</span><span id="s-perf">0.0ms</span></div>
               <div class="stat"><span class="stat-label">Avg. colony size</span><span id="s-colonysize">0</span></div>
               <div class="stat"><span class="stat-label">Solo virtunisms</span><span id="s-solo">0</span></div>
               <div class="stat"><span class="stat-label">Meat / carrion</span><span id="s-meat">0</span></div>

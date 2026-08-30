@@ -61,10 +61,9 @@
 /* Nearly every component here sets its own display (usually flex), and an
    author rule beats the UA stylesheet's [hidden] { display: none } — so
    `el.hidden = true` silently does nothing on most of this UI. Caught for
-   real: hiding the retired Chemistry tab button and its Vesicles HUD
-   readout left both fully visible, because #tab-rail .tab-btn and
-   .hud > div are both display:flex. This makes the attribute mean what it
-   says everywhere; .confirm-overlay[hidden] further down predates it and is
+   real: hiding the retired Chemistry tab button left it fully visible,
+   because #tab-rail .tab-btn is display:flex. This makes the attribute
+   mean what it says everywhere; .confirm-overlay[hidden] further down predates it and is
    now redundant, but harmless. */
 [hidden] { display: none !important; }
 
@@ -247,31 +246,6 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
 #sim-canvas { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 #sim-canvas:active { cursor: grabbing; }
 
-.hud {
-  position: absolute; top: 12px; left: 12px;
-  /* Bounded on the right and allowed to wrap. It used to be a single
-     unbounded row, which was survivable at five columns and stopped being
-     so at six: on a 390px phone the last one ran off the edge of the
-     canvas with its label clipped mid-word. The save readout is the column
-     that ended up there, and a save-health indicator you cannot read is
-     not an indicator. */
-  right: 12px;
-  background: rgba(18, 24, 21, 0.78);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 0;
-  display: flex;
-  flex-wrap: wrap;
-  row-gap: 6px;
-  backdrop-filter: blur(4px);
-}
-.hud > div { display: flex; flex-direction: column; gap: 2px; padding: 0 14px; }
-.hud > div + div { border-left: 1px solid var(--line); }
-.hud span:not(.hud-label) {
-  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-  font-size: var(--fs-data); font-weight: 600; color: var(--accent);
-}
-.hud-label { color: var(--text-dim); font-size: var(--fs-eyebrow); text-transform: uppercase; letter-spacing: 0.8px; }
 
 .hint {
   position: absolute; bottom: 10px; left: 12px;
@@ -566,11 +540,6 @@ canvas.chart {
 .species-empty { color: var(--text-dim); font-size: var(--fs-body); }
 
 @media (max-width: 760px) {
-  /* Once the HUD wraps, the between-column rules land at the start of
-     wrapped rows where they read as stray marks rather than separators.
-     Spacing carries the grouping instead. */
-  .hud > div + div { border-left: none; }
-  .hud > div { padding: 0 10px; }
 
   main { flex-direction: column; }
   /* A genuine `height`, not just `max-height` — with only max-height,
@@ -673,10 +642,6 @@ canvas.chart {
   .btn { padding: 5px 9px; font-size: 12px; }
   .speed-btn { padding: 5px 8px; }
 
-  .hud { top: 6px; left: 6px; padding: 5px 0; }
-  .hud > div { padding: 0 8px; }
-  .hud-label { font-size: 9px; }
-  .hud span:not(.hud-label) { font-size: 12px; }
   .hint { display: none; } /* the one hint that can go — everything it says is discoverable by trying */
 
   .tab-panels { padding: 8px; }
@@ -723,10 +688,6 @@ canvas.chart {
 .save-alert strong { letter-spacing: 0.02em; }
 .save-alert span { flex: 1 1 180px; }
 
-/* The HUD line is the calm counterpart — always present, so "when did this
-   last actually save" is answerable at a glance instead of on faith. */
-#hud-save.stale { color: #ffb27a; }
-#hud-save.failing { color: #ff8a6a; font-weight: 600; }
 
 .save-box {
   position: relative;
