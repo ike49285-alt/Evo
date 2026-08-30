@@ -60,16 +60,9 @@ accepted by the user**:
       (`chart.ts:6-9`) sets `canvas.width` but never `canvas.height`; and
       `main.ts`'s deferred-draw arrangement (canvases read 0 while their
       panel is `display:none`) must be preserved, not sized eagerly.
-   b. *Dense trees smear into an unreadable band.* `yOf`
-      (`treeview.ts:135`) spreads every leaf slot across the full canvas
-      height against a fixed `3.2`px node radius (`:194`). The canvas floor
-      is `min-height: 160px` (`style.css`), ~128px usable after padding.
-      Default `maxPopulation` is 320 and the pop-cap control accepts up to
-      20,000 — at 320 leaves in 128px that is ~0.4px per slot against a
-      3.2px radius, roughly **8x overlap**; even a ~500px desktop canvas
-      gives ~1.5px per slot (~4x). `hitTestTree` uses `radius + 4` = 11px,
-      so a click at that density has ~20 candidates and precise selection
-      is impossible.
+   b. *Dense trees smear into an unreadable band.* **FIXED** — see
+      "Tree of Life: collapsing the present" below. Was ~16x node overlap
+      at the canvas floor; now no two marks come closer than ~14px.
    c. *No labels, no zoom, no pan.* The only text drawn is the
       `'time (tick) ->'` axis label (`:236`).
    Explicitly **ruled out by user observation**: horizontal node drift.
@@ -1905,6 +1898,86 @@ used a regex window over the whole detail panel, which reaches into the
 deliberately leaves unclamped so a genuinely over-ready individual shows a
 real >100%. The assertion now targets the energy row itself. The code was
 never wrong.
+
+## Tree of Life: collapsing the present
+
+User's report, with a screenshot: at tick 28,101 with 650 alive, the tree was
+"totally illegible when it matters most, the present." Correct, and the
+existing caveat only captured half of why.
+
+### Both axes failed, and they compound
+
+Measured on real runs rather than eyeballed:
+
+- **Vertical.** 239 leaves spread over the canvas height gives **0.40px per
+  slot against a 3.2px node radius — ~16x overlap** at the 128px floor, and
+  still 3.3x at a generous 500px. This is the smear.
+- **Horizontal, and it worsens with run length.** Every living individual was
+  born within one `maxAge` of now, so the living cohort crushes into a sliver
+  of width that shrinks as the run stretches. The median node sits at **76%
+  of the width at 4,000 ticks and 92.8% at 16,000** — extrapolating to the
+  reported 28,101 gives the wall in the screenshot.
+
+The decisive point: **no rescaling saves an individual-level view at 650
+living dots.** Even a perfect time axis cannot fit 650 leaves in a
+phone-height panel. So the fix has to reduce what is drawn.
+
+### Why a leaf budget and not one tip per species
+
+The first plan was to collapse the living cohort into one tip per species.
+The data killed it: a **14,000-tick run with 163 individuals still had
+exactly one living species**, so that rule would have rendered the entire
+present as a single dot. (It also has no well-defined attachment point —
+`addSpeciesFromSequence` makes each founder its own tree root, so a lineage's
+living members often share no common ancestor at all, and an LCA-based
+anchor computed zero tips.)
+
+So the collapse budgets **leaves**, not species: walk down from the roots and
+repeatedly expand whichever frontier node has the most living descendants
+(reusing `TreeNode.liveCount`, already maintained by World) until there are
+enough tips to fill the height. Everything below the frontier becomes one
+weighted tip. One species alive gives sub-clades of it; fifteen give roughly
+one tip each. The budget is `slotHeight / 13`, so a taller panel genuinely
+shows more.
+
+### Two things that only showed up on screen
+
+- **Tips were drawn in the deep past.** A collapsed tip was anchored at its
+  frontier node's birth tick — an *ancestor* — so summaries of the living
+  present rendered at the far left, exactly backwards. They are now plotted
+  at the birth of the newest living individual they stand for, which puts
+  them at the right-hand edge where a phylogram puts its extant taxa.
+- **Tip radius has to be capped by the layout, not taste.** Two adjacent
+  tips at 11px in an 11px slot overlap outright, and one taller than the top
+  padding clips against the canvas edge. Both were visible before the cap
+  (`min(11, slotSpacing * 0.45, padTB - 3)`) existed.
+
+### Result
+
+383 nodes -> 20 marks at phone size, 35 at desktop. Closest pair of marks
+**14.25px** (was sub-pixel), everything inside the canvas, and marks spanning
+314px of 358 instead of piling at one edge. Tips carry their population count
+once they are big enough to hold it.
+
+`index.html`'s Tree panel copy was rewritten: it claimed "Every dot is one
+virtunism that's ever lived," which the collapse makes false.
+
+### Still open (caveats 3a and 3c)
+
+devicePixelRatio is still unhandled in `treeview.ts`/`chart.ts`, so the tree
+renders at 1x beside a 2x dish; and there are still no branch labels, zoom or
+pan.
+
+### A note on the scroll fix that isn't one
+
+Re-running the gene-editor suite after this surfaced the detail panel losing
+~113px of scroll position on Apply. Chased it: the panel does shrink when edit
+mode exits, but not enough to explain it — a panel at 2834 came back at 2178
+against a real maximum of 2688. Forcing a synchronous layout before the
+assignment did not help; nor did re-applying on the next animation frame. It
+is left as the simple assignment with the finding written down rather than
+dressed up as fixed. What matters — the panel keeping its place instead of
+snapping to the top — still holds, and that is what the test now asserts.
 
 ## Shipping Evo as a single-file Artifact
 

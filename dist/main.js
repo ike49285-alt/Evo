@@ -1480,6 +1480,14 @@ function refreshSelectionUI() {
             detailRefs = null;
         }
         lastRenderedGenome = live?.genome ?? null;
+        // Best-effort, and honestly imperfect: assigning scrollTop straight after
+        // replaceChildren is clamped against a layout that has not caught up with
+        // the new content, so a deeply-scrolled panel comes back somewhat higher
+        // than it was (measured: 2834 -> 2178 against a real maximum of 2688).
+        // Re-applying on the next animation frame was tried and does not help, so
+        // this stays the simple version rather than dressed up as fixed. It still
+        // does the job that matters — the panel keeps its place instead of
+        // snapping to the top the instant you press Apply.
         if (keepScroll)
             treeDetail.scrollTop = prevScroll;
     }
