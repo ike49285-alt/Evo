@@ -29,6 +29,7 @@
           <label for="pop-cap-input">Pop cap</label>
           <input type="number" id="pop-cap-input" min="20" max="20000" step="10" value="320" />
         </div>
+        <button id="btn-save-data" class="btn" title="Copy, download or restore this run — the only backup the browser cannot evict">Save Data</button>
         <button id="btn-reset" class="btn danger" title="Wipe every evolved lineage and start over from a fresh dish">Reset World</button>
       </div>
     </header>
@@ -42,6 +43,15 @@
           <div><span class="hud-label">Highest gen.</span><span id="hud-gen">0</span></div>
           <div><span class="hud-label">Vesicles</span><span id="hud-vesicles">0</span></div>
           <div><span class="hud-label">Sim time/tick</span><span id="hud-perf">0.0ms</span></div>
+          <div><span class="hud-label">Saved</span><span id="hud-save">never</span></div>
+        </div>
+        <!-- Only ever shown when autosaving is actually broken. A run was
+             once lost because this state existed only as a console warning
+             nobody could see on a phone. -->
+        <div id="save-alert" class="save-alert" role="alert" hidden>
+          <strong>Not saving!</strong>
+          <span id="save-alert-msg"></span>
+          <button id="save-alert-export" class="btn">Export run</button>
         </div>
         <div class="hint">Drag to pan · Scroll to zoom · tap a virtunism to inspect it</div>
       </div>
@@ -312,6 +322,28 @@
       <div class="confirm-actions">
         <button id="confirm-cancel" class="btn">Cancel</button>
         <button id="confirm-ok" class="btn danger">Reset World</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="save-modal" class="confirm-overlay" hidden>
+    <div class="save-box" role="dialog" aria-modal="true" aria-labelledby="save-modal-title">
+      <button id="save-modal-close" class="modal-close-btn" aria-label="Close">&#10005;</button>
+      <h2 id="save-modal-title">Save data</h2>
+      <p class="save-note">
+        Browsers can clear their own storage without warning. Keeping a copy
+        somewhere else is the only thing that survives that.
+      </p>
+      <div class="save-actions">
+        <button id="save-copy" class="btn primary">Copy run</button>
+        <button id="save-download" class="btn">Download .json</button>
+      </div>
+      <p id="save-modal-status" class="save-status"></p>
+      <label class="save-label" for="save-import-text">Restore a run — paste one here:</label>
+      <textarea id="save-import-text" class="save-textarea" rows="4" spellcheck="false"
+        placeholder="Paste an exported Evo run..."></textarea>
+      <div class="save-actions">
+        <button id="save-import" class="btn danger">Restore this run</button>
       </div>
     </div>
   </div>

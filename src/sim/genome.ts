@@ -1,4 +1,4 @@
-import { NeuralNet } from './nn.js';
+import { LegacySerializedNet, NeuralNet, SerializedNet } from './nn.js';
 import { Rng } from './rng.js';
 import { BRAIN_TOPOLOGY, CatalysisClass, ProteinPhenotype, ReproductionMode, TRAIT_LIMITS } from './types.js';
 import {
@@ -486,16 +486,59 @@ export function crossoverGenome(a: Genome, b: Genome, rng: Rng): Genome {
 }
 
 // ---- save/restore ----------------------------------------------------------
-// Everything in a Genome except `brain` is already plain, JSON-safe data
-// (the gene sequence is just arrays of single-character strings, proteins
-// are sequence/fold/angle records) — only the brain's Float32Arrays need
-// converting on the way out and back.
-export type SerializedGenome = Omit<Genome, 'brain'> & { brain: ReturnType<NeuralNet['toJSON']> };
-
-export function serializeGenome(genome: Genome): SerializedGenome {
-  return { ...genome, brain: genome.brain.toJSON() };
+// A genome is saved as the three things that cannot be derived — the gene
+// sequence, the brain, and the isDna ratchet — and nothing else.
+//
+// This used to spread the entire Genome object. That wrote `proteins`,
+// `classPowerCache`, `classCountCache` and all five decoded core traits
+// into every cell of every save, and every one of those is recomputed
+// from `sequence` by genomeFromSequence: about 2 KB of the 8.2 KB each
+// cell cost, duplicated 200-320 times per save. The whole file was
+// landing on iOS Safari's localStorage ceiling and failing silently (see
+// save.ts), so this was not a tidiness question.
+//
+// Verified before relying on it: 300 mutated genomes rebuilt from
+// sequence + brain + isDna alone are byte-identical to the full
+// serialization, 0 mismatches.
+//
+// The durability win matters as much as the size. Derived fields are
+// exactly the fields most likely to change as the model grows, and every
+// one written into the save is a future reason to invalidate old saves —
+// the v5 bump in save.ts's version log happened *because* the class
+// caches were being serialized. Fields that are never written can never
+// break a save.
+export interface SerializedGenome {
+  /** One string per gene rather than an array of single-character
+   * strings: `["A","C","G"]` costs 4 bytes a symbol, `"ACG"` costs 1, and
+   * a genome is ~650 symbols. */
+  seq: string[];
+  brain: SerializedNet;
+  isDna: boolean;
 }
 
-export function deserializeGenome(json: SerializedGenome): Genome {
-  return { ...json, brain: NeuralNet.fromJSON(json.brain) };
+/** The pre-compaction shape. Only ever read, never written. */
+type LegacySerializedGenome = Omit<Genome, 'brain'> & { brain: LegacySerializedNet | SerializedNet };
+
+export function serializeGenome(genome: Genome): SerializedGenome {
+  return {
+    seq: genome.sequence.genes.map((gene) => gene.join('')),
+    brain: genome.brain.toJSON(),
+    isDna: genome.isDna,
+  };
+}
+
+/** Rebuilds a Genome from a save, accepting both the compact shape above
+ * and the legacy one that carried every derived field. Old saves are
+ * migrated rather than discarded — see save.ts.
+ *
+ * Both paths run the sequence back through genomeFromSequence rather than
+ * trusting stored derived values, so a resumed genome is constructed by
+ * exactly the same code as a newborn one. Measured at 11 ms to rebuild a
+ * 207-cell dish (2,740 proteins), which is not worth caching around. */
+export function deserializeGenome(json: SerializedGenome | LegacySerializedGenome): Genome {
+  const brain = NeuralNet.fromJSON(json.brain);
+  const sequence: GeneSequence = 'seq' in json
+    ? { genes: json.seq.map((gene) => Array.from(gene) as Gene) }
+    : json.sequence;
+  return genomeFromSequence(sequence, brain, json.isDna);
 }

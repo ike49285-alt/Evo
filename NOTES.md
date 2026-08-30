@@ -19,6 +19,13 @@ is switched off, not deleted — then the **Tree of Life** made legible and
 zoomable, and finally the **reproduction overhaul**. Each has its own
 section below.
 
+**Saves were then rebuilt** after a 100,000-tick run was lost: the save file
+had grown past iOS Safari's localStorage ceiling and every autosave had been
+failing silently for hours. It is now 3.55x smaller, migrates across version
+bumps instead of discarding, reports failure on screen, and can be exported.
+That section is last in this file and is worth reading before changing
+anything that gets serialized.
+
 **The reproduction overhaul is the largest behavioural change on this
 branch**, and the one most worth reading before touching the sim. In short:
 sexual reproduction used to be energetically *cheaper* than asexual and so
@@ -2534,6 +2541,157 @@ neutral off a 5,000-tick window.** That is roughly 10–15 generations.
 - **`maxLineageShare` still caps by lineage *label* while mating is now by
   *genotype*.** Two genetically identical individuals in different lineage
   labels interbreed freely but are population-capped separately.
+
+## Saves: fitting under iOS's ceiling, surviving updates, failing loudly
+
+A 100,000-tick run was lost. The player runs Evo from a GitHub link saved to
+the iPhone home screen, so this is iOS Safari.
+
+### The autosave was never the problem
+
+The request was "autosave every 5 seconds, plus when I close or switch away."
+All three of those already existed and had since the feature was written — a
+5s interval plus `visibilitychange` and `beforeunload`. Building them again
+would have fixed nothing. **Every one of those saves was failing.**
+
+### The measurement
+
+iOS Safari caps localStorage at 5 MB per origin and counts it as **UTF-16 —
+two bytes per character** — so the real budget is ~2.5 million characters, not
+5 million. That factor of two is the whole story.
+
+| | characters | as UTF-16 | vs the 5 MB cap |
+|---|---|---|---|
+| old format, tick 3,000 | 2.77 M | **5.5 MB** | already over |
+| old format, tick 5,000 | 2.62 M | **5.0 MB** | exactly on it |
+| new format, tick 5,000 | 0.74 M | 1.4 MB | 3.5x headroom |
+| new format, **worst case** — 320 cells all carrying the maximum 16 proteins | 0.95 M | 1.8 MB | 2.6x headroom |
+
+The tick-3,000 figure is the damning one: the save was over the limit before
+a run had properly started. Every autosave for the rest of that session threw
+`QuotaExceededError` into a `console.warn`, which on a phone is no output at
+all.
+
+For reference, Chromium's cliff was probed at ~4 M characters with an existing
+save present — i.e. **desktop testing would never have reproduced this.** The
+bug lived precisely in the gap between the two engines' quota accounting.
+
+### What made the file big
+
+93% of the save was cells, and each cell was 8.2 KB: brain 3.69, gene sequence
+1.87, proteins 1.80, class caches 0.21. Three changes, all measured:
+
+- **Stop serializing derived state.** `serializeGenome` spread the entire
+  `Genome` — `proteins`, `classPowerCache`, `classCountCache` and all five
+  decoded core traits — every one of which `genomeFromSequence` recomputes
+  from `sequence`. Verified before relying on it: **300 mutated genomes
+  rebuilt from `sequence` + `brain` + `isDna` alone are byte-identical to the
+  full serialization, 0 mismatches.** Rebuild cost on load: **11 ms** for 207
+  cells / 2,740 proteins.
+- **Pack the gene sequence as a string.** `["A","C","G"]` costs 4 bytes a
+  symbol, `"ACG"` costs 1, and a genome is ~650 symbols.
+- **Base64 the brain weights.** `Array.from(Float32Array)` turns each float32
+  into a full double printed at up to 17 significant digits — ~18 characters
+  to carry 4 bytes. Base64 of the raw buffer is 5.33 characters per weight and
+  is **exact**. Rounding to fewer digits would have shrunk it too, and would
+  have quietly perturbed every brain in the dish on reload; a saved run coming
+  back subtly different is a worse failure than a large file.
+
+Together: **3.55x**.
+
+### Saves now survive updates
+
+`loadGame` used to `return null` on any version mismatch, so every one of the
+seven historical bumps threw the player's run away. Survivable at a hundred
+ticks; not at a hundred thousand. v9 is the first version that migrates:
+`deserializeGenome` and `NeuralNet.fromJSON` each read the old shape as well
+as the new one, so a v8 save loads with no transform at all — the only thing
+that had to change was this file's willingness to try. Verified end to end by
+building the previous commit, generating a genuine v8 save with it, and
+loading it in the new build: population, tick, lineages, every genome's decoded
+traits and every brain weight survive, the world keeps simulating, and
+re-saving rewrites it at 2.77 → 0.73 M characters.
+
+Worth recording *why* that became possible, because it is the durable lesson
+rather than a one-off: **the fields v9 stopped writing are exactly the derived
+ones, and derived fields are the ones most likely to change as the model
+grows.** The v5 bump in the version log exists *only* because the class caches
+were being serialized. A field that is never written can never invalidate a
+save.
+
+### Failing loudly
+
+The single most important change, and the one that would have saved the run.
+
+- `saveGame` returns an outcome instead of swallowing the error, and every
+  save in the app goes through one funnel so no call site can save without the
+  result reaching the screen.
+- The HUD carries a live "Saved 4s ago" reading. It goes amber past 15 seconds
+  — autosave runs every 5, so a climbing number means the interval itself has
+  stopped, which is a different failure from a rejected write and one a plain
+  timestamp would hide.
+- A rejected write raises an unmissable banner over the dish with the reason
+  and an export button.
+- Out-of-space is classified separately from every other failure, because the
+  remedy is completely different: the run is fine, the browser is full, and the
+  player needs to export *now*. Detection covers `QuotaExceededError`,
+  Firefox's `NS_ERROR_DOM_QUOTA_REACHED`, and codes 22 and 1014.
+- A save that genuinely cannot be read now opens the Save Data dialog with the
+  reason, rather than silently presenting an empty dish — which is
+  indistinguishable from "the game forgot my run for no reason".
+
+### Export / import
+
+The only thing that survives a browser clearing its own storage, which iOS
+does on its own schedule regardless of anything the page does.
+
+Copy-to-clipboard and paste-to-restore work everywhere, including the
+sandboxed Artifact build and an iOS home-screen shortcut. A `.json` download is
+offered alongside and reports its outcome, since those two contexts tend to
+swallow it — when it fails, "Copy run" is sitting next to it. The clipboard
+button also falls back to selecting the text in the box, because the async
+Clipboard API needs a secure context and a permission a sandboxed iframe may
+not grant; a dead button would be worse than a manual copy.
+
+Import routes through the same validation and migration as a stored save —
+there is deliberately no second, weaker path into the simulation — and a bad
+paste reports a reason instead of half-loading.
+
+### Three real bugs the tests caught
+
+All three were found by the browser suite; none by `tsc`:
+
+- **The Save Data dialog painted over its own confirmation.** Restoring a run
+  asks for confirmation, and every overlay shared one z-index, so the later
+  element in the document covered the question and the OK button could not be
+  clicked at all. A confirmation now outranks whatever raised it.
+- **A fresh dish booted empty.** Changing `loadGame`'s return type from
+  `T | null` to an outcome object left `if (!SOUP_ENABLED && restored === null)`
+  comparing an object to null — always false, so `seedStartingPopulation()`
+  never ran and the world started with no life in it. TypeScript accepted the
+  comparison. The save-size test noticed only because a "successful" save was
+  8 KB instead of 52.
+- **The HUD ran off the edge of the phone.** It was a single unbounded flex
+  row, survivable at five columns and not at six: the new save readout landed
+  last and its label was clipped mid-word on a 390px viewport. A save-health
+  indicator you cannot read is not an indicator. The HUD is now bounded on the
+  right and wraps, and drops its column rules on narrow screens where they
+  would otherwise land at the start of a wrapped row.
+
+### Known unbounded term, deliberately not fixed
+
+`World.lineages` is never deleted from, so it grows with every speciation
+event. Measured over 20,000 ticks on three seeds it holds **1 lineage, 4 KB** —
+speciation is not currently firing on that timescale after the reproduction
+overhaul. A pruning rule would have to preserve ancestor chains for the species
+panel and the tree, and building that to reclaim 4 KB is not a good trade
+today. It is the only unbounded term left in the save and should be revisited
+if speciation cadence comes back up — which is already an open item from the
+reproduction round.
+
+Also unfixed and worth knowing: **iOS deletes script-writable storage on its
+own schedule** (roughly seven days without interaction). Nothing the page does
+prevents that. It is the reason export exists.
 
 ## Tech constraint from last time
 

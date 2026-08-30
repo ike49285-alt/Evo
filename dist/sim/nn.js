@@ -101,26 +101,72 @@ export class NeuralNet {
         mutateArray(child.b2, rng, rate, strength);
         return child;
     }
-    /** Plain-array snapshot for save/restore — Float32Arrays don't survive
+    /** Base64 snapshot for save/restore. Float32Arrays don't survive
      * JSON.stringify as themselves (they'd come back as an object keyed by
-     * numeric-string index, not a real array). */
+     * numeric-string index, not a real array), so they have to be encoded
+     * somehow — and *which* encoding is a real save-size decision, not a
+     * detail.
+     *
+     * This used to be `Array.from(...)`, which turns every float32 into a
+     * full JS double and prints it at up to 17 significant digits: ~18
+     * characters to store 4 bytes. Brains were 3.7 KB of an 8.2 KB cell,
+     * the single largest line item in the save, and the save was hitting
+     * iOS Safari's 5 MB localStorage ceiling (see save.ts). Base64 of the
+     * raw buffer is 5.33 characters per weight instead of ~18.
+     *
+     * Base64 rather than rounded decimals specifically because it is
+     * **exact**. Rounding to fewer digits would also shrink the file, but
+     * it would quietly perturb every brain in the dish on reload — a saved
+     * run would come back behaving subtly differently, which is a worse
+     * failure than a large file. */
     toJSON() {
         return {
             topology: this.topology,
-            w1: Array.from(this.w1),
-            b1: Array.from(this.b1),
-            w2: Array.from(this.w2),
-            b2: Array.from(this.b2),
+            w1: encodeWeights(this.w1),
+            b1: encodeWeights(this.b1),
+            w2: encodeWeights(this.w2),
+            b2: encodeWeights(this.b2),
         };
     }
+    /** Accepts both the base64 form above and the legacy number-array form,
+     * so a save written before the format changed still loads. See save.ts
+     * on why old saves are migrated rather than discarded. */
     static fromJSON(json) {
         return new NeuralNet(json.topology, {
-            w1: Float32Array.from(json.w1),
-            b1: Float32Array.from(json.b1),
-            w2: Float32Array.from(json.w2),
-            b2: Float32Array.from(json.b2),
+            w1: decodeWeights(json.w1),
+            b1: decodeWeights(json.b1),
+            w2: decodeWeights(json.w2),
+            b2: decodeWeights(json.b2),
         });
     }
+}
+/** Float32Array -> base64 of its raw little-endian bytes.
+ *
+ * Deliberately byte-at-a-time rather than
+ * `String.fromCharCode(...bytes)`: spreading a typed array into an
+ * argument list blows the engine's argument limit on large inputs, and
+ * "large" here is a moving target — the topology is a constant today but
+ * the whole point of this function is that it is used on every genome in
+ * the dish on every save. */
+function encodeWeights(arr) {
+    const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++)
+        binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+}
+function decodeWeights(value) {
+    if (typeof value !== 'string')
+        return Float32Array.from(value);
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++)
+        bytes[i] = binary.charCodeAt(i);
+    // Copies through a fresh buffer rather than viewing `bytes.buffer`
+    // directly: a Float32Array view demands 4-byte alignment, and nothing
+    // guarantees a decoded string's length is a multiple of 4 if the save
+    // was ever truncated.
+    return new Float32Array(bytes.buffer.slice(0, bytes.length - (bytes.length % 4)));
 }
 function mutateArray(arr, rng, rate, strength) {
     for (let i = 0; i < arr.length; i++) {

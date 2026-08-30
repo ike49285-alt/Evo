@@ -172,6 +172,12 @@ html, body {
   z-index: 50;
 }
 .confirm-overlay[hidden] { display: none; }
+/* The confirmation is raised *by* the other overlays (restoring a save asks
+   for confirmation from inside the Save Data dialog), and they all share
+   .confirm-overlay's z-index — so without this the later element in the
+   document simply paints over the question and the OK button cannot be
+   clicked at all. A confirmation outranks whatever asked for it. */
+#confirm-overlay { z-index: 60; }
 .confirm-box {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -243,11 +249,20 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
 
 .hud {
   position: absolute; top: 12px; left: 12px;
+  /* Bounded on the right and allowed to wrap. It used to be a single
+     unbounded row, which was survivable at five columns and stopped being
+     so at six: on a 390px phone the last one ran off the edge of the
+     canvas with its label clipped mid-word. The save readout is the column
+     that ended up there, and a save-health indicator you cannot read is
+     not an indicator. */
+  right: 12px;
   background: rgba(18, 24, 21, 0.78);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px 0;
   display: flex;
+  flex-wrap: wrap;
+  row-gap: 6px;
   backdrop-filter: blur(4px);
 }
 .hud > div { display: flex; flex-direction: column; gap: 2px; padding: 0 14px; }
@@ -551,6 +566,12 @@ canvas.chart {
 .species-empty { color: var(--text-dim); font-size: var(--fs-body); }
 
 @media (max-width: 760px) {
+  /* Once the HUD wraps, the between-column rules land at the start of
+     wrapped rows where they read as stray marks rather than separators.
+     Spacing carries the grouping instead. */
+  .hud > div + div { border-left: none; }
+  .hud > div { padding: 0 10px; }
+
   main { flex-direction: column; }
   /* A genuine `height`, not just `max-height` — with only max-height,
      .sidebar's real height comes from its own content (max-height just
@@ -674,4 +695,88 @@ canvas.chart {
   body:has(#tab-tree.tab-panel.active #tree-detail:not(:empty)) .tree-toolbar .panel-hint {
     display: none;
   }
+}
+
+/* --- save status and backup ---------------------------------------------
+   The alert banner is deliberately loud and deliberately rare: it appears
+   only when writes are actually failing. A 100k-tick run was lost because
+   that state was a console warning, which is invisible on a phone. */
+.save-alert {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(120, 20, 20, 0.94);
+  border: 1px solid #e2643c;
+  color: #ffe9e2;
+  font-size: var(--fs-body);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  z-index: 20;
+}
+.save-alert[hidden] { display: none; }
+.save-alert strong { letter-spacing: 0.02em; }
+.save-alert span { flex: 1 1 180px; }
+
+/* The HUD line is the calm counterpart — always present, so "when did this
+   last actually save" is answerable at a glance instead of on faith. */
+#hud-save.stale { color: #ffb27a; }
+#hud-save.failing { color: #ff8a6a; font-weight: 600; }
+
+.save-box {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.save-box h2 {
+  margin: 0 0 8px;
+  font-size: var(--fs-title);
+  font-family: var(--font-serif);
+  color: var(--text);
+}
+.save-note {
+  margin: 0 0 14px;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.save-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.save-status {
+  margin: 12px 0 0;
+  min-height: 1.2em;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.save-status.good { color: #7fd39a; }
+.save-status.bad { color: #ff8a6a; }
+.save-label {
+  display: block;
+  margin: 16px 0 6px;
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+}
+.save-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-bottom: 10px;
 }

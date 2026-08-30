@@ -391,8 +391,24 @@ export function crossoverGenome(a, b, rng) {
     return genomeFromSequence(sequence, NeuralNet.crossover(a.brain, b.brain, rng), a.isDna || b.isDna);
 }
 export function serializeGenome(genome) {
-    return { ...genome, brain: genome.brain.toJSON() };
+    return {
+        seq: genome.sequence.genes.map((gene) => gene.join('')),
+        brain: genome.brain.toJSON(),
+        isDna: genome.isDna,
+    };
 }
+/** Rebuilds a Genome from a save, accepting both the compact shape above
+ * and the legacy one that carried every derived field. Old saves are
+ * migrated rather than discarded — see save.ts.
+ *
+ * Both paths run the sequence back through genomeFromSequence rather than
+ * trusting stored derived values, so a resumed genome is constructed by
+ * exactly the same code as a newborn one. Measured at 11 ms to rebuild a
+ * 207-cell dish (2,740 proteins), which is not worth caching around. */
 export function deserializeGenome(json) {
-    return { ...json, brain: NeuralNet.fromJSON(json.brain) };
+    const brain = NeuralNet.fromJSON(json.brain);
+    const sequence = 'seq' in json
+        ? { genes: json.seq.map((gene) => Array.from(gene)) }
+        : json.sequence;
+    return genomeFromSequence(sequence, brain, json.isDna);
 }

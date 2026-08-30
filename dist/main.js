@@ -8,7 +8,7 @@ import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
 import { drawSparkline, drawScatter, drawRadarChart } from './ui/chart.js';
 import { defaultTreeCamera, drawTree, hitTestTree, panTreeCamera, zoomTreeCameraAt, } from './ui/treeview.js';
-import { loadGame, saveGame } from './save.js';
+import { exportSave, importSave, loadGame, saveGame } from './save.js';
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 1500;
 // Phase B: the pool's own coordinate space now spans the whole dish,
@@ -111,8 +111,8 @@ function makePool() {
         ? Origin.seedPrimordialSoup(WORLD_WIDTH, WORLD_HEIGHT, seed)
         : new Origin(WORLD_WIDTH, WORLD_HEIGHT, seed, /* ventEnabled */ false);
 }
-let origin = restored?.origin ?? makePool();
-let world = restored?.world ?? new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+let origin = restored.status === 'loaded' ? restored.origin : makePool();
+let world = restored.status === 'loaded' ? restored.world : new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
 const BOOT_SEED_COUNT = 12;
 /** Stocks a brand-new dish with one starting population.
  *
@@ -133,7 +133,10 @@ const BOOT_SEED_COUNT = 12;
 function seedStartingPopulation() {
     world.addSpeciesFromSequence(randomGenome(world.rng).sequence, BOOT_SEED_COUNT);
 }
-if (!SOUP_ENABLED && restored === null)
+// `restored.status`, not a null check: loadGame returns an outcome object
+// now, so `restored === null` was silently always false and the dish booted
+// empty — no founders, no life, nothing to explain why.
+if (!SOUP_ENABLED && restored.status !== 'loaded')
     seedStartingPopulation();
 const canvas = el('sim-canvas');
 const renderer = new Renderer(canvas);
@@ -1662,9 +1665,179 @@ requestAnimationFrame(frame);
 // (covers the common "closed the tab before the next 5s tick" case that a
 // bare interval alone would miss — `visibilitychange` fires reliably on
 // tab close/switch, `beforeunload` is a backstop for browsers that skip it).
-setInterval(() => saveGame(origin, world), 5000);
+// --- save data: export, import, and the status readout --------------------
+const hudSave = el('hud-save');
+const saveAlert = el('save-alert');
+const saveAlertMsg = el('save-alert-msg');
+const saveModal = el('save-modal');
+const saveModalStatus = el('save-modal-status');
+const saveImportText = el('save-import-text');
+function openSaveModal() {
+    setSaveModalStatus('', null);
+    saveImportText.value = '';
+    saveModal.hidden = false;
+}
+function setSaveModalStatus(message, kind) {
+    saveModalStatus.textContent = message;
+    saveModalStatus.classList.toggle('good', kind === 'good');
+    saveModalStatus.classList.toggle('bad', kind === 'bad');
+}
+el('btn-save-data').addEventListener('click', openSaveModal);
+el('save-alert-export').addEventListener('click', openSaveModal);
+el('save-modal-close').addEventListener('click', () => { saveModal.hidden = true; });
+saveModal.addEventListener('click', (e) => {
+    if (e.target === saveModal)
+        saveModal.hidden = true;
+});
+el('save-copy').addEventListener('click', async () => {
+    const text = exportSave(origin, world);
+    const kb = Math.round(text.length / 1024);
+    try {
+        await navigator.clipboard.writeText(text);
+        setSaveModalStatus(`Copied ${kb} KB. Paste it somewhere you trust — a note, an email to yourself.`, 'good');
+    }
+    catch {
+        // The async Clipboard API needs a secure context and a permission
+        // that a sandboxed iframe may not grant. Falling back to selecting
+        // the text in the box gives the player a manual copy that always
+        // works, rather than a dead button.
+        saveImportText.value = text;
+        saveImportText.focus();
+        saveImportText.select();
+        setSaveModalStatus(`Could not reach the clipboard, so the run (${kb} KB) is selected in the box below — copy it manually.`, 'bad');
+    }
+});
+el('save-download').addEventListener('click', () => {
+    // Works on desktop and ordinary mobile browsing. Deliberately still
+    // offered even though an iOS home-screen shortcut and the sandboxed
+    // Artifact build both tend to swallow it — when it fails it fails
+    // visibly and "Copy run" is right next to it, so the player is never
+    // left without a route.
+    try {
+        const blob = new Blob([exportSave(origin, world)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `evo-tick-${world.tick}.json`;
+        a.click();
+        // Revoked on a later turn of the event loop: revoking synchronously
+        // can invalidate the URL before the browser has started the download.
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        setSaveModalStatus('Download started. If nothing appeared, use "Copy run" instead — some browsers block this.', null);
+    }
+    catch (e) {
+        setSaveModalStatus(`Download not available here: ${e instanceof Error ? e.message : String(e)}. Use "Copy run".`, 'bad');
+    }
+});
+el('save-import').addEventListener('click', async () => {
+    const outcome = importSave(saveImportText.value);
+    if (outcome.status !== 'loaded') {
+        setSaveModalStatus(outcome.status === 'empty' ? 'Nothing to restore — paste a run first.' : outcome.reason, 'bad');
+        return;
+    }
+    const ok = await confirmDialog(`Restore that run (tick ${outcome.world.tick}, ${outcome.world.cells.length} alive)? Your current dish will be replaced.`);
+    if (!ok)
+        return;
+    installWorld(outcome.origin, outcome.world);
+    saveModal.hidden = true;
+});
+/** Swaps in a world that came from somewhere other than this session, and
+ * repairs the same session-level state Reset World has to repair. Kept
+ * beside the import button rather than folded into it because a restore
+ * and a reset are the same operation as far as the surrounding UI is
+ * concerned — anything one of them has to fix up, the other does too. */
+function installWorld(nextOrigin, nextWorld) {
+    origin = nextOrigin;
+    world = nextWorld;
+    applyPopCap();
+    renderer.fitToWorld(world);
+    selectIndividual(null);
+    stage0Retired = false;
+    sustainedAboveThresholdTicks = 0;
+    osRetiredNotice.style.display = 'none';
+    // Written through immediately for the same reason Reset does it: a
+    // reload inside the next 5s window would otherwise hand back the run
+    // this one just replaced.
+    attemptSave();
+}
+/** Everything the UI needs to answer "is my run actually safe?" — which,
+ * before this existed, it could not. */
+let lastSaveAt = null;
+let lastSaveFailure = null;
+/** Single funnel for every save in the app, so no call site can save
+ * without its result reaching the screen. */
+function attemptSave() {
+    const outcome = saveGame(origin, world);
+    if (outcome.ok) {
+        lastSaveAt = Date.now();
+        lastSaveFailure = null;
+    }
+    else {
+        lastSaveFailure = outcome.message;
+        // Still logged, for anyone who does have a console open — but the
+        // console is no longer the only place this appears.
+        console.warn('Evo: save failed —', outcome.message);
+    }
+    renderSaveStatus();
+}
+function renderSaveStatus() {
+    const failing = lastSaveFailure !== null;
+    saveAlert.hidden = !failing;
+    if (failing)
+        saveAlertMsg.textContent = lastSaveFailure ?? '';
+    hudSave.classList.toggle('failing', failing);
+    if (failing) {
+        hudSave.textContent = 'FAILING';
+        return;
+    }
+    if (lastSaveAt === null) {
+        hudSave.textContent = 'not yet';
+        hudSave.classList.remove('stale');
+        return;
+    }
+    const secondsAgo = Math.round((Date.now() - lastSaveAt) / 1000);
+    hudSave.textContent = secondsAgo < 2 ? 'just now' : `${secondsAgo}s ago`;
+    // Autosave runs every 5s, so anything past ~15s means the interval
+    // itself has stopped — a different failure from a rejected write, and
+    // one a plain "last saved" timestamp would otherwise hide.
+    hudSave.classList.toggle('stale', secondsAgo > 15);
+}
+// --- autosave ------------------------------------------------------------
+// Every 5s, plus a best-effort save the moment the tab is hidden or closed.
+//
+// All three listeners are deliberate and none is redundant.
+// `visibilitychange` is the one that actually fires on iOS when the player
+// swipes away or locks the phone. `pagehide` covers the bfcache path that
+// `beforeunload` misses and is the reliable close signal on Safari, where
+// `beforeunload` is unreliable to the point of being decorative — which
+// matters, because this app is run from an iPhone home-screen shortcut.
+// `beforeunload` stays for desktop browsers that skip the other two.
+setInterval(attemptSave, 5000);
+// Refresh the "saved Ns ago" reading between saves, so a stalled autosave
+// shows as a climbing number rather than a frozen, reassuring one.
+setInterval(renderSaveStatus, 1000);
 document.addEventListener('visibilitychange', () => {
     if (document.hidden)
-        saveGame(origin, world);
+        attemptSave();
 });
-window.addEventListener('beforeunload', () => saveGame(origin, world));
+window.addEventListener('pagehide', attemptSave);
+window.addEventListener('beforeunload', attemptSave);
+renderSaveStatus();
+// How the boot-time load actually went. Both branches used to be silent:
+// an unreadable save just became an empty dish with no explanation, which
+// is indistinguishable from "the game forgot my run for no reason".
+if (restored.status === 'discarded') {
+    // Opened rather than logged, because the paste box in this dialog is
+    // exactly what the player needs next if they kept a backup.
+    openSaveModal();
+    setSaveModalStatus(`Your saved run could not be loaded, so this is a fresh dish. ${restored.reason}`, 'bad');
+}
+else if (restored.status === 'loaded' && restored.migratedFrom !== null) {
+    console.info(`Evo: migrated a version ${restored.migratedFrom} save forward.`);
+    // Rewrite immediately in the current format rather than waiting for the
+    // next autosave tick. The old format is ~3.5x larger and was the thing
+    // overflowing storage in the first place, so leaving it sitting there
+    // for another five seconds is the one window where the migration could
+    // still fail for lack of room.
+    attemptSave();
+}

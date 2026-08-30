@@ -9,6 +9,22 @@
  * (paused, speed) are deliberately *not* saved — those are session
  * preferences, not simulation state, and resetting them on reload is the
  * expected, unsurprising behavior.
+ *
+ * Two properties of this file are load-bearing, and both were learned the
+ * hard way — by losing a 100,000-tick run:
+ *
+ * 1. **A save must fit.** iOS Safari caps localStorage at 5 MB per origin
+ *    and counts it as UTF-16 — two bytes per character — so the real
+ *    budget is ~2.5 million characters, not 5 million. A 5,000-tick dish
+ *    used to serialize to 2.62 M characters, i.e. 5.0 MB against a 5 MB
+ *    limit: sitting exactly on the ceiling. Every autosave was throwing
+ *    QuotaExceededError. See genome.ts and nn.ts for the two changes that
+ *    brought that to 0.74 M characters (1.4 MB as UTF-16).
+ *
+ * 2. **A save must never fail quietly.** That failure was invisible
+ *    because this file caught the error and logged a console warning, and
+ *    nobody reads a console on a phone. saveGame now reports its outcome
+ *    to the caller, which puts it on screen (see main.ts).
  */
 import { Origin } from './chem/origin.js';
 import { World } from './sim/world.js';
@@ -71,41 +87,151 @@ const SAVE_KEY = 'evo-save-v2';
 // guarded against but a real footgun on this experimental branch
 // nonetheless. Given this branch is unshipped, the cost of forcing a
 // clean restart is low.)
-const SAVE_VERSION = 8;
+// v9: genomes stopped serializing derived state (proteins, the class
+// caches, the decoded core traits — all recomputed from the gene sequence
+// by genomeFromSequence), the gene sequence packs to one string per gene
+// instead of an array of single-character strings, and brain weights
+// encode as exact base64 instead of full-precision doubles. Together a
+// 3.55x reduction, which is what moved the file off the iOS ceiling
+// described at the top of this file.
+//
+// **This is the first version that migrates instead of discarding.** Every
+// bump above threw the player's run away. That is survivable at a hundred
+// ticks and not at a hundred thousand. deserializeGenome and
+// NeuralNet.fromJSON both read the old shape as well as the new one, so a
+// v8 save loads with no transform at all — the only thing that had to
+// change was this file's willingness to try.
+//
+// Worth noting *why* that became possible, since it is the durable lesson
+// rather than a one-off: the fields v9 stopped writing are exactly the
+// derived ones, and derived fields are the ones most likely to change as
+// the model grows. v5 above exists only because the class caches were
+// being serialized. A field that is never written can never invalidate a
+// save.
+const SAVE_VERSION = 9;
+/** Versions this build can still read. A save at one of these loads
+ * directly; deserializeGenome absorbs the shape difference. Anything
+ * older is a genuine break — v3 and v4 changed what a gene *means*, so an
+ * old sequence would decode into a different creature entirely — and is
+ * discarded, but loudly, never silently. */
+const MIGRATABLE_VERSIONS = new Set([8]);
+/** Serializes both engines to one localStorage key. Never throws — a
+ * failed save must not take down a running simulation — but it does
+ * *report*, which is the entire difference between this and the version
+ * that lost a 100k-tick run. */
 export function saveGame(origin, world) {
+    let json;
     try {
-        const payload = {
-            version: SAVE_VERSION,
-            savedAt: Date.now(),
-            origin: origin.serialize(),
-            world: world.serialize(),
-        };
-        localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
+        json = buildSave(origin, world);
     }
     catch (e) {
-        // Quota exceeded, storage disabled (private browsing in some
-        // browsers), or something unserializable slipped in — none of these
-        // should ever crash the running sim, just skip this save attempt.
-        console.warn('Evo: autosave failed', e);
+        return { ok: false, outOfSpace: false, message: `Could not package the save: ${describe(e)}` };
+    }
+    try {
+        localStorage.setItem(SAVE_KEY, json);
+        return { ok: true, bytes: json.length };
+    }
+    catch (e) {
+        if (isQuotaError(e)) {
+            // Its own case because the remedy is nothing like any other
+            // failure's: the run is fine, the browser is full, and the player
+            // needs to export before they lose it.
+            return {
+                ok: false,
+                outOfSpace: true,
+                message: `Out of browser storage (this run needs ${Math.round(json.length / 1024)} KB). Export it to keep it.`,
+            };
+        }
+        return { ok: false, outOfSpace: false, message: `Storage unavailable: ${describe(e)}` };
     }
 }
+function buildSave(origin, world) {
+    const payload = {
+        version: SAVE_VERSION,
+        savedAt: Date.now(),
+        origin: origin.serialize(),
+        world: world.serialize(),
+    };
+    return JSON.stringify(payload);
+}
+/** localStorage's out-of-space signal is not one thing. The standard name
+ * is QuotaExceededError, Firefox has historically thrown
+ * NS_ERROR_DOM_QUOTA_REACHED, and both have used code 22 or 1014.
+ * Misclassifying it means reporting a full disk as a generic error and
+ * sending the player looking in entirely the wrong place. */
+function isQuotaError(e) {
+    if (!(e instanceof Error))
+        return false;
+    const code = e.code;
+    return (e.name === 'QuotaExceededError' ||
+        e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+        code === 22 ||
+        code === 1014);
+}
+function describe(e) {
+    return e instanceof Error ? e.message : String(e);
+}
 export function loadGame() {
+    let raw;
     try {
-        const raw = localStorage.getItem(SAVE_KEY);
-        if (!raw)
-            return null;
-        const data = JSON.parse(raw);
-        if (data.version !== SAVE_VERSION)
-            return null;
+        raw = localStorage.getItem(SAVE_KEY);
+    }
+    catch (e) {
+        return { status: 'discarded', reason: `Could not read browser storage: ${describe(e)}` };
+    }
+    if (!raw)
+        return { status: 'empty' };
+    return readSave(raw);
+}
+/** Shared by loadGame and importSave, so a pasted save goes through
+ * exactly the same validation and migration as a stored one. There is
+ * deliberately no second, weaker route into the simulation. */
+function readSave(raw) {
+    let data;
+    try {
+        data = JSON.parse(raw);
+    }
+    catch {
+        return { status: 'discarded', reason: 'That is not an Evo save — it is not valid JSON.' };
+    }
+    if (!data || typeof data.version !== 'number' || !data.world || !data.origin) {
+        return { status: 'discarded', reason: 'That is not an Evo save — it has no world or pool data in it.' };
+    }
+    if (data.version !== SAVE_VERSION && !MIGRATABLE_VERSIONS.has(data.version)) {
         return {
+            status: 'discarded',
+            reason: `That save is version ${data.version}. This build reads version ${SAVE_VERSION} and can convert ` +
+                `${[...MIGRATABLE_VERSIONS].join(', ')} — version ${data.version} is too old to convert.`,
+        };
+    }
+    try {
+        return {
+            status: 'loaded',
             origin: Origin.deserialize(data.origin),
             world: World.deserialize(data.world),
+            migratedFrom: data.version === SAVE_VERSION ? null : data.version,
         };
     }
     catch (e) {
-        console.warn('Evo: saved game was unreadable, starting fresh', e);
-        return null;
+        return { status: 'discarded', reason: `The save could not be rebuilt: ${describe(e)}` };
     }
+}
+/** The whole run as text, for the player to keep somewhere the browser
+ * cannot evict. Built from live state rather than read back out of
+ * storage, so exporting still works when storage is the broken thing —
+ * which is precisely when it is needed. */
+export function exportSave(origin, world) {
+    return buildSave(origin, world);
+}
+/** Loads a pasted or opened save. Validates completely before returning,
+ * so a bad paste reports a reason instead of half-loading into a broken
+ * dish. Does not touch storage — the caller saves once the new world is
+ * actually installed. */
+export function importSave(text) {
+    const trimmed = text.trim();
+    if (!trimmed)
+        return { status: 'discarded', reason: 'Nothing to import — the box is empty.' };
+    return readSave(trimmed);
 }
 export function clearSave() {
     try {
