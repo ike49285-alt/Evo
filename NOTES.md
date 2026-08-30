@@ -1940,7 +1940,7 @@ weighted tip. One species alive gives sub-clades of it; fifteen give roughly
 one tip each. The budget is `slotHeight / 13`, so a taller panel genuinely
 shows more.
 
-### Two things that only showed up on screen
+### Three things that only showed up on screen
 
 - **Tips were drawn in the deep past.** A collapsed tip was anchored at its
   frontier node's birth tick — an *ancestor* — so summaries of the living
@@ -1951,6 +1951,16 @@ shows more.
   tips at 11px in an 11px slot overlap outright, and one taller than the top
   padding clips against the canvas edge. Both were visible before the cap
   (`min(11, slotSpacing * 0.45, padTB - 3)`) existed.
+- **Plotting tips at the present is not enough on its own — they need their
+  branch drawn too.** Caught only by screenshotting the *real app*, which
+  releases 26 founders from the Designer, where the harness fixture had 4:
+  with that many roots the frontier never expands past them, so every tip
+  plots at the present, nothing is left to draw in between, and the whole
+  left half goes empty while the tips pile against the right frame. Each
+  clade now draws a branch from its own origin out to its tip, which is what
+  a phylogram does and what restores the time structure. The regression test
+  gained a second fixture built the way the app actually seeds, because the
+  original one could not have caught this.
 
 ### Result
 

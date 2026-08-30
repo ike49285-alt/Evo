@@ -246,14 +246,17 @@ export function drawTree(canvas, nodes, opts) {
         const weight = tipWeight(id);
         return weight <= 1 ? 3.2 : Math.min(maxTipRadius, 3.2 + Math.sqrt(weight) * 0.85);
     };
+    /** Where a node's own branch begins — its birth. Distinct from where its
+     * marker is drawn, which for a collapsed tip is the present. */
+    const originX = (id) => xOf(nodes.get(id)?.birthTick ?? 0);
+    const markerX = (id) => xOf(drawnTick(id));
+    const rowY = (id) => yOf(slot.get(id) ?? 0);
     for (const id of drawn) {
-        const node = nodes.get(id);
-        if (!node)
+        if (!nodes.has(id))
             continue;
-        const s = slot.get(id) ?? 0;
         positions.set(selectableId.get(id) ?? id, {
-            x: xOf(drawnTick(id)),
-            y: yOf(s),
+            x: markerX(id),
+            y: rowY(id),
             radius: Math.max(7, tipRadius(id) + 3),
         });
     }
@@ -316,16 +319,40 @@ export function drawTree(canvas, nodes, opts) {
             ctx.strokeStyle = onPath ? 'rgba(255, 255, 255, 0.85)' : 'rgba(138, 154, 142, 0.3)';
             ctx.lineWidth = onPath ? 2 : 1;
         }
+        const childOriginX = originX(node.id);
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         // A short horizontal-then-diagonal elbow reads a lot more like a
         // pedigree chart than a straight diagonal smear once branches are
         // dense.
-        ctx.lineTo(p.x + (c.x - p.x) * 0.4, p.y);
-        ctx.lineTo(c.x, c.y);
+        ctx.lineTo(p.x + (childOriginX - p.x) * 0.4, p.y);
+        ctx.lineTo(childOriginX, c.y);
         ctx.stroke();
         if (node.isSpeciationEvent)
             ctx.setLineDash([]);
+    }
+    // The clade's own span: from where a collapsed branch began out to the
+    // present, where its tip is drawn. This is the segment that keeps time
+    // structure visible -- without it every tip sits at the right edge with
+    // nothing joining it to its origin, and a forest of founder roots renders
+    // as a meaningless pile against the frame.
+    for (const id of drawn) {
+        const node = nodes.get(id);
+        if (!node)
+            continue;
+        const from = originX(id);
+        const to = markerX(id);
+        if (to - from < 1)
+            continue;
+        const y = rowY(id);
+        ctx.strokeStyle = highlightIds.has(id)
+            ? 'rgba(255, 255, 255, 0.85)'
+            : `hsl(${node.hue}, 45%, 42%)`;
+        ctx.lineWidth = highlightIds.has(id) ? 2 : 1.4;
+        ctx.beginPath();
+        ctx.moveTo(from, y);
+        ctx.lineTo(to, y);
+        ctx.stroke();
     }
     for (const id of drawn) {
         const node = nodes.get(id);
