@@ -2865,6 +2865,61 @@ isolation built last round had been completely inert. Every individual could
 breed with every other, and unrestricted gene flow is exactly what prevents
 divergence. The mechanism was correct and the constant made it a no-op.
 
+### The fix: both thresholds were unreachable
+
+Swept at 0.34 / 0.20 / 0.15 / 0.10 for mate compatibility (with speciation
+tracking just above it), against both a flat and a patchy light field. 6,000
+ticks, 2x dish, 3 seeds. "eff" is effective species — Shannon diversity
+exponentiated, i.e. species count weighted by how evenly the population is
+actually split between them, which is the number that means anything.
+
+| mate | spec | light | pop | lineages ever | living | eff |
+|---|---|---|---|---|---|---|
+| 0.34 | 0.34 | flat | 472 | 1.0 | 1.0 | **1.00** |
+| 0.20 | 0.22 | flat | 559 | 41.0 | 25.0 | 10.37 |
+| 0.15 | 0.18 | flat | 641 | 61.3 | 22.0 | 6.14 |
+| 0.10 | 0.14 | flat | 678 | 145.7 | 49.3 | 12.41 |
+| 0.34 | 0.34 | patchy | 650 | 1.0 | 1.0 | **1.00** |
+| 0.20 | 0.22 | patchy | 601 | 48.3 | 17.0 | 5.54 |
+| 0.15 | 0.18 | patchy | 479 | 61.0 | 31.3 | 11.74 |
+| 0.10 | 0.14 | patchy | 684 | 124.3 | 37.3 | 12.80 |
+
+Then confirmed at 20,000 ticks over 5 seeds, because the 6k numbers could
+easily have been a diversity spike on its way to collapsing — 145 lineages
+founded against 49 surviving is mostly churn:
+
+| | living species | effective | sexual fraction |
+|---|---|---|---|
+| 0.20 / 0.22 | 5.2 | 2.28 | 10% |
+| **0.10 / 0.14** | **22.8** | **6.72** | 9.4% |
+
+**Settled on mate 0.10 / speciation 0.14.** Three things about reading this
+table honestly:
+
+- **Only the top and bottom rows are trustworthy at 3 seeds.** The 0.20 and
+  0.15 arms disagree with *themselves* across the light field (10.37 vs 5.54;
+  6.14 vs 11.74). 0.10 is the only setting that lands in the same place in
+  both arms, and it is the one that survived to 20k.
+- **The light field's effect on diversity is unresolved.** It flips sign
+  between thresholds, which is noise, not mechanism. What it does do
+  reliably is support more life at the same total energy (472 → 650 at
+  0.34) and give the dish visible terrain. It was built as the
+  diversification feature and it is not the thing that produced the
+  diversity; the thresholds were.
+- **The tight mate threshold does not break sex.** That was the real risk —
+  "43 species" would be worthless if it were clonal fragments that simply
+  cannot interbreed. The sexual fraction is unchanged against 0.20 (9.4% vs
+  10%), and in the seeds where sex dominates it keeps working (seed 11: 44%
+  sexual, 183 sexual births at 20k). The generally low sexual fraction is a
+  pre-existing property of these dishes, not something this change caused.
+
+Also worth recording: diversity **peaks around 5,000 ticks and consolidates**
+after that (effective species averaged 18.7 at 5k against 6.7 at 20k at the
+chosen setting). A long run settles toward a handful of winners rather than
+holding at fifty. That is a real property of the model, not a bug, but it
+means a screenshot at 5k and one at 20k tell different stories.
+
+
 ## Tech constraint from last time
 
 Original build environment blocked the npm registry/CDNs (git-only

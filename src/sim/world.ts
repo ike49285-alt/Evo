@@ -306,7 +306,21 @@ export class World {
   // a deep-enough lineage again. That's an inherent property of a bounded-
   // metric random walk with reference-reset, not a bug — the tuning
   // question is the steady-state cadence, not eliminating recurrence.
-  readonly speciationThreshold = 0.34;
+  //
+  // 0.34 -> 0.14, because 0.34 turned out to be UNREACHABLE. That earlier
+  // sweep measured how often speciation fired at various thresholds; what
+  // it never measured is how far a population can actually drift, and the
+  // answer is: not that far. Distance from a lineage's reference sequence
+  // saturates — measured 0.208 / 0.244 / 0.253 / 0.266 at 2k / 5k / 10k /
+  // 15k ticks, still climbing but plainly asymptotic well under 0.34. A
+  // threshold above the saturation point does not fire rarely, it cannot
+  // fire at all, and the dish had been running as a single species for
+  // 20,000 ticks at a stretch.
+  //
+  // This file already noted that geneticDistance saturates rather than
+  // growing unboundedly. The mistake was not noticing that this puts a
+  // hard ceiling on what any threshold can mean.
+  readonly speciationThreshold = 0.14;
   // How far two genomes may diverge and still interbreed. This replaced a
   // flat `b.lineageId !== a.lineageId` test, which made reproductive
   // isolation an administrative fact rather than a biological one: two
@@ -317,14 +331,27 @@ export class World {
   // the sole member of its species, unable to breed with the siblings it
   // was genetically all but identical to.
   //
-  // Deliberately NOT hard-wired to speciationThreshold even though 0.34 is
-  // its swept value. They measure different things — speciation compares an
-  // individual against its lineage's fixed reference sequence, this compares
-  // two living individuals against each other — and the metric's protein
-  // term normalises by a pair-dependent maxTotal (genes.ts), so no bound
-  // relating the two follows from the one holding. Swept independently; see
-  // NOTES.md for the table.
-  readonly mateCompatibilityThreshold = 0.34;
+  // Deliberately NOT hard-wired to speciationThreshold. They measure
+  // different things — speciation compares an individual against its
+  // lineage's fixed reference sequence, this compares two living
+  // individuals against each other — and the metric's protein term
+  // normalises by a pair-dependent maxTotal (genes.ts), so no bound
+  // relating the two follows from the one holding.
+  //
+  // 0.34 -> 0.10, and this was the worse half of the same mistake. Pairwise
+  // divergence never approaches 0.34 either, so NO PAIR WAS EVER
+  // INCOMPATIBLE and the whole emergent-isolation mechanism was inert from
+  // the day it was written: every individual could breed with every other,
+  // and unrestricted gene flow is precisely what prevents divergence. The
+  // rule was right and the constant made it a no-op.
+  //
+  // Swept at 0.34 / 0.20 / 0.15 / 0.10 against both a flat and a patchy
+  // light field (table in NOTES.md). Effective species at 20,000 ticks over
+  // 5 seeds: 1.0 at 0.34, 2.3 at 0.20, 6.7 at 0.10. Checked specifically
+  // that a threshold this tight does not simply break sexual reproduction
+  // into clonal fragments — the sexual fraction is unchanged (9.4% vs 10%
+  // at 0.20), and where sex dominates a dish it still works.
+  readonly mateCompatibilityThreshold = 0.10;
   // What recombination buys: sexual offspring take point mutations (and
   // brain-weight mutations) at this fraction of the asexual rate. Without
   // it, a sexual child paid the full asexual mutational load *on top of*
