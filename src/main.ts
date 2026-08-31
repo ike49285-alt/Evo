@@ -28,6 +28,7 @@ import {
 } from './ui/treeview.js';
 import { drawSpeciesTree, SpeciesNodeData } from './ui/speciestree.js';
 import { exportSave, importSave, loadGame, saveGame } from './save.js';
+import { offerRunDownload } from './download.js';
 
 // The dish at the default population cap. Everything else scales off these.
 const BASE_POP_CAP = 320;
@@ -2145,25 +2146,42 @@ el<HTMLButtonElement>('save-copy').addEventListener('click', async () => {
   }
 });
 
-el<HTMLButtonElement>('save-download').addEventListener('click', () => {
-  // Works on desktop and ordinary mobile browsing. Deliberately still
-  // offered even though an iOS home-screen shortcut and the sandboxed
-  // Artifact build both tend to swallow it — when it fails it fails
-  // visibly and "Copy run" is right next to it, so the player is never
-  // left without a route.
+const saveDownloadBtn = el<HTMLButtonElement>('save-download');
+saveDownloadBtn.addEventListener('click', async () => {
+  // Which route this actually takes depends on where the page is running —
+  // see download.ts, which owns that decision. What matters here is that the
+  // status line reports what happened rather than what was attempted: the
+  // version this replaced always said "Download started", including inside
+  // the Artifact where a download provably could not start.
+  const filename = `evo-tick-${Math.floor(world.tick)}.json`;
+  // Disabled across the await so a second tap cannot open a competing save
+  // prompt — the capability allows only one undecided prompt at a time and
+  // rejects the rest as rate-limited, which would read as a failure the
+  // player caused themselves.
+  saveDownloadBtn.disabled = true;
+  setSaveModalStatus('Preparing the run…', null);
   try {
-    const blob = new Blob([exportSave(origin, world)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `evo-tick-${world.tick}.json`;
-    a.click();
-    // Revoked on a later turn of the event loop: revoking synchronously
-    // can invalidate the URL before the browser has started the download.
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-    setSaveModalStatus('Download started. If nothing appeared, use "Copy run" instead — some browsers block this.', null);
-  } catch (e) {
-    setSaveModalStatus(`Download not available here: ${e instanceof Error ? e.message : String(e)}. Use "Copy run".`, 'bad');
+    const outcome = await offerRunDownload(filename, exportSave(origin, world));
+    switch (outcome.status) {
+      case 'saved':
+        setSaveModalStatus(
+          outcome.via === 'viewer'
+            ? `Saved as ${filename}.`
+            : `Download started (${filename}). If nothing appeared, use "Copy run" instead — some browsers block this.`,
+          outcome.via === 'viewer' ? 'good' : null,
+        );
+        break;
+      case 'declined':
+        // Not an error, and deliberately not styled as one: the player was
+        // asked and said no.
+        setSaveModalStatus('Save cancelled.', null);
+        break;
+      case 'failed':
+        setSaveModalStatus(outcome.message, 'bad');
+        break;
+    }
+  } finally {
+    saveDownloadBtn.disabled = false;
   }
 });
 

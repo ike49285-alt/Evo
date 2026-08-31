@@ -3077,6 +3077,51 @@ living-only weight would score nearly every candidate zero.
   driving it is actually running.
 
 
+### The download button was lying
+
+Follow-up. "Download .json" in the Save data dialog did nothing inside the
+published Artifact — and, worse, said it had. The viewer sandboxes the page and
+never grants it permission to start a download, so a Blob URL on a synthetic
+`<a download>` is inert there: `a.click()` throws nothing and does nothing. The
+handler took its success branch and reported "Download started" for a download
+that could not start, on the one feature whose whole purpose is getting a run
+out of browser storage before the browser evicts it.
+
+Fixed with the Artifact `downloads` runtime capability — the page asks, the
+viewer confirms the filename and size, the file is saved only on accept. The
+awkward part is that this page has two homes, so `src/download.ts` owns three
+cases rather than two:
+
+| context | `window.claude` | capability | route |
+|---|---|---|---|
+| GitHub Pages, saved copy | absent | — | anchor (works) |
+| Artifact viewer, granted | present | resolves | `save()` |
+| Artifact viewer, not granted | present | null | **neither works** |
+
+The third row is the whole point. The anchor is dead there too, so falling back
+to it is exactly how the old code came to lie. Presence of `window.claude` is
+the only signal separating it from row one, so that case reports unavailability
+and the UI points at "Copy run", which always works.
+
+This deliberately departs from the capability guidance's "null means hide the
+affordance": that assumes a page which only ever runs as an Artifact. Here null
+is the *normal* case, on the build the phone actually uses, where the button is
+fine.
+
+Verified in Chromium against a stubbed `window.claude.use` matching the
+contract — the granted path calls `save()` with a `.json` filename and a string
+body and never touches the anchor; the plain page still fires a real download;
+and `declined`, `rate_limited`, `too_large`, `rejected_extension` and an unknown
+future code each produce their own message, with `declined` treated as a
+cancellation rather than an error. What a stub cannot prove is the real grant:
+that needs a tap in the published artifact.
+
+The status line now reports what happened rather than what was attempted, and
+the button disables across the await — the capability allows one undecided
+prompt at a time, so a double-tap would otherwise rate-limit itself and read as
+a failure the player caused.
+
+
 ## Tech constraint from last time
 
 Original build environment blocked the npm registry/CDNs (git-only
