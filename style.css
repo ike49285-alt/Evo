@@ -270,7 +270,8 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
 /* The Tree of Life canvas needs to fill whatever height is left in the
    panel, not grow with its content — this is the one panel that isn't a
    plain scrolling block. */
-#tab-tree.tab-panel.active {
+#tab-tree.tab-panel.active,
+#tab-species.tab-panel.active {
   display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px;
 }
 
@@ -437,6 +438,22 @@ canvas.chart {
   cursor: grab; touch-action: none;
 }
 #chart-tree:active { cursor: grabbing; }
+
+/* The species tree fills its whole panel — unlike the Tree of Life tab there
+   is no detail pane beneath it, because tapping a species opens the existing
+   card modal rather than expanding in place. */
+#chart-species-tree {
+  flex: 1 1 auto; width: 100%; min-height: 200px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+  cursor: grab; touch-action: none;
+}
+#chart-species-tree:active { cursor: grabbing; }
+.species-toggle {
+  display: flex; align-items: center; gap: 5px;
+  font-size: var(--fs-body); color: var(--text-dim);
+  white-space: nowrap; cursor: pointer;
+}
+.species-toggle input { accent-color: var(--accent); }
 .specimen-name { font-family: var(--font-serif); color: var(--accent-2); }
 
 /* The full per-individual breakout, appended below the tree canvas --
@@ -525,12 +542,9 @@ canvas.chart {
 }
 .tree-detail-parent-link:hover { border-color: var(--accent); }
 
-.species-list { display: flex; flex-direction: column; gap: 10px; }
-.species-card {
-  background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--accent-2);
-  border-radius: 8px; padding: 10px 12px;
-}
-.species-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+/* .species-list / .species-card / .species-card-head lived here until the
+   Species tab became a canvas tree. Removed rather than left orphaned — the
+   rules below are still live, but they are the *modal's* now, not a list's. */
 .species-swatch { width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto; border: 1px solid var(--line); }
 .species-name { font-family: var(--font-serif); font-size: var(--fs-specimen); color: var(--accent-2); }
 .species-pop { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-body); color: var(--text-dim); margin-bottom: 6px; }

@@ -109,14 +109,29 @@ const SAVE_KEY = 'evo-save-v2';
 // the model grows. v5 above exists only because the class caches were
 // being serialized. A field that is never written can never invalidate a
 // save.
-const SAVE_VERSION = 9;
+// v10: lineage records gained life history — peak population, an extinction
+// tick, and a final stats snapshot — so the Species panel can show a species
+// that is no longer alive. The same change makes an extinct lineage drop its
+// referenceSequence, which is what keeps that history affordable: the
+// sequence is 95% of a record's weight and is unreachable once the last
+// member dies (see LineageInfo.referenceSequence).
+//
+// This is not a cosmetic bump. Before it, `lineages` grew without bound at
+// full weight, and once speciation actually started firing it was measured at
+// 64% of a 20,000-tick save and on a straight line through the iOS storage
+// ceiling somewhere around tick 60,000 — the same silent autosave failure
+// that cost a hundred thousand ticks once already. A v9 save migrates rather
+// than being discarded, and sheds its dead weight on the first load, which is
+// most valuable precisely for the longest runs.
+const SAVE_VERSION = 10;
 
 /** Versions this build can still read. A save at one of these loads
- * directly; deserializeGenome absorbs the shape difference. Anything
- * older is a genuine break — v3 and v4 changed what a gene *means*, so an
- * old sequence would decode into a different creature entirely — and is
+ * directly; deserializeGenome absorbs the genome shape difference and
+ * World.deserialize backfills the lineage life-history fields v10 added.
+ * Anything older is a genuine break — v3 and v4 changed what a gene *means*,
+ * so an old sequence would decode into a different creature entirely — and is
  * discarded, but loudly, never silently. */
-const MIGRATABLE_VERSIONS = new Set([8]);
+const MIGRATABLE_VERSIONS = new Set([8, 9]);
 
 interface SaveFile {
   version: number;

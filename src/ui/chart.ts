@@ -1,3 +1,22 @@
+/** Range of a numeric series, by iteration rather than `Math.min(...arr)`.
+ *
+ * The spread form is not a style preference here, it is a crash: spreading an
+ * array into a call passes one argument per element, and past a few tens of
+ * thousands of them the engine throws RangeError. drawScatter is handed one
+ * point per living organism every frame, and the population cap now accepts
+ * 20,000 — with no try/catch around the frame loop, that throw would kill
+ * requestAnimationFrame outright and freeze the whole app, dish included. */
+function extent<T>(items: readonly T[], pick: (item: T) => number): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const item of items) {
+    const v = pick(item);
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return { min, max };
+}
+
 /** Draws a minimal sparkline (line + soft fill) of `values` into `canvas`. */
 export function drawSparkline(canvas: HTMLCanvasElement, values: readonly number[], colorHex: string): void {
   const ctx = canvas.getContext('2d');
@@ -10,8 +29,7 @@ export function drawSparkline(canvas: HTMLCanvasElement, values: readonly number
   ctx.clearRect(0, 0, w, h);
   if (values.length < 2) return;
 
-  let min = Math.min(...values);
-  let max = Math.max(...values);
+  let { min, max } = extent(values, (v) => v);
   if (min === max) {
     min -= 1;
     max += 1;
@@ -69,10 +87,12 @@ export function drawScatter(
   const pad = 14;
   if (points.length === 0) return;
 
-  let minX = Math.min(...points.map((p) => p.x));
-  let maxX = Math.max(...points.map((p) => p.x));
-  let minY = Math.min(...points.map((p) => p.y));
-  let maxY = Math.max(...points.map((p) => p.y));
+  const xs = extent(points, (p) => p.x);
+  const ys = extent(points, (p) => p.y);
+  let minX = xs.min;
+  let maxX = xs.max;
+  let minY = ys.min;
+  let maxY = ys.max;
   // Always include zero in range for axes that have a meaningful zero
   // (e.g. a diet axis where 0 = no mouth/chloroplast lean either way).
   minX = Math.min(minX, 0);

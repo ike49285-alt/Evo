@@ -8,6 +8,7 @@ import { Origin } from './chem/origin.js';
 import { translateBootstrapCandidate } from './chem/bridge.js';
 import { drawSparkline, drawScatter, drawRadarChart } from './ui/chart.js';
 import { defaultTreeCamera, drawTree, hitTestTree, panTreeCamera, zoomTreeCameraAt, } from './ui/treeview.js';
+import { drawSpeciesTree } from './ui/speciestree.js';
 import { exportSave, importSave, loadGame, saveGame } from './save.js';
 // The dish at the default population cap. Everything else scales off these.
 const BASE_POP_CAP = 320;
@@ -448,6 +449,13 @@ document.querySelectorAll('#tab-rail .tab-btn').forEach((btn) => {
         btn.setAttribute('aria-selected', 'true');
         activeTab = btn.dataset.tab;
         el(`tab-${activeTab}`).classList.add('active');
+        // Arriving at the Species tab must populate it immediately, whatever the
+        // tick happens to be — and while paused the tick never moves again, which
+        // is precisely how the old panel came to render nothing at all on a
+        // paused dish. Declared later in the file; this runs on a click, long
+        // after the module has finished loading.
+        if (activeTab === 'species')
+            refreshSpeciesSummaries(true);
     });
 });
 // With Stage 0 retired, the Chemistry tab and the pool-only HUD readout are
@@ -736,74 +744,131 @@ function updateStatsPanels() {
     }
 }
 // --- species panel ----------------------------------------------------
-// One card per currently-living lineage — a proper home for species
-// identity instead of a line of text you only see by clicking a Tree of
-// Life node. Rebuilding the card list is real DOM work, not just text
-// updates, so it's throttled to the same cadence world.history samples at
-// (statsSampleInterval ticks) and skipped entirely while the tab isn't
-// active.
-const speciesList = el('species-list');
-let lastSpeciesRefreshTick = -1;
-function updateSpeciesPanel() {
-    if (activeTab !== 'species')
-        return;
+// A phylogeny of species, drawn on canvas, with the card behind a tap.
+//
+// This replaced a scrolling list of DOM cards, and the reason is worth
+// keeping: that list was rebuilt wholesale — `replaceChildren()` then a fresh
+// element per species — on the simulation's own stats cadence. With a single
+// species that is six nodes and nobody notices. Once speciation actually
+// started firing it became twenty to fifty cards, several hundred nodes,
+// rebuilt as often as several times a second, and a tap needs pointerdown and
+// pointerup on the *same* element: the card was being destroyed under the
+// player's finger, so taps silently never landed while scrolling — which the
+// compositor handles without the main thread — kept working. Measured before
+// the change: an instant tap opened a card 5/5 times, a realistic 250ms one
+// 1/5, and the element survived the press 0/5.
+//
+// The same gate failed in the other direction too. Keying the refresh on
+// `tick % statsSampleInterval` meant a *paused* dish never refreshed at all,
+// so opening this tab while paused showed nothing, permanently. Measured: 0
+// cards rendered while paused.
+//
+// A canvas has neither problem. Nothing is replaced, so nothing can be
+// replaced under a finger, and the redraw is one draw call per frame whatever
+// the species count — the same treatment the Tree of Life tab already gets.
+const speciesTreeCanvas = el('chart-species-tree');
+const speciesTreeEmpty = el('species-tree-empty');
+const speciesShowExtinct = el('species-show-extinct');
+const speciesCamera = defaultTreeCamera();
+let speciesPositions = new Map();
+let selectedLineageId = null;
+/** The summaries the tab is currently drawing from, refreshed on the stats
+ * cadence rather than per frame — building them is an O(population) pass, and
+ * unlike the old card list nothing about *drawing* depends on how fresh they
+ * are. Cached so the per-frame redraw is pure canvas work. */
+let speciesSummaries = [];
+let lastSpeciesSampleTick = -1;
+function refreshSpeciesSummaries(force) {
     const tick = Math.floor(world.tick);
-    if (tick === lastSpeciesRefreshTick || tick % world.statsSampleInterval !== 0)
+    // `force` is what makes this work while paused: a paused dish has a frozen
+    // tick, so the cadence check alone would never fire again. Tab switches and
+    // toggle changes force it.
+    if (!force && (tick === lastSpeciesSampleTick || tick % world.statsSampleInterval !== 0))
         return;
-    lastSpeciesRefreshTick = tick;
-    const species = world.getLivingSpecies();
-    speciesList.replaceChildren();
-    if (species.length === 0) {
-        const empty = document.createElement('p');
-        empty.className = 'species-empty';
-        empty.textContent = SOUP_ENABLED
-            ? "Nothing alive yet — the pool hasn't bootstrapped a founder."
-            : 'Nothing alive. The dish does not restock itself — release a new species from the Designer tab to start it again.';
-        speciesList.appendChild(empty);
-        return;
-    }
-    for (const s of species) {
-        const card = document.createElement('div');
-        card.className = 'species-card';
-        card.style.borderLeftColor = `hsl(${s.hue}, 60%, 50%)`;
-        card.style.cursor = 'pointer';
-        card.addEventListener('click', () => openSpeciesModal(s));
-        const head = document.createElement('div');
-        head.className = 'species-card-head';
-        const swatch = document.createElement('span');
-        swatch.className = 'species-swatch';
-        swatch.style.background = `hsl(${s.hue}, 60%, 45%)`;
-        const name = document.createElement('span');
-        name.className = 'species-name';
-        name.textContent = s.name; // player-entered text — textContent only, never innerHTML
-        head.append(swatch, name);
-        const pop = document.createElement('div');
-        pop.className = 'species-pop';
-        pop.textContent = `${s.population} alive · gen ${s.maxGeneration}${s.dominantClass ? ` · mostly ${s.dominantClass}` : ''}`;
-        const traits = document.createElement('div');
-        traits.className = 'species-traits';
-        traits.textContent = `size ${s.avgSize.toFixed(2)} · speed ${s.avgSpeed.toFixed(2)} · sense ${s.avgSense.toFixed(0)}`;
-        card.append(head, pop, traits);
-        if (s.parentName !== null) {
-            const lineage = document.createElement('div');
-            lineage.className = 'species-lineage';
-            const parentEm = document.createElement('em');
-            parentEm.textContent = s.parentName;
-            lineage.append('diverged from ', parentEm);
-            card.appendChild(lineage);
-        }
-        speciesList.appendChild(card);
-    }
-    // Keep an already-open modal live while its species is still around —
-    // reads the same fresh SpeciesSummary array this refresh just built,
-    // not a stale snapshot from the moment it was opened.
+    lastSpeciesSampleTick = tick;
+    speciesSummaries = world.getSpeciesSummaries(speciesShowExtinct.checked);
+    // Keep an already-open card current, including watching it die: a species
+    // that goes extinct while its card is open stays open and switches to its
+    // final recorded figures, rather than the card vanishing mid-read.
     if (openedSpeciesLineageId !== null) {
-        const stillAlive = species.find((sp) => sp.lineageId === openedSpeciesLineageId);
-        if (stillAlive)
-            renderSpeciesModal(stillAlive);
+        const shown = speciesSummaries.find((sp) => sp.lineageId === openedSpeciesLineageId);
+        if (shown)
+            renderSpeciesModal(shown);
         else
             closeSpeciesModal();
     }
+}
+/** Living lineages plus the ancestors that connect them, or everything that
+ * ever existed. The ancestor walk is what keeps the default view a real tree
+ * rather than a row of disconnected survivors — an extinct parent is still
+ * the reason two living species are related. */
+function speciesTreeNodes() {
+    const byId = new Map();
+    for (const s of speciesSummaries)
+        byId.set(s.lineageId, s);
+    const keep = new Set();
+    if (speciesShowExtinct.checked) {
+        for (const s of speciesSummaries)
+            keep.add(s.lineageId);
+    }
+    else {
+        for (const s of speciesSummaries) {
+            if (s.isExtinct)
+                continue;
+            let cur = s.lineageId;
+            while (cur !== null && byId.has(cur) && !keep.has(cur)) {
+                keep.add(cur);
+                cur = byId.get(cur).parentLineageId;
+            }
+        }
+    }
+    const nodes = new Map();
+    for (const id of keep) {
+        const s = byId.get(id);
+        if (!s)
+            continue;
+        nodes.set(id, {
+            id: s.lineageId,
+            name: s.name,
+            hue: s.hue,
+            parentId: s.parentLineageId,
+            createdTick: s.createdTick,
+            extinctTick: s.extinctTick,
+            isExtinct: s.isExtinct,
+            population: s.population,
+            peakPopulation: s.peakPopulation,
+            isPlayerDesigned: s.isPlayerDesigned,
+        });
+    }
+    return nodes;
+}
+function updateSpeciesPanel() {
+    if (activeTab !== 'species')
+        return;
+    refreshSpeciesSummaries(false);
+    const nodes = speciesTreeNodes();
+    const empty = nodes.size === 0;
+    speciesTreeEmpty.hidden = !empty;
+    if (empty) {
+        speciesTreeEmpty.textContent = speciesShowExtinct.checked
+            ? 'No species yet — nothing has ever lived in this dish.'
+            : 'Nothing alive right now. Tick "Show extinct" to see what used to be here, or release a species from the Designer tab.';
+    }
+    speciesPositions = drawSpeciesTree(speciesTreeCanvas, nodes, {
+        selectedId: selectedLineageId,
+        camera: speciesCamera,
+        nowTick: Math.floor(world.tick),
+    });
+}
+/** Opens the card for whatever species a tap landed on. Shared by the tree
+ * and by nothing else — but kept separate from the modal itself so the
+ * selection ring and the modal can never disagree about what is open. */
+function selectSpecies(lineageId) {
+    const s = speciesSummaries.find((sp) => sp.lineageId === lineageId);
+    if (!s)
+        return;
+    selectedLineageId = lineageId;
+    openSpeciesModal(s);
 }
 // --- species stat-star modal --------------------------------------------
 const speciesModal = el('species-modal');
@@ -818,15 +883,36 @@ let openedSpeciesLineageId = null;
 function renderSpeciesModal(s) {
     speciesModalSwatch.style.background = `hsl(${s.hue}, 60%, 45%)`;
     speciesModalName.textContent = s.name; // player-entered text — textContent only, never innerHTML
-    speciesModalMeta.textContent = `${s.population} alive · gen ${s.maxGeneration}${s.dominantClass ? ` · mostly ${s.dominantClass}` : ''}`;
-    speciesModalTraits.textContent = `size ${s.avgSize.toFixed(2)} · speed ${s.avgSpeed.toFixed(2)} · sense ${s.avgSense.toFixed(0)}`;
+    // Peak is the number that gives a dead end its scale — plenty of species
+    // exist for a few hundred ticks and never exceed the handful they started
+    // with, and "12 alive" alone cannot tell you whether this one was ever more
+    // than that. Null means a run older than the field: shown as unknown rather
+    // than as a fabricated zero.
+    const peak = s.peakPopulation === null ? 'peak unknown' : `peak ${s.peakPopulation}`;
+    const status = s.isExtinct
+        ? s.extinctTick === null
+            ? 'extinct · died before this was recorded'
+            : `extinct · died t${s.extinctTick}`
+        : `${s.population} alive`;
+    speciesModalMeta.textContent =
+        `${status} · ${peak} · born t${Math.round(s.createdTick)} · gen ${s.maxGeneration}` +
+            `${s.dominantClass ? ` · mostly ${s.dominantClass}` : ''}`;
+    // An extinct species' figures are its last sample while alive, not a live
+    // reading, and saying so is the difference between a record and a lie.
+    const traitPrefix = s.statsAreLastRecorded ? 'last recorded — ' : '';
+    speciesModalTraits.textContent = s.maxGeneration === 0 && s.isExtinct && s.peakPopulation === null
+        ? 'No measurements survive for this species.'
+        : `${traitPrefix}size ${s.avgSize.toFixed(2)} · speed ${s.avgSpeed.toFixed(2)} · sense ${s.avgSense.toFixed(0)}`;
     speciesModalLineage.replaceChildren();
     if (s.parentName !== null) {
         const parentEm = document.createElement('em');
         parentEm.textContent = s.parentName;
         speciesModalLineage.append('diverged from ', parentEm);
     }
-    drawRadarChart(speciesModalRadar, CATALYSIS_CLASSES.map((cls) => ({ label: cls, value: s.avgClassPower[cls] })), s.hue);
+    drawRadarChart(speciesModalRadar, 
+    // A v9-migrated extinct record has no class powers at all; an empty
+    // profile draws as a real point at the centre rather than throwing.
+    CATALYSIS_CLASSES.map((cls) => ({ label: cls, value: s.avgClassPower[cls] ?? 0 })), s.hue);
 }
 function openSpeciesModal(s) {
     openedSpeciesLineageId = s.lineageId;
@@ -835,6 +921,9 @@ function openSpeciesModal(s) {
 }
 function closeSpeciesModal() {
     openedSpeciesLineageId = null;
+    // Drops the tree's selection ring with it, so the highlighted node and the
+    // open card are never out of step.
+    selectedLineageId = null;
     speciesModal.hidden = true;
 }
 speciesModalClose.addEventListener('click', closeSpeciesModal);
@@ -1630,6 +1719,98 @@ el('tree-fit').addEventListener('click', () => {
     treeCamera.zoom = fresh.zoom;
 });
 el('tree-clear').addEventListener('click', () => selectIndividual(null));
+// --- species tree pan / zoom ---------------------------------------------
+// Deliberately the same gestures as the dish and the Tree of Life canvas
+// (drag to pan, wheel or pinch to zoom, anchored on the pointer), driving the
+// same camera helpers — a third interaction model for a third canvas would be
+// gratuitous.
+const speciesPointers = new Map();
+let speciesPinchDist = 0;
+let speciesDragMoved = 0;
+const speciesCssPoint = (e) => {
+    const rect = speciesTreeCanvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+};
+const speciesSize = () => ({
+    w: Math.max(1, speciesTreeCanvas.clientWidth),
+    h: Math.max(1, speciesTreeCanvas.clientHeight),
+});
+speciesTreeCanvas.addEventListener('pointerdown', (e) => {
+    // Same defensive capture as the dish canvas: a synthetic or otherwise odd
+    // pointer can make setPointerCapture throw, and an uncaught throw here
+    // would abort the rest of the handler and silently desync every gesture
+    // computed from the pointer map afterward.
+    try {
+        speciesTreeCanvas.setPointerCapture(e.pointerId);
+    }
+    catch {
+        // ignored — see above
+    }
+    speciesPointers.set(e.pointerId, speciesCssPoint(e));
+    if (speciesPointers.size === 1)
+        speciesDragMoved = 0;
+    if (speciesPointers.size === 2) {
+        const [a, b] = [...speciesPointers.values()];
+        speciesPinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+    }
+});
+speciesTreeCanvas.addEventListener('pointermove', (e) => {
+    const prev = speciesPointers.get(e.pointerId);
+    if (!prev)
+        return;
+    const next = speciesCssPoint(e);
+    speciesPointers.set(e.pointerId, next);
+    const { w, h } = speciesSize();
+    if (speciesPointers.size >= 2) {
+        const [a, b] = [...speciesPointers.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        if (speciesPinchDist > 0 && dist > 0) {
+            zoomTreeCameraAt(speciesCamera, (a.x + b.x) / 2, (a.y + b.y) / 2, dist / speciesPinchDist, w, h);
+        }
+        speciesPinchDist = dist;
+        speciesDragMoved = Infinity; // a pinch is never a tap
+        return;
+    }
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    speciesDragMoved += Math.hypot(dx, dy);
+    panTreeCamera(speciesCamera, dx, dy, w, h);
+});
+const endSpeciesPointer = (e) => {
+    speciesPointers.delete(e.pointerId);
+    if (speciesPointers.size < 2)
+        speciesPinchDist = 0;
+};
+speciesTreeCanvas.addEventListener('pointerup', (e) => {
+    // A drag that barely moved is a tap — same 6px threshold the dish and the
+    // other tree use, so a slightly shaky finger still selects. Note there is
+    // no hold-duration component: unlike the card list this replaced, the tap
+    // target is a canvas that is never torn down, so how long the finger rests
+    // on it cannot matter.
+    if (speciesDragMoved < 6) {
+        const { x, y } = speciesCssPoint(e);
+        const hit = hitTestTree(speciesPositions, x, y);
+        if (hit !== null)
+            selectSpecies(hit);
+    }
+    endSpeciesPointer(e);
+});
+speciesTreeCanvas.addEventListener('pointercancel', endSpeciesPointer);
+speciesTreeCanvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const { x, y } = speciesCssPoint(e);
+    const { w, h } = speciesSize();
+    zoomTreeCameraAt(speciesCamera, x, y, e.deltaY < 0 ? 1.12 : 1 / 1.12, w, h);
+}, { passive: false });
+el('species-fit').addEventListener('click', () => {
+    const fresh = defaultTreeCamera();
+    speciesCamera.cx = fresh.cx;
+    speciesCamera.cy = fresh.cy;
+    speciesCamera.zoom = fresh.zoom;
+});
+// Forced, not left to the tick cadence: toggling has to take effect on a
+// paused dish too, and the extinct set is not in the cached summaries.
+speciesShowExtinct.addEventListener('change', () => refreshSpeciesSummaries(true));
 function updateTree() {
     if (activeTab !== 'tree')
         return;

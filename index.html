@@ -104,13 +104,22 @@
           </section>
 
           <section id="tab-species" class="tab-panel">
-            <p class="panel-hint">
-              One card per species currently alive in the dish — whether
-              you released it, or it split off from another lineage once its
-              genes drifted far enough to earn its own name. Tap a card for
-              its full stat star.
-            </p>
-            <div id="species-list" class="species-list"></div>
+            <div class="tree-toolbar">
+              <p class="tree-hint">
+                Every species and what it split from. Each bar runs from
+                founding to extinction — or to now. Marker size is peak
+                population. Tap one for its card.
+              </p>
+              <div class="tree-actions">
+                <label class="species-toggle" title="Include lineages with no living members">
+                  <input type="checkbox" id="species-show-extinct" />
+                  Show extinct
+                </label>
+                <button id="species-fit" class="btn" title="Reset the tree view">Fit</button>
+              </div>
+            </div>
+            <canvas id="chart-species-tree"></canvas>
+            <p id="species-tree-empty" class="species-empty" hidden></p>
           </section>
 
           <section id="tab-ecosystem" class="tab-panel">

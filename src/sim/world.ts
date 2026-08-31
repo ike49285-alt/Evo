@@ -20,6 +20,32 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
+/** Three decimal places, for figures that are kept permanently rather than
+ * recomputed — see sampleLineages' finalStats. */
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000;
+}
+
+/** The last real measurements taken of a species while it still had living
+ * members — what the Species card falls back to once there is nobody left to
+ * measure. Sampled on World.statsSampleInterval (see sampleLineages), so for
+ * an extinct species this is its final sample, not the instant of death. */
+export interface LineageStats {
+  maxGeneration: number;
+  avgSize: number;
+  avgSpeed: number;
+  avgSense: number;
+  dominantClass: CatalysisClass | null;
+  avgClassPower: Record<CatalysisClass, number>;
+}
+
+/** A lineage record as it may arrive from storage: either the current shape,
+ * or one written before save v10, which has no life-history fields at all.
+ * Modelled explicitly rather than read as `any` so the backfill in
+ * World.deserialize has to account for every field it is missing. */
+export type StoredLineage = Omit<LineageInfo, 'peakPopulation' | 'extinctTick' | 'finalStats'> &
+  Partial<Pick<LineageInfo, 'peakPopulation' | 'extinctTick' | 'finalStats'>>;
+
 export interface LineageInfo {
   id: number;
   name: string;
@@ -29,12 +55,36 @@ export interface LineageInfo {
   /** The genome new members of this species are measured against — see
    * World.checkSpeciation. For a founded species (Designer/bootstrap)
    * this is the template's own encoded sequence; for one that emerged
-   * from divergence, it's the founding diverged individual's own genome. */
-  referenceSequence: GeneSequence;
+   * from divergence, it's the founding diverged individual's own genome.
+   *
+   * Null once the species is extinct, and that is a deliberate space
+   * reclamation rather than an oversight: this field is read in exactly one
+   * place (checkSpeciation), only ever against a *living* cell's own
+   * lineage, and an extinct lineage can never acquire a new member — births
+   * inherit the parent's lineageId, and speciation always mints a fresh id.
+   * So the sequence is unreachable from the moment the last member dies,
+   * while remaining 95% of a lineage record's serialized weight. Dropping it
+   * is what makes keeping every extinct species affordable; see NOTES.md for
+   * the measurement (872k -> 57k chars at 20,000 ticks). */
+  referenceSequence: GeneSequence | null;
   /** null for an original founder; set when this species itself emerged
    * from another one drifting apart — the real phylogenetic link a plain
    * lineage label never had. */
   parentLineageId: number | null;
+  /** Highest simultaneous member count ever observed, sampled every
+   * statsSampleInterval ticks — so a spike shorter than that window can be
+   * missed. Null only for records restored from a v9 save, where the run's
+   * history genuinely predates this field: an unknown peak is shown as
+   * unknown rather than backfilled with a fabricated number. */
+  peakPopulation: number | null;
+  /** The tick the last member died. Null while the species is still alive,
+   * and also null for a v9-migrated record that was already extinct with no
+   * record of when. Liveness itself is never read from here — it is derived
+   * from World.cells, the one source that cannot go stale. */
+  extinctTick: number | null;
+  /** Last measurements taken while alive. Null while alive (read the living
+   * members instead) and for v9-migrated extinct records. */
+  finalStats: LineageStats | null;
 }
 
 /**
@@ -99,15 +149,31 @@ export interface StatsSnapshot {
   meatFood: number;
 }
 
-/** One row of World.getLivingSpecies() — a currently-living lineage's
- * identity plus a live snapshot of its population, the Species panel's
- * data source. */
+/** One row of World.getSpeciesSummaries() — a lineage's identity plus its
+ * population figures, for the Species panel. Covers extinct species too, so
+ * every numeric field here has to mean something when nobody is left alive:
+ * `population` is 0, and the trait figures come from `finalStats` with
+ * `statsAreLastRecorded` set so the card can say so instead of presenting a
+ * dead species' last sample as a live reading. */
 export interface SpeciesSummary {
   lineageId: number;
   name: string;
   hue: number;
   isPlayerDesigned: boolean;
   createdTick: number;
+  /** Null while alive; the tick the last member died, or null for a
+   * v9-migrated record extinct before this was recorded. */
+  extinctTick: number | null;
+  /** True when this species has no living members right now. Derived from
+   * World.cells rather than from extinctTick, which is null in two different
+   * situations (alive, and migrated-unknown) and so cannot carry it. */
+  isExtinct: boolean;
+  /** Highest simultaneous member count observed. Null means genuinely
+   * unknown (a v9-migrated record), not zero. */
+  peakPopulation: number | null;
+  /** True when the trait figures below are a last-recorded sample of a dead
+   * species rather than a live measurement. */
+  statsAreLastRecorded: boolean;
   /** Set when this lineage itself emerged via speciation (see
    * World.checkSpeciation) rather than being an original founder. */
   parentLineageId: number | null;
@@ -463,11 +529,21 @@ export class World {
       createdTick: this.tick,
       referenceSequence: sequence,
       parentLineageId: null,
+      // Set to the real founder count once the spawn loop below knows it (the
+      // loop stops early at the population cap, so `count` is a request, not
+      // an outcome). Seeded at all because sampleLineages only runs on the
+      // stats cadence: a lineage founded and wiped out inside one interval
+      // would otherwise report a peak of 0 despite provably having had
+      // members.
+      peakPopulation: 0,
+      extinctTick: null,
+      finalStats: null,
     });
 
     const clusterX = opts.spawnCenter?.x ?? this.rng.range(this.width * 0.2, this.width * 0.8);
     const clusterY = opts.spawnCenter?.y ?? this.rng.range(this.height * 0.2, this.height * 0.8);
 
+    let founded = 0;
     for (let i = 0; i < count; i++) {
       if (this.cells.length >= this.maxPopulation) break;
       // The founding sequence itself becomes the first founder unchanged;
@@ -491,7 +567,10 @@ export class World {
       // ensureEnergyCapable's search or a hand-designed genome) is itself
       // the transition event for its lineage.
       this.recordBirth(founder, null, null, genome.isDna);
+      founded++;
     }
+    const info = this.lineages.get(lineageId);
+    if (info) info.peakPopulation = founded;
     return lineageId;
   }
 
@@ -542,6 +621,10 @@ export class World {
   private checkSpeciation(cell: Virtunism): void {
     const lineage = this.lineages.get(cell.lineageId);
     if (!lineage) return; // defensive — every live cell's lineage should exist
+    // Unreachable by construction: a sequence is only shed once a lineage has
+    // no living members, and this cell is one. Guarded rather than asserted
+    // because the alternative is a crash inside the reproduction loop.
+    if (lineage.referenceSequence === null) return;
     const distance = geneticDistance(cell.genome.sequence, lineage.referenceSequence);
     if (distance < this.speciationThreshold) return;
 
@@ -554,6 +637,11 @@ export class World {
       createdTick: this.tick,
       referenceSequence: cell.genome.sequence,
       parentLineageId: cell.lineageId,
+      // Exactly one member at the instant of divergence — the cell being
+      // promoted. Everything after this is sampleLineages' job.
+      peakPopulation: 1,
+      extinctTick: null,
+      finalStats: null,
     });
     cell.lineageId = newLineageId;
 
@@ -691,6 +779,7 @@ export class World {
     this.tick += dt;
     if (Math.floor(this.tick) % this.statsSampleInterval === 0) {
       this.pushStatsSnapshot();
+      this.sampleLineages();
     }
 
     const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -767,12 +856,13 @@ export class World {
     if (this.history.length > this.maxHistory) this.history.shift();
   }
 
-  /** One entry per lineage actually represented among *living* individuals
-   * right now, mirroring getLiveStats()'s single-pass style — the
-   * read-only aggregation the Species panel renders from. Not
-   * sampled/cached: cheap (same O(population) cost as getLiveStats()),
-   * and callers already throttle how often they call it. */
-  getLivingSpecies(): SpeciesSummary[] {
+  /** Per-lineage aggregation over the living population, in one pass — the
+   * shared kernel behind both sampleLineages() (which persists it as life
+   * history) and getSpeciesSummaries() (which renders it). Deliberately one
+   * function rather than two similar loops: they must agree about what a
+   * species' figures *are*, or a card would contradict the extinction
+   * snapshot taken from the same population moments earlier. */
+  private accumulateByLineage(): Map<number, LineageStats & { population: number }> {
     interface Acc {
       population: number;
       maxGeneration: number;
@@ -807,11 +897,8 @@ export class World {
       for (const cls of CATALYSIS_CLASSES) a.sumClassPower[cls] += c.genome.classPowerCache[cls];
     }
 
-    const result: SpeciesSummary[] = [];
+    const out = new Map<number, LineageStats & { population: number }>();
     for (const [lineageId, a] of acc) {
-      const info = this.lineages.get(lineageId);
-      if (!info) continue; // every live cell's lineage is recorded at founding time
-      const parent = info.parentLineageId !== null ? this.lineages.get(info.parentLineageId) : undefined;
       let dominant: CatalysisClass | null = null;
       let dominantCount = 0;
       for (const cls in a.classCounts) {
@@ -821,14 +908,7 @@ export class World {
           dominantCount = count;
         }
       }
-      result.push({
-        lineageId,
-        name: info.name,
-        hue: info.hue,
-        isPlayerDesigned: info.isPlayerDesigned,
-        createdTick: info.createdTick,
-        parentLineageId: info.parentLineageId,
-        parentName: parent?.name ?? null,
+      out.set(lineageId, {
         population: a.population,
         maxGeneration: a.maxGeneration,
         avgSize: a.sumSize / a.population,
@@ -841,7 +921,99 @@ export class World {
         >,
       });
     }
-    result.sort((x, y) => y.population - x.population);
+    return out;
+  }
+
+  /** Advances every lineage's life history: peak population, a refreshed
+   * last-known stats snapshot, and — for any species whose final member has
+   * just died — an extinction stamp and the release of its now-unreachable
+   * reference sequence (see LineageInfo.referenceSequence).
+   *
+   * Runs on the statsSampleInterval cadence from update(), independent of
+   * which tab is showing: extinction is a fact about the world, not about
+   * what the player happens to be looking at, and a species that died while
+   * the Ecosystem tab was open must still be recorded. */
+  private sampleLineages(): void {
+    const live = this.accumulateByLineage();
+    for (const info of this.lineages.values()) {
+      const stats = live.get(info.id);
+      if (stats) {
+        if (info.peakPopulation === null || stats.population > info.peakPopulation) {
+          info.peakPopulation = stats.population;
+        }
+        // Kept fresh every sample so the snapshot left behind at extinction
+        // is the last real measurement, not the founding moment.
+        //
+        // Rounded on the way in, and that is a storage decision with teeth:
+        // this snapshot is kept forever for every species that ever lived, and
+        // a raw double serializes as ~17 characters against 5 for three
+        // decimal places. Nine floats per record, hundreds of records per run.
+        // Three decimals is far finer than a radar chart or a stat line can
+        // show, so nothing legible is lost. Live figures are never rounded —
+        // only this permanent copy.
+        info.finalStats = {
+          maxGeneration: stats.maxGeneration,
+          avgSize: round3(stats.avgSize),
+          avgSpeed: round3(stats.avgSpeed),
+          avgSense: round3(stats.avgSense),
+          dominantClass: stats.dominantClass,
+          avgClassPower: Object.fromEntries(
+            CATALYSIS_CLASSES.map((cls) => [cls, round3(stats.avgClassPower[cls])]),
+          ) as Record<CatalysisClass, number>,
+        };
+        // A lineage cannot come back from extinction (see
+        // LineageInfo.referenceSequence), so this branch never un-stamps a
+        // previously extinct record — it only ever runs for the living.
+        continue;
+      }
+      if (info.extinctTick === null && info.referenceSequence !== null) {
+        info.extinctTick = Math.floor(this.tick);
+        info.referenceSequence = null;
+      }
+    }
+  }
+
+  /** One entry per species, for the Species panel. Living lineages carry
+   * live measurements; extinct ones carry their final recorded sample,
+   * flagged so the card can label it rather than pass it off as current.
+   *
+   * Not sampled/cached: the same O(population) cost as getLiveStats(), and
+   * callers already throttle how often they call it. */
+  getSpeciesSummaries(includeExtinct: boolean): SpeciesSummary[] {
+    const live = this.accumulateByLineage();
+    const result: SpeciesSummary[] = [];
+    for (const info of this.lineages.values()) {
+      const stats = live.get(info.id);
+      if (!stats && !includeExtinct) continue;
+      // An extinct species with no snapshot at all is a v9-migrated record:
+      // it still gets a row (it really existed, and its place in the tree is
+      // real), just with nothing to say about its traits.
+      const shown = stats ?? info.finalStats;
+      const parent = info.parentLineageId !== null ? this.lineages.get(info.parentLineageId) : undefined;
+      result.push({
+        lineageId: info.id,
+        name: info.name,
+        hue: info.hue,
+        isPlayerDesigned: info.isPlayerDesigned,
+        createdTick: info.createdTick,
+        extinctTick: info.extinctTick,
+        isExtinct: !stats,
+        peakPopulation: info.peakPopulation,
+        statsAreLastRecorded: !stats,
+        parentLineageId: info.parentLineageId,
+        parentName: parent?.name ?? null,
+        population: stats?.population ?? 0,
+        maxGeneration: shown?.maxGeneration ?? 0,
+        avgSize: shown?.avgSize ?? 0,
+        avgSpeed: shown?.avgSpeed ?? 0,
+        avgSense: shown?.avgSense ?? 0,
+        dominantClass: shown?.dominantClass ?? null,
+        avgClassPower: shown?.avgClassPower ?? ({} as Record<CatalysisClass, number>),
+      });
+    }
+    // Living first and biggest-first within that, so the panel's ordering
+    // still leads with what is actually in the dish.
+    result.sort((x, y) => y.population - x.population || x.createdTick - y.createdTick);
     return result;
   }
 
@@ -1502,7 +1674,30 @@ export class World {
     setNextFoodId(data.nextFoodId);
     world.cells = deserializeVirtunisms(data.cells);
     world.meatFood = data.meatFood;
-    world.lineages = new Map(data.lineages.map((l) => [l.id, l]));
+    // Lineage records gained life-history fields in save v10. A v8/v9 record
+    // arrives without them, and the honest backfill is mostly *nothing*: a
+    // peak population that was never recorded cannot be reconstructed from a
+    // snapshot, so it stays null and the UI says "unknown" rather than
+    // inventing a number. Aliveness is the one thing that *is* recoverable,
+    // because the cells are right here — so an old record with no living
+    // members is recognised as extinct now, and sheds its reference sequence
+    // on the spot. That reclaims the bulk of an old long run's save on the
+    // very first load, which is the point: those runs are the ones closest to
+    // the storage ceiling. Anything already carrying the fields is left
+    // exactly as saved.
+    const liveLineageIds = new Set(world.cells.map((c) => c.lineageId));
+    world.lineages = new Map(
+      data.lineages.map((l): [number, LineageInfo] => [
+        l.id,
+        {
+          ...l,
+          referenceSequence: liveLineageIds.has(l.id) ? l.referenceSequence : null,
+          peakPopulation: l.peakPopulation ?? null,
+          extinctTick: l.extinctTick ?? null,
+          finalStats: l.finalStats ?? null,
+        },
+      ]),
+    );
     world.history = data.history;
     // Only adopt a stored field that matches this world's region layout —
     // a mismatched length would mean the save came from a differently-sized
@@ -1525,7 +1720,7 @@ export interface SerializedWorld {
   nextFoodId: number;
   cells: SerializedVirtunism[];
   meatFood: Food[];
-  lineages: LineageInfo[];
+  lineages: StoredLineage[];
   history: StatsSnapshot[];
   /** Optional: absent in saves written before the light field existed. */
   lightIntensity?: number[];

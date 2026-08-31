@@ -2680,6 +2680,16 @@ All three were found by the browser suite; none by `tsc`:
 
 ### Known unbounded term, deliberately not fixed
 
+> **Superseded, and the reasoning below turned out to be a trap.** The
+> measurement was taken while speciation could not fire, so it measured a
+> quantity that was structurally pinned at 1 and read it as a property of the
+> model. Two rounds later the thresholds were fixed, the term grew exactly as
+> the mechanism predicted it would, and this became a save-breaking bug on a
+> line through the storage ceiling. See "The save bomb the species tab
+> uncovered" below. The lesson is not "we should have pruned": it is that
+> *measuring a term while the thing that drives it is disabled tells you
+> nothing*, and the note should have said so instead of quoting 4 KB.
+
 `World.lineages` is never deleted from, so it grows with every speciation
 event. Measured over 20,000 ticks on three seeds it holds **1 lineage, 4 KB** —
 speciation is not currently firing on that timescale after the reproduction
@@ -2918,6 +2928,153 @@ after that (effective species averaged 18.7 at 5k against 6.7 at 20k at the
 chosen setting). A long run settles toward a handful of winners rather than
 holding at fifty. That is a real property of the model, not a bug, but it
 means a screenshot at 5k and one at 20k tell different stories.
+
+
+## The Species tab: a phylogeny, and the save bomb it uncovered
+
+Reported symptom: once a second species exists, being in the Species tab kills
+every tap in the app — species cards, Pause, Reset — while scrolling the list
+still works.
+
+### The bug was the panel rebuilding itself under the player's finger
+
+`updateSpeciesPanel` called `speciesList.replaceChildren()` and rebuilt every
+card from scratch, gated only on `tick % statsSampleInterval === 0`. With one
+species that is six DOM nodes and nobody notices. Once speciation actually
+started firing it was twenty to fifty cards — several hundred nodes — rebuilt
+several times a second.
+
+A tap needs `pointerdown` and `pointerup` on the **same element**. The card was
+being destroyed between the two, so the tap never landed. Scrolling kept
+working because scrolling is handled by the compositor, not the main thread,
+which is exactly why the tab felt alive but inert.
+
+Measured in Chromium at a 390px viewport, 20 species, speed 8× — tapping one
+fixed point, five trials per hold, checking both whether the card opened and
+whether the element that was pressed still existed when the finger lifted:
+
+| finger hold | card opened | element survived the press |
+|---|---|---|
+| 0 ms | 5/5 | 5/5 |
+| 50 ms | 3/5 | 3/5 |
+| 120 ms | 4/5 | 4/5 |
+| **250 ms** (a real tap) | **1/5** | **0/5** |
+
+The two columns agree row for row, which is the causal claim: the tap fails
+exactly when the element does not survive. Desktop Chromium is far faster than
+a phone, so on the reported hardware this degrades from unreliable to useless.
+
+After the rewrite, same procedure: **5/5 at 120 ms, 250 ms and 400 ms.**
+
+### The same gate failed in the opposite direction
+
+Keying the refresh on the simulation tick meant a **paused** dish never
+refreshed at all — the tick stops moving, so the condition never fires again.
+Opening the tab while paused rendered nothing, permanently. Measured: 0 cards
+while paused. The tab now forces a refresh on entry and on toggling, so pausing
+to read the tab — the obvious thing to do — works.
+
+### A latent frame-loop killer, found on the way
+
+`drawScatter` built its axis ranges with `Math.min(...points.map(…))` over one
+point per living organism, every frame, and `frame()` has no `try/catch`. Past
+a few tens of thousands of arguments that throws `RangeError`, which would kill
+`requestAnimationFrame` outright and freeze the entire app. Harmless at 320;
+the pop cap now accepts 20,000. Six such calls replaced with a single pass.
+
+### The save bomb
+
+`World.lineages` is never deleted from and each record carried a full
+`referenceSequence`. The earlier note called this a 4 KB curiosity — measured
+while speciation was structurally unable to fire (see the superseded note
+above). With the thresholds fixed, one seed:
+
+| tick | lineages | lineage chars | share of save |
+|---|---|---|---|
+| 2,000 | 41 | 134k | 13% |
+| 6,000 | 114 | 330k | 35% |
+| 12,000 | 201 | 579k | 48% |
+| 20,000 | 307 | 872k | **64%** |
+
+Linear, and through the ~2.5M-character iOS ceiling at roughly **tick 60,000**.
+That is the same silent autosave failure that cost a hundred thousand ticks
+once already, rebuilt by the previous round's own fix.
+
+**95% of that weight is the reference sequence, and it is dead the moment a
+species is.** It is read in exactly one place — `checkSpeciation`, always
+against a living cell's own lineage — and an extinct lineage can never gain a
+member: births inherit the parent's `lineageId`, and speciation always mints a
+fresh id. So extinction sheds it.
+
+Measured at 20,000 ticks, same seed: lineage records **872k → 145k chars**
+(6.0x), whole world 1363k → 636k. About 472 chars per species now, so 100,000
+ticks projects to ~725k of lineage records against ~4,152k before. The
+unbounded term is still unbounded — it is just no longer on a path to breaking
+anything.
+
+This is why keeping every extinct species, which is what was asked for, ended
+up *cheaper* than what shipped before it.
+
+### What the tab is now
+
+A phylogeny of species rather than a list of the living. Bars run from founding
+to extinction — or to the present, for anything still going — so dead ends
+visibly stop short and survivors line up along the right edge the way extant
+taxa do in a printed phylogram. Marker size is peak population, which is the
+one number that separates a lineage that ran the dish for a while from one that
+managed four individuals. Living species draw solid, extinct ones hollow.
+Tapping any marker opens the existing species card.
+
+Extinct species are hidden by default behind a `Show extinct` toggle; with it
+off, the tree still draws extinct **ancestors**, because an extinct parent is
+often the only reason two living species are related.
+
+`treeview.ts`'s camera helpers and `hitTestTree` are shared rather than
+reimplemented. The one real departure: the collapse budget weights by clade
+size, not by living descendants, because most of this tree is dead and a
+living-only weight would score nearly every candidate zero.
+
+### Verification
+
+- **Nothing evolved changed.** Fixed seed, 20,000 ticks: population 118,
+  lineages ever 307, living 9 — identical to the pre-change engine on all
+  three.
+- **Peak population is sampled, not exact**, since it rides the 10-tick stats
+  cadence. Quantified rather than assumed: over 6,000 ticks, **88 of 97
+  lineages exact, 9 undercounted, worst miss 1 individual, mean error 3.10%**.
+  A spike shorter than 10 ticks can still be missed entirely.
+- **A v9 save migrates** rather than being discarded, and sheds its dead weight
+  on the first load — most valuable for exactly the long runs closest to the
+  ceiling. A realistically-sized v9 file from the 20,000-tick run: **1,530k
+  chars → 604k, 2.5x reclaimed on first load**, and it still simulates and
+  speciates afterwards (307 → 313 lineages over 2,000 further ticks). Note
+  that 1,530k figure: a v9 save at only 20,000 ticks was already 61% of the
+  iOS ceiling. Migrated records leave `peakPopulation` null and the card says
+  "peak unknown"; inventing a number there would have been the easy lie.
+- Extinct cards label their figures `last recorded — …`, because they are a
+  final sample, not a live reading.
+- **Sampling cost**, which runs regardless of which tab is showing: 0.38 ms
+  per pass at population 279 and 6.52 ms at population 3,624 — amortised over
+  the 10-tick cadence, **0.7% and 0.87% of tick time** respectively. Linear in
+  population, as the tick itself is.
+- **Determinism**: worth recording because the first check said "false" and it
+  was the check that was wrong. Whole-save comparison includes per-individual
+  ids, and those come from a *module-level* counter shared by every `World` in
+  the process, so a second run in the same process necessarily numbers its
+  cells differently. Compared on what actually constitutes a run — population
+  trace, lineage count, every genome — two same-seed runs are identical.
+
+### Known limits, recorded rather than fixed
+
+- Two lineages in the 20k run reached extinction without ever being sampled
+  alive (founded and gone inside one 10-tick window), so they have no
+  `finalStats` and their card says so. Snapshotting at founding would fix it
+  and would also mean every card showed founding-moment figures; not worth it
+  for 2 in 307.
+- The lineage table still grows linearly with run length. At the new weight
+  that is fine to ~100k ticks and beyond, but it remains the only unbounded
+  term in the save — and this time the note is written while the mechanism
+  driving it is actually running.
 
 
 ## Tech constraint from last time
