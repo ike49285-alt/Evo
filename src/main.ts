@@ -28,8 +28,46 @@ import {
 } from './ui/treeview.js';
 import { exportSave, importSave, loadGame, saveGame } from './save.js';
 
-const WORLD_WIDTH = 2400;
-const WORLD_HEIGHT = 1500;
+// The dish at the default population cap. Everything else scales off these.
+const BASE_POP_CAP = 320;
+const BASE_WORLD_WIDTH = 2400;
+const BASE_WORLD_HEIGHT = 1500;
+const BASE_SUNLIGHT = 24;
+
+/** Dish dimensions for a given population cap, holding *density* constant.
+ *
+ * This is the single most important number in the scaling work and it is
+ * not cosmetic. Sense radius reaches 320, so in a 2400x1500 dish one
+ * organism's senses already cover ~9% of the world: pack more organisms
+ * into the same box and every one of them sees proportionally more
+ * neighbours, which makes the sensing pass quadratic. Measured on a fixed
+ * dish, per-organism cost went 0.97us at 500 -> 2.02us at 2,000 -> 6.83us
+ * at 8,000. Scaling the area alongside the population instead held it at
+ * 0.72 / 1.00 / 1.12us.
+ *
+ * So the population cap and the world size are one knob, not two, and this
+ * is where they are tied together. */
+function worldSizeFor(cap: number): { width: number; height: number } {
+  const k = Math.sqrt(Math.max(1, cap) / BASE_POP_CAP);
+  return { width: Math.round(BASE_WORLD_WIDTH * k), height: Math.round(BASE_WORLD_HEIGHT * k) };
+}
+
+/** Total light for a given cap. Population turns out to track energy input
+ * almost exactly linearly and to barely notice the cap at all — measured,
+ * sunlight 24/96/216/384 produced 189/1049/2137/3843 organisms. Raising the
+ * cap without raising this just buys a ceiling nothing ever reaches. */
+function sunlightFor(cap: number): number {
+  return BASE_SUNLIGHT * (Math.max(1, cap) / BASE_POP_CAP);
+}
+
+/** Builds a world sized and lit for the current cap. */
+function makeWorld(cap: number): World {
+  const { width, height } = worldSizeFor(cap);
+  const w = new World(width, height, Date.now() & 0xffffffff);
+  w.maxPopulation = cap;
+  w.sunlightCapacity = sunlightFor(cap);
+  return w;
+}
 // Phase B: the pool's own coordinate space now spans the whole dish,
 // not a small sub-rectangle within it — Origin is constructed at
 // WORLD_WIDTH/HEIGHT directly (see the seedPrimordialSoup calls below).
@@ -128,15 +166,17 @@ const restored = loadGame();
  * leak through the rest of the file. Since frame() also stops calling
  * origin.update() in that mode, nothing is ever injected and it stays
  * empty. */
-function makePool(): Origin {
+function makePool(width: number, height: number): Origin {
   const seed = Date.now() & 0xffffffff;
   return SOUP_ENABLED
-    ? Origin.seedPrimordialSoup(WORLD_WIDTH, WORLD_HEIGHT, seed)
-    : new Origin(WORLD_WIDTH, WORLD_HEIGHT, seed, /* ventEnabled */ false);
+    ? Origin.seedPrimordialSoup(width, height, seed)
+    : new Origin(width, height, seed, /* ventEnabled */ false);
 }
 
-let origin = restored.status === 'loaded' ? restored.origin : makePool();
-let world = restored.status === 'loaded' ? restored.world : new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+// World first, then a pool sized to match it — makePool needs real
+// dimensions and `world` is not in scope until it exists.
+let world = restored.status === 'loaded' ? restored.world : makeWorld(BASE_POP_CAP);
+let origin = restored.status === 'loaded' ? restored.origin : makePool(world.width, world.height);
 
 const BOOT_SEED_COUNT = 12;
 
@@ -379,11 +419,21 @@ el<HTMLButtonElement>('btn-fit').addEventListener('click', () => {
 // back to World's own default until this setting earns a permanent home.
 const popCapInput = el<HTMLInputElement>('pop-cap-input');
 popCapInput.value = String(world.maxPopulation);
-function applyPopCap(): void {
+/** The cap the input currently asks for, clamped and normalised. */
+function currentPopCap(): number {
   const parsed = Math.round(Number(popCapInput.value));
-  const clamped = Math.min(20000, Math.max(20, Number.isFinite(parsed) ? parsed : world.maxPopulation));
+  return Math.min(20000, Math.max(20, Number.isFinite(parsed) ? parsed : world.maxPopulation));
+}
+
+/** Applies the cap to the *running* world. Deliberately only the ceiling
+ * and the light budget: the dish's physical dimensions cannot change under
+ * a population that is already standing in it, so a resize waits for the
+ * next world (Reset, or a fresh boot) — see makeWorld. */
+function applyPopCap(): void {
+  const clamped = currentPopCap();
   popCapInput.value = String(clamped);
   world.maxPopulation = clamped;
+  world.sunlightCapacity = sunlightFor(clamped);
 }
 popCapInput.addEventListener('change', applyPopCap);
 
@@ -394,8 +444,11 @@ el<HTMLButtonElement>('btn-reset').addEventListener('click', async () => {
       : 'Reset the whole world — wipe every evolved lineage and start over from a freshly stocked dish?',
   );
   if (!ok) return;
-  origin = makePool();
-  world = new World(WORLD_WIDTH, WORLD_HEIGHT, Date.now() & 0xffffffff);
+  // Sized and lit for whatever the cap is set to now — this is where a
+  // changed population cap actually takes physical effect, because a live
+  // world cannot be resized underneath its own inhabitants.
+  world = makeWorld(currentPopCap());
+  origin = makePool(world.width, world.height);
   // A reset is a fresh dish, so with Stage 0 retired it needs restocking for
   // the same reason first boot does — otherwise Reset hands the player a
   // permanently empty world.
@@ -538,8 +591,8 @@ btnSpawnArm.addEventListener('click', () => {
 function placeManualSpawn(worldX: number, worldY: number): void {
   if (!spawnArmed) return;
   const at = {
-    x: Math.min(Math.max(worldX, 1), WORLD_WIDTH - 1),
-    y: Math.min(Math.max(worldY, 1), WORLD_HEIGHT - 1),
+    x: Math.min(Math.max(worldX, 1), world.width - 1),
+    y: Math.min(Math.max(worldY, 1), world.height - 1),
   };
   switch (spawnArmed) {
     case 'aa':

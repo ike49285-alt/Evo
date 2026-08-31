@@ -11,6 +11,65 @@ import { CATALYSIS_CLASSES } from '../chem/polymer.js';
 function clamp(v, min, max) {
     return Math.min(max, Math.max(min, v));
 }
+/** World units per light region. Fixed rather than proportional, so a larger
+ * dish gets more niches instead of larger ones.
+ *
+ * Sized deliberately larger than an organism's reach. The first attempt used
+ * 320 — exactly the maximum sense radius — and it starved the dish: a region
+ * an organism spans in one step is not a habitat, it is a tile, and a
+ * founder cluster sitting in one competed for a single region's ~0.7% of the
+ * light while the rest of the dish went unused. A niche has to be big enough
+ * for a population to live inside, and for the gradient at its edge to be
+ * worth migrating along. */
+const LIGHT_REGION_SIZE = 800;
+/** A smooth, patchy distribution of light over the dish, normalised to a mean
+ * of exactly 1 — the dish's average productivity is unchanged, only its
+ * shape, so any change in the ecology is attributable to spatial structure
+ * and not to having quietly handed the dish more energy.
+ *
+ * Built from a handful of overlapping Gaussian sources rather than
+ * per-region noise, because per-region noise gives you salt-and-pepper: an
+ * organism cannot adapt to a bright cell whose neighbours are dark, since it
+ * moves through several of them in a lifetime. Broad overlapping blobs
+ * produce regions large enough to actually live in, with gradients between
+ * them for a population to spread along. */
+function buildLightField(cols, rows, rng) {
+    const field = new Float32Array(cols * rows);
+    // Roughly one source per 6 regions, so patchiness holds at any dish size.
+    const sourceCount = Math.max(3, Math.round((cols * rows) / 6));
+    const sources = [];
+    for (let i = 0; i < sourceCount; i++) {
+        sources.push({
+            x: rng.range(0, cols),
+            y: rng.range(0, rows),
+            // Some sources darken rather than brighten, so the dish gets real
+            // shade instead of only bright spots on a flat background.
+            amp: rng.range(-0.6, 1.4),
+            radius: rng.range(1.2, 3.5),
+        });
+    }
+    for (let cy = 0; cy < rows; cy++) {
+        for (let cx = 0; cx < cols; cx++) {
+            let v = 1;
+            for (const s of sources) {
+                const dx = cx + 0.5 - s.x;
+                const dy = cy + 0.5 - s.y;
+                v += s.amp * Math.exp(-(dx * dx + dy * dy) / (2 * s.radius * s.radius));
+            }
+            // A floor rather than zero: a fully dark region would be a dead zone
+            // no photosynthesiser could cross, which fragments the dish into
+            // unreachable islands rather than merely varied terrain.
+            field[cy * cols + cx] = Math.max(0.15, v);
+        }
+    }
+    let total = 0;
+    for (const v of field)
+        total += v;
+    const mean = total / field.length;
+    for (let i = 0; i < field.length; i++)
+        field[i] /= mean;
+    return field;
+}
 export class World {
     constructor(width, height, seed) {
         this.cells = [];
@@ -46,6 +105,12 @@ export class World {
         // When total demand exceeds this budget, every photosynthesizer's
         // income is scaled down proportionally — a shared-resource ceiling, not
         // a per-species quota.
+        // Total light across the whole dish, per tick. Scaled with world area by
+        // main.ts, because a bigger dish that receives the same total light is
+        // just a sparser dish -- measured: population tracks energy input almost
+        // exactly linearly (sunlight 24/96/216/384 -> 189/1049/2137/3843
+        // organisms), and is barely affected by the population cap at all. The
+        // cap is a ceiling; this is what the dish can actually feed.
         this.sunlightCapacity = 24;
         // The shared population cap has the same monopolization problem as
         // unlimited sunlight would: whichever lineage has the most individuals
@@ -128,17 +193,38 @@ export class World {
         this.separationStrength = 0.5;
         this.statsSampleInterval = 10;
         this.maxHistory = 400;
-        // Grid cell sizes: virtunismGrid is sized for the typical sensing range
-        // (a few hundred units); carrionGrid is much finer since eating/
-        // predation contact is a short-range check. Both are rebuilt fresh each
-        // tick (or twice, for virtunisms — see update()) rather than maintained
-        // incrementally.
-        this.virtunismGrid = new SpatialGrid(110);
-        this.carrionGrid = new SpatialGrid(50);
+        // Reused query buffers. SpatialGrid.queryRadius fills whatever array it is
+        // handed and allocates a fresh one otherwise, so at ~200 cells x 2 queries
+        // a tick the default was throwing away 400 arrays a tick for no reason.
+        // One buffer per call site rather than one shared, so no two live query
+        // results can ever alias each other.
+        this.senseScratch = [];
+        this.carrionScratch = [];
+        this.crowdScratch = [];
+        this.eatScratch = [];
+        this.predateScratch = [];
+        this.mateScratch = [];
+        /** The living subset, rebuilt in place three times a tick. Was
+         * `this.cells.filter(...)` at each of those points, i.e. three throwaway
+         * arrays per tick that grow with the population. */
+        this.liveScratch = [];
         this.nextLineageId = 1;
         this.width = width;
         this.height = height;
         this.rng = new Rng(seed);
+        this.virtunismGrid = new SpatialGrid(110, width, height);
+        this.carrionGrid = new SpatialGrid(50, width, height);
+        // Region size is fixed in world units rather than as a fraction of the
+        // dish, so a bigger world gets *more* niches rather than bigger ones —
+        // which is the point of making it bigger.
+        this.lightCols = Math.max(1, Math.round(width / LIGHT_REGION_SIZE));
+        this.lightRows = Math.max(1, Math.round(height / LIGHT_REGION_SIZE));
+        // Built from its own Rng, not `this.rng`. Drawing from the simulation's
+        // stream here would shift every later draw and silently change the
+        // trajectory of every existing seed — this way the light field varies
+        // with the seed while leaving the rest of the sim's randomness exactly
+        // where it was.
+        this.lightIntensity = buildLightField(this.lightCols, this.lightRows, new Rng(seed ^ 0x9e3779b9));
     }
     /**
      * There is no hand-designed starter species anymore — no hard-coded
@@ -348,7 +434,7 @@ export class World {
         this.carrionGrid.rebuild(this.meatFood);
         // Sense + think using positions from *before* this tick's movement (a
         // consistent "everyone sees the world as it was a moment ago" model).
-        this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
+        this.virtunismGrid.rebuild(this.liveCells());
         for (const cell of this.cells) {
             if (!cell.alive)
                 continue;
@@ -371,7 +457,7 @@ export class World {
         // Rebuild so resolveCrowding() below queries this tick's actual
         // post-movement positions, not the pre-movement snapshot from the top
         // of this method.
-        this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
+        this.virtunismGrid.rebuild(this.liveCells());
         this.resolveCrowding();
         for (const cell of this.cells) {
             if (cell.alive) {
@@ -381,7 +467,7 @@ export class World {
         }
         this.applyPhotosynthesis(dt);
         // Rebuild with post-separation positions for contact-driven systems.
-        this.virtunismGrid.rebuild(this.cells.filter((c) => c.alive));
+        this.virtunismGrid.rebuild(this.liveCells());
         this.handleEating();
         this.handlePredation();
         this.diffuseColonyEnergy(dt);
@@ -591,67 +677,81 @@ export class World {
      * resource, so "prey" covers everything from a photosynthesizer smaller
      * than you to a fresh corpse. Candidates come from the spatial grid
      * (only nearby buckets), not the whole population. */
+    /** The living cells, into a buffer this class owns. SpatialGrid.rebuild
+     * copies what it is given (see grid.ts on why), so handing it a reused
+     * array is safe. */
+    liveCells() {
+        const out = this.liveScratch;
+        out.length = 0;
+        for (const c of this.cells)
+            if (c.alive)
+                out.push(c);
+        return out;
+    }
     buildInputs(cell) {
         const sr = cell.genome.senseRadius;
+        const sr2 = sr * sr;
         const canEat = cell.canEat;
         let foodDx = 0;
         let foodDy = 0;
         let foodDist = 1;
-        let bestFoodD = sr;
+        let bestFood2 = sr2;
         if (canEat) {
-            const nearbyCarrion = this.carrionGrid.queryRadius(cell.x, cell.y, sr);
+            const nearbyCarrion = this.carrionGrid.queryRadius(cell.x, cell.y, sr, this.carrionScratch);
             for (const f of nearbyCarrion) {
                 const dx = f.x - cell.x;
                 const dy = f.y - cell.y;
-                const d = Math.hypot(dx, dy);
-                if (d < bestFoodD && this.inFOV(cell, f.x, f.y)) {
-                    bestFoodD = d;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestFood2 && this.inFOV(cell, f.x, f.y)) {
+                    bestFood2 = d2;
                     foodDx = dx / sr;
                     foodDy = dy / sr;
-                    foodDist = d / sr;
-                }
-            }
-            const nearbyCells = this.virtunismGrid.queryRadius(cell.x, cell.y, sr);
-            for (const other of nearbyCells) {
-                if (other === cell || !other.alive)
-                    continue;
-                if (other.effectiveDefenseSize >= cell.genome.size * this.predationSizeRatio * this.predatorReach(cell))
-                    continue;
-                const dx = other.x - cell.x;
-                const dy = other.y - cell.y;
-                const d = Math.hypot(dx, dy);
-                if (d < bestFoodD && this.inFOV(cell, other.x, other.y)) {
-                    bestFoodD = d;
-                    foodDx = dx / sr;
-                    foodDy = dy / sr;
-                    foodDist = d / sr;
+                    foodDist = Math.sqrt(d2) / sr;
                 }
             }
         }
         let threatDx = 0;
         let threatDy = 0;
         let threatDist = 1;
-        let bestThreatD = sr;
+        let bestThreat2 = sr2;
         let mateDx = 0;
         let mateDy = 0;
         let mateDist = 1;
-        let bestMateD = sr;
+        let bestMate2 = sr2;
         const wantsMate = cell.genome.reproductionMode === 'sexual';
-        const nearbyForThreatAndMate = this.virtunismGrid.queryRadius(cell.x, cell.y, sr);
-        for (const other of nearbyForThreatAndMate) {
+        const preyReach = cell.genome.size * this.predationSizeRatio * this.predatorReach(cell);
+        // ONE query, three senses. This used to run queryRadius over the
+        // virtunism grid twice with identical arguments — once looking for prey
+        // and once for threats and mates — and buildInputs was 67% of the whole
+        // tick. The three accumulators are independent maxima over the same
+        // ordered candidate list, so folding them into a single pass is exactly
+        // equivalent, not an approximation.
+        //
+        // Distances are compared squared and only square-rooted when a
+        // candidate actually wins, which is a handful of times per cell rather
+        // than once per neighbour. Math.hypot in particular is not a cheap
+        // sqrt: it carries overflow/underflow guarding this code does not need.
+        const nearby = this.virtunismGrid.queryRadius(cell.x, cell.y, sr, this.senseScratch);
+        for (const other of nearby) {
             if (other === cell || !other.alive)
                 continue;
             const dx = other.x - cell.x;
             const dy = other.y - cell.y;
-            const d = Math.hypot(dx, dy);
-            if (other.canEat &&
+            const d2 = dx * dx + dy * dy;
+            if (canEat && d2 < bestFood2 && other.effectiveDefenseSize < preyReach && this.inFOV(cell, other.x, other.y)) {
+                bestFood2 = d2;
+                foodDx = dx / sr;
+                foodDy = dy / sr;
+                foodDist = Math.sqrt(d2) / sr;
+            }
+            if (d2 < bestThreat2 &&
+                other.canEat &&
                 cell.effectiveDefenseSize < other.genome.size * this.predationSizeRatio * this.predatorReach(other) &&
-                d < bestThreatD &&
                 this.inFOV(cell, other.x, other.y)) {
-                bestThreatD = d;
+                bestThreat2 = d2;
                 threatDx = dx / sr;
                 threatDy = dy / sr;
-                threatDist = d / sr;
+                threatDist = Math.sqrt(d2) / sr;
             }
             // The mate-seeking sense has to agree with the rule that actually
             // decides matings, or the brain spends its life steering toward
@@ -661,15 +761,15 @@ export class World {
             // same reason as there — it is the expensive test, and it only runs on
             // a candidate that has already passed everything cheaper.
             if (wantsMate &&
+                d2 < bestMate2 &&
                 other.genome.reproductionMode === 'sexual' &&
                 other.canMate() &&
-                d < bestMateD &&
                 this.inFOV(cell, other.x, other.y) &&
                 genomeDistance(cell.genome, other.genome) <= this.mateCompatibilityThreshold) {
-                bestMateD = d;
+                bestMate2 = d2;
                 mateDx = dx / sr;
                 mateDy = dy / sr;
-                mateDist = d / sr;
+                mateDist = Math.sqrt(d2) / sr;
             }
         }
         const energyNorm = clamp(cell.energy / cell.maxEnergy, 0, 1);
@@ -796,12 +896,17 @@ export class World {
             let pushX = 0;
             let pushY = 0;
             for (const m of members) {
-                const nearby = this.virtunismGrid.queryRadius(m.x, m.y, m.radius + 40);
+                const nearby = this.virtunismGrid.queryRadius(m.x, m.y, m.radius + 40, this.crowdScratch);
                 for (const o of nearby) {
                     if (!o.alive || o === m)
                         continue;
-                    if (this.findColonyRoot(o) === root)
-                        continue; // same unit -- bonded, not repelling
+                    // Same unit -- bonded, not repelling. A solo cell IS its own root,
+                    // so for the overwhelming majority of candidates this is an
+                    // identity check and the chain walk can be skipped outright.
+                    // Exactly equivalent, and findColonyRoot was showing up at
+                    // ~2.4us/organism purely from being called once per candidate.
+                    if (o.attachedTo === null ? o === root : this.findColonyRoot(o) === root)
+                        continue;
                     const dist = Math.hypot(o.x - m.x, o.y - m.y);
                     if (dist <= 0)
                         continue; // exact-coincident pair -- vanishingly rare, self-resolves once anything else nudges either one
@@ -852,18 +957,53 @@ export class World {
      * down proportionally for all of them — the mechanism that gives
      * photosynthesizers an actual carrying capacity instead of growing to
      * fill the entire population cap. */
+    /** Which light region a point falls in. */
+    regionOf(x, y) {
+        const cx = Math.min(this.lightCols - 1, Math.max(0, Math.floor((x / this.width) * this.lightCols)));
+        const cy = Math.min(this.lightRows - 1, Math.max(0, Math.floor((y / this.height) * this.lightRows)));
+        return cy * this.lightCols + cx;
+    }
+    /** How brightly a point is lit, relative to an evenly-lit dish (1.0 =
+     * average). Exposed for the renderer, which shades the dish so the player
+     * can see the terrain their organisms are adapting to — an invisible niche
+     * structure would be indistinguishable from noise. */
+    lightAt(x, y) {
+        return this.lightIntensity[this.regionOf(x, y)];
+    }
+    /** Grants photosynthesis income, throttled by a dish-wide sunlight budget
+     * shared across every chloroplast-bearing virtunism, and *scaled by where
+     * each one is standing*.
+     *
+     * The dish-wide budget is deliberately kept. It is what gives
+     * photosynthesisers a carrying capacity at all — without it they simply
+     * grow to fill the population cap and leave predators no room — and an
+     * earlier attempt at this replaced it with per-region budgets, which was
+     * worse in a way worth recording: light falling on a region nobody is
+     * standing in is *wasted*, so a clustered population effectively lost most
+     * of the dish's productivity, phototrophs died out, and the dish collapsed
+     * to a predators-and-carrion economy where extra sunlight bought nothing.
+     *
+     * Modulating intensity instead keeps every photon in play while still
+     * making place matter: demand is weighted by local light, so standing in a
+     * bright patch earns more AND draws more of the shared budget. With a flat
+     * field this reduces exactly to the old global behaviour, which is what
+     * makes it testable. */
     applyPhotosynthesis(dt) {
-        let totalDemand = 0;
+        let weightedDemand = 0;
         for (const cell of this.cells) {
-            if (cell.alive)
-                totalDemand += cell.baseSunlightDemand;
+            if (!cell.alive)
+                continue;
+            const d = cell.baseSunlightDemand;
+            if (d > 0)
+                weightedDemand += d * this.lightIntensity[this.regionOf(cell.x, cell.y)];
         }
-        if (totalDemand <= 0)
+        if (weightedDemand <= 0)
             return;
-        const availability = Math.min(1, this.sunlightCapacity / totalDemand);
+        const availability = Math.min(1, this.sunlightCapacity / weightedDemand);
         for (const cell of this.cells) {
-            if (cell.alive)
-                cell.photosynthesize(dt, availability);
+            if (!cell.alive || cell.baseSunlightDemand <= 0)
+                continue;
+            cell.photosynthesize(dt, availability * this.lightIntensity[this.regionOf(cell.x, cell.y)]);
         }
     }
     /** Carrion is the only discrete food item in the dish — everything else
@@ -874,7 +1014,7 @@ export class World {
                 continue;
             const reach = cell.radius + (derivePredationPower(cell.genome) - 1) * 4;
             const yieldMult = cell.biteYield;
-            const nearbyCarrion = this.carrionGrid.queryRadius(cell.x, cell.y, reach + 10);
+            const nearbyCarrion = this.carrionGrid.queryRadius(cell.x, cell.y, reach + 10, this.eatScratch);
             for (const f of nearbyCarrion) {
                 const d = Math.hypot(f.x - cell.x, f.y - cell.y);
                 if (d >= reach + f.radius)
@@ -899,7 +1039,7 @@ export class World {
             // mechanic that's only winnable once you're already good at it never
             // gets the chance to be learned at all.
             const reach = predator.radius + 6 + (derivePredationPower(predator.genome) - 1) * 4;
-            const nearby = this.virtunismGrid.queryRadius(predator.x, predator.y, reach + 30);
+            const nearby = this.virtunismGrid.queryRadius(predator.x, predator.y, reach + 30, this.predateScratch);
             for (const prey of nearby) {
                 if (prey === predator || !prey.alive)
                     continue;
@@ -964,7 +1104,7 @@ export class World {
             if (mated.has(a.id) || !a.canMate() || !roomFor(a.lineageId))
                 continue;
             const meetRange = a.genome.senseRadius;
-            const candidates = this.virtunismGrid.queryRadius(a.x, a.y, meetRange);
+            const candidates = this.virtunismGrid.queryRadius(a.x, a.y, meetRange, this.mateScratch);
             for (const b of candidates) {
                 // Ordered cheapest test first, deliberately. The compatibility test
                 // is the most expensive thing in this loop and it sits last, so it
@@ -1119,6 +1259,13 @@ export class World {
             meatFood: this.meatFood,
             lineages: [...this.lineages.values()],
             history: this.history,
+            // The dish's terrain. Carried in the save because deserialize()
+            // reconstructs with seed 0 and would otherwise regenerate a different
+            // world under a returning player's population. Optional on the way in
+            // (see deserialize) so saves written before the light field existed
+            // still load — they simply get a freshly generated one, which is the
+            // correct outcome for a world that never had terrain.
+            lightIntensity: Array.from(this.lightIntensity),
             treeNodes: [...this.treeNodes.values()],
         };
     }
@@ -1133,6 +1280,12 @@ export class World {
         world.meatFood = data.meatFood;
         world.lineages = new Map(data.lineages.map((l) => [l.id, l]));
         world.history = data.history;
+        // Only adopt a stored field that matches this world's region layout —
+        // a mismatched length would mean the save came from a differently-sized
+        // dish, and indexing it would be silently wrong rather than loudly so.
+        if (data.lightIntensity && data.lightIntensity.length === world.lightIntensity.length) {
+            world.lightIntensity = Float32Array.from(data.lightIntensity);
+        }
         for (const node of data.treeNodes)
             world.treeNodes.set(node.id, node);
         return world;

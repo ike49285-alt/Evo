@@ -34,6 +34,9 @@ const CATALYST_COLOR = {
  * Virtunism. See main.ts for where a bootstrapped protocell actually
  * gets placed relative to the pool.
  */
+/** Screen radius below which an organism is drawn as a plain dot rather
+ * than full anatomy. At this size the anatomy is sub-pixel anyway. */
+const LOD_RADIUS_PX = 3.5;
 export class Renderer {
     constructor(canvas) {
         this.dpr = 1;
@@ -142,6 +145,36 @@ export class Renderer {
         }
         ctx.stroke();
         ctx.restore();
+        // The light field, painted under everything. Without this the dish's
+        // terrain is invisible: organisms cluster in bright regions and avoid
+        // dark ones for reasons the player has no way to see, which reads as
+        // unexplained clumping rather than as habitat.
+        //
+        // Drawn as one rectangle per simulation region, not sub-sampled into a
+        // smooth gradient. The sim samples this field per region, so a smoother
+        // picture would be a prettier lie about where the boundaries actually
+        // are — and the boundaries are the whole point, since they are what a
+        // population spreads along.
+        if (typeof world.lightAt === 'function' && world.lightCols > 0) {
+            const rw = world.width / world.lightCols;
+            const rh = world.height / world.lightRows;
+            for (let ry = 0; ry < world.lightRows; ry++) {
+                for (let rx = 0; rx < world.lightCols; rx++) {
+                    const a = this.worldToScreen(rx * rw, ry * rh);
+                    const b = this.worldToScreen((rx + 1) * rw, (ry + 1) * rh);
+                    if (b.x < 0 || b.y < 0 || a.x > this.viewportWidth || a.y > this.viewportHeight)
+                        continue;
+                    // Centred on 1.0 = average light, so brighter regions warm up and
+                    // dimmer ones sink toward the background rather than being tinted
+                    // a colour the dish does not otherwise use.
+                    const k = Math.max(-1, Math.min(1, (world.lightAt((rx + 0.5) * rw, (ry + 0.5) * rh) - 1) * 1.1));
+                    ctx.fillStyle = k >= 0
+                        ? `rgba(255, 238, 175, ${(k * 0.26).toFixed(3)})`
+                        : `rgba(3, 6, 14, ${(-k * 0.45).toFixed(3)})`;
+                    ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
+                }
+            }
+        }
         if (!options.hidePool)
             this.drawPool(origin, poolOffset);
         // carrion — the only discrete food item; there's no ambient plant food
@@ -167,6 +200,16 @@ export class Renderer {
             ctx.stroke();
         }
         let highlighted = null;
+        // Level of detail. drawCell renders real anatomy — body, eyes, buds,
+        // flagella, protein arcs, armour — which is 5-15 canvas operations per
+        // organism. That is fine for a few hundred and impossible for several
+        // thousand: Canvas 2D will not hold a frame rate at ~100k operations.
+        //
+        // Below LOD_RADIUS_PX an organism is a few pixels across and every one
+        // of those details is already sub-pixel, so nothing is actually lost by
+        // drawing a single dot. Batched by fill colour is tempting but the hue
+        // is per-genome and varies continuously, so this keeps one fill per
+        // organism and simply makes each one cheap.
         for (const cell of world.cells) {
             const p = this.worldToScreen(cell.x, cell.y);
             const r = cell.radius * this.camera.zoom;
@@ -174,6 +217,14 @@ export class Renderer {
                 highlighted = { cell, p, r };
             if (p.x < -r || p.y < -r || p.x > this.viewportWidth + r || p.y > this.viewportHeight + r)
                 continue;
+            if (r < LOD_RADIUS_PX) {
+                const energyFrac = clamp(cell.energy / cell.maxEnergy, 0.15, 1);
+                ctx.fillStyle = `hsl(${cell.genome.hue}, 65%, ${30 + energyFrac * 30}%)`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, Math.max(0.6, r), 0, Math.PI * 2);
+                ctx.fill();
+                continue;
+            }
             this.drawCell(cell, p, r, !!options.showVision);
         }
         // Tree-of-life selection marker — drawn last so it's never occluded by

@@ -448,7 +448,9 @@ export class Origin {
   readonly statsSampleInterval = 20;
   readonly maxHistory = 500;
 
-  private readonly grid = new SpatialGrid<Particle>(14);
+  // See world.ts's grids: constructed in the constructor because the grid
+  // is bounds-aware and a field initializer runs too early for that.
+  private readonly grid: SpatialGrid<Particle>;
   private nextId = 1;
   private nextVesicleId = 1;
   private energyDebt = 0; // fractional accumulator for energyFluxPerTick
@@ -482,6 +484,7 @@ export class Origin {
     this.width = width;
     this.height = height;
     this.rng = new Rng(seed);
+    this.grid = new SpatialGrid<Particle>(14, width, height);
     // Left-of-center, not dead-center — gives the current's rotation a
     // real long axis to fan material across before it reaches a wall,
     // instead of being symmetric-and-cancelling from the middle. This is

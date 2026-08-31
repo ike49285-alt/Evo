@@ -368,7 +368,6 @@ export class Origin {
         this.substrateRadius = 42; // nucleotide search radius during templated copying — see templatedReplication's comment
         this.statsSampleInterval = 20;
         this.maxHistory = 500;
-        this.grid = new SpatialGrid(14);
         this.nextId = 1;
         this.nextVesicleId = 1;
         this.energyDebt = 0; // fractional accumulator for energyFluxPerTick
@@ -400,6 +399,7 @@ export class Origin {
         this.width = width;
         this.height = height;
         this.rng = new Rng(seed);
+        this.grid = new SpatialGrid(14, width, height);
         // Left-of-center, not dead-center — gives the current's rotation a
         // real long axis to fan material across before it reaches a wall,
         // instead of being symmetric-and-cancelling from the middle. This is

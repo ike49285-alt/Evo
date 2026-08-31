@@ -2728,6 +2728,143 @@ read the sidebar instead, via `textContent` rather than `innerText` — the
 sidebar stats live in a tab that is usually inactive, and Playwright's
 `innerText` returns empty for hidden elements.
 
+## Diversification: a bigger, faster, more varied dish
+
+Asked for more diversity, with three instincts — expand the environment,
+simplify the brains, raise the population cap. Two of those turned out to be
+the same lever, and one turned out to be aimed at the wrong thing.
+
+### The brains were never the bottleneck
+
+They are 15→10→2, about 182 weights. Profiled at population 208 (4.45 ms/tick):
+`buildInputs` **67%**, `resolveCrowding` 8%, `handlePredation` 6%, everything
+else including `think()` ~19%. Simplifying the brains would have bought single
+digits. They were left alone.
+
+### Sensing was, for two embarrassing reasons
+
+`SpatialGrid` keyed every bucket with a template string, `` `${cx},${cy}` ``.
+Every insert built one; every bucket touched by every query built another and
+hashed it — roughly **50,000 string allocations and Map lookups per tick** at
+population 208. And `buildInputs` ran *the same* `queryRadius` twice with
+identical arguments, once for prey and once for threats and mates.
+
+The grid is now a flat pair of `Int32Array`s — `head` and `next`, an intrusive
+linked list indexed `cy * cols + cx`. No strings, no hashing, no per-bucket
+array, and the whole structure is reused between ticks. The two queries are one
+pass with three independent accumulators, distances are compared squared and
+only square-rooted when a candidate actually wins, and every call site now
+passes a reused scratch buffer instead of letting `queryRadius` allocate.
+
+| phase | before | after | |
+|---|---|---|---|
+| `buildInputs` | 2.799 ms | 0.856 ms | **3.3x** |
+| `handleEating` | 0.160 ms | 0.040 ms | 4.0x |
+| **whole tick** | **4.190 ms** | **2.073 ms** | **2.02x** |
+
+Per organism: 20.1 µs → 10.0 µs.
+
+**Verified behaviour-identical**, which mattered more than the speed. Five
+seeds, 3,000 ticks, fingerprinting every cell's position, energy and generation
+every 250 ticks: bit-identical. Two things made that possible and are worth
+keeping in mind before touching the grid again:
+
+- **Bucket iteration order is load-bearing.** Mate choice and predation both
+  scan candidates and take the first match, so row-major traversal (which the
+  cache would prefer) would silently change which partner a cell picks. The new
+  grid keeps the Map version's column-outer order deliberately.
+- **The grid must own its item list.** The first version stored indices into
+  the caller's array, which broke immediately: `carrionGrid` is built from
+  `World.meatFood`, and that array *shrinks during the same tick* as carrion is
+  eaten, leaving every later index pointing at the wrong food or off the end.
+  The old reference-holding Map was immune; an index-based one is not.
+
+### Population is limited by energy, not by the cap
+
+This was the finding that reframed the whole round. Raising `maxPopulation`
+does essentially nothing — at a cap of 3,000 the dish still settled at ~245 —
+because `sunlightCapacity` was a fixed dish-wide 24. Population tracks energy
+input almost exactly linearly:
+
+| sunlight | 24 | 96 | 216 | 384 |
+|---|---|---|---|---|
+| settled population | 189 | 1,049 | 2,137 | 3,843 |
+
+So the cap is a ceiling and sunlight is the floor, and only one of them was
+ever being raised.
+
+### The cap, the dish size and the light are now one knob
+
+Sense radius reaches 320, so in a 2400x1500 dish one organism's senses already
+cover ~9% of the world. Pack more organisms into the same box and every one of
+them sees proportionally more neighbours — the sensing pass goes quadratic:
+
+| | 500 | 2,000 | 8,000 |
+|---|---|---|---|
+| fixed dish | 0.97 µs | 2.02 µs | **6.83 µs**/organism |
+| dish area scaled with population | 0.72 µs | 1.00 µs | **1.12 µs**/organism |
+
+So `worldSizeFor(cap)` scales the dish by `sqrt(cap / 320)` to hold density
+constant, and `sunlightFor(cap)` scales the light with it. The Pop cap input
+drives all three. Dimensions can't change under a population already standing
+in the dish, so a resize waits for the next world; the light budget applies
+immediately.
+
+### The light field — real terrain
+
+`sunlightCapacity` was one dish-wide number, so every photosynthesiser
+everywhere competed in a single global pool. The environment was perfectly
+uniform, which meant there was nothing for lineages to diverge *into*.
+
+The dish now has a light field: a lattice of regions (800 world units each),
+built from overlapping Gaussian sources — some bright, some dark — normalised
+to a mean of exactly 1, so average productivity is unchanged and only its
+*shape* differs. The renderer paints it under the dish at exactly the
+resolution the simulation samples it, because an invisible niche structure
+would just read as unexplained clumping.
+
+**Two failed versions, both recorded because they were reasonable:**
+
+- **Regions of 320 units** — exactly the maximum sense radius. A region an
+  organism crosses in one step is a tile, not a habitat, and a founder cluster
+  sitting in one competed for a single region's ~0.7% of the light while the
+  rest of the dish went unused. Populations collapsed; several seeds went
+  extinct.
+- **Per-region light *budgets*.** Physically tempting and ecologically wrong
+  here: light falling on a region nobody is standing in is simply wasted, so a
+  clustered population lost most of the dish's productivity. Phototrophs died
+  out, the dish collapsed to a predators-and-carrion economy, and extra
+  sunlight stopped buying any population at all.
+
+What works is modulating *intensity* against a retained global ceiling: demand
+is weighted by local light, so standing in a bright patch earns more and draws
+more of the shared budget, and no photon is wasted. With a flat field this
+reduces to the old behaviour **exactly** — verified bit-identical against the
+previous build across five seeds, which is what makes any measured ecological
+difference attributable to spatial structure rather than to a changed energy
+economy.
+
+### Why speciation had stopped, and it was not the environment
+
+Speciation was firing essentially never — 1 lineage over 20,000 ticks. The
+light field did not fix that, and the measurement explains why:
+
+| tick | 2,000 | 5,000 | 10,000 | 15,000 |
+|---|---|---|---|---|
+| max distance from lineage reference | 0.208 | 0.244 | 0.253 | **0.266** |
+
+**Divergence saturates around 0.26.** Both `speciationThreshold` and
+`mateCompatibilityThreshold` were 0.34 — *above anything the population can
+reach*. `geneticDistance` saturating rather than growing without bound was
+already documented in this file; what was missed is that a threshold above the
+saturation point does not merely fire rarely, it cannot fire at all.
+
+The second half is worse and is mine from last round: with the mate threshold
+also at 0.34, **no pair was ever incompatible**, so the emergent reproductive
+isolation built last round had been completely inert. Every individual could
+breed with every other, and unrestricted gene flow is exactly what prevents
+divergence. The mechanism was correct and the constant made it a no-op.
+
 ## Tech constraint from last time
 
 Original build environment blocked the npm registry/CDNs (git-only
